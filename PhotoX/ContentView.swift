@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @Bindable var state: ViewerState
+    @FocusState private var canvasFocused: Bool
 
     var body: some View {
         ZStack {
@@ -27,8 +28,17 @@ struct ContentView: View {
             }
 
             statusOverlay
+            decodingPill
         }
         .frame(minWidth: 900, minHeight: 600)
+        .focusable()
+        .focusEffectDisabled()
+        .focused($canvasFocused)
+        .onAppear { canvasFocused = true }
+        .onKeyPress(keys: ["r", "R"]) { _ in
+            state.toggleRequestedVariant()
+            return .handled
+        }
         .dropDestination(for: URL.self) { urls, _ in
             handleDrop(urls)
         }
@@ -58,6 +68,27 @@ struct ContentView: View {
                 }
                 .padding(12)
             }
+        }
+    }
+
+    /// "Decoding RAW…" pill shown overlaid while the RAW is decoding but HEIF is still on screen.
+    @ViewBuilder
+    private var decodingPill: some View {
+        if state.isDecoding && state.currentImage != nil && state.displayedVariant != state.requestedVariant {
+            VStack {
+                HStack {
+                    Spacer()
+                    Label("Decoding \(state.requestedVariant.displayName)…", systemImage: "arrow.triangle.2.circlepath")
+                        .font(.caption.monospaced())
+                        .labelStyle(.titleAndIcon)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(.black.opacity(0.6), in: Capsule())
+                }
+                Spacer()
+            }
+            .padding(12)
         }
     }
 

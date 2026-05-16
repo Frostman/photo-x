@@ -19,27 +19,42 @@ final class ViewerState {
     var isDecoding: Bool = false
     var errorMessage: String?
 
-    var lastDecodeMS: [DecoderChoice: Double] = [:]
+    let pipeline: DecodePipeline = DecodePipeline()
 
-    /// Replaces the current pair and decodes its HEIF preview. Commit 5 will
-    /// route this through DecodePipeline and handle the HEIF↔RAW swap; today
-    /// it always decodes the HEIF.
-    func loadPair(_ pair: PhotoPair, using decoder: any ImageDecoder = HEIFDecoder()) async {
+    /// Sets the active pair and decodes the HEIF preview (always start on HEIF).
+    func loadPair(_ pair: PhotoPair) async {
+        pipeline.cache.clear()
         self.pair = pair
         self.currentImage = nil
+        self.errorMessage = nil
+        self.displayedVariant = .heif
+        self.requestedVariant = .heif
+        await applyRequestedVariant()
+    }
+
+    /// Flips requestedVariant between heif and raw and triggers decode.
+    func toggleRequestedVariant() {
+        guard pair != nil else { return }
+        requestedVariant = (requestedVariant == .heif) ? .raw : .heif
+        Task { await applyRequestedVariant() }
+    }
+
+    private func applyRequestedVariant() async {
+        guard let pair else { return }
+        let variant = requestedVariant
+        let chosenDecoder = decoder
         self.errorMessage = nil
         self.isDecoding = true
         defer { isDecoding = false }
 
-        Log.app.notice("loadPair: \(pair.stem, privacy: .public) — heif=\(pair.heifURL.path, privacy: .public)")
         do {
-            let decoded = try await decoder.decode(url: pair.heifURL)
+            let decoded = try await pipeline.decode(pair: pair, variant: variant, decoder: chosenDecoder)
+            // If user toggled again while we were decoding, ignore stale result.
+            guard variant == self.requestedVariant, chosenDecoder == self.decoder else { return }
             self.currentImage = decoded
-            self.displayedVariant = .heif
-            self.lastDecodeMS[.imageIO] = decoded.decodeMS
-            Log.app.notice("loadPair: decoded \(decoded.cgImage.width)x\(decoded.cgImage.height) in \(decoded.decodeMS, format: .fixed(precision: 1)) ms")
+            self.displayedVariant = variant
         } catch {
-            Log.app.error("loadPair: \(String(describing: error), privacy: .public)")
+            Log.app.error("applyRequestedVariant: \(String(describing: error), privacy: .public)")
             self.errorMessage = String(describing: error)
         }
     }
