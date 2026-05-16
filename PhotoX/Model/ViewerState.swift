@@ -20,6 +20,9 @@ final class ViewerState {
     var isDecoding: Bool = false
     var errorMessage: String?
 
+    var currentHistogram: Histogram?
+    private var histogramGeneration: Int = 0
+
     let pipeline: DecodePipeline = DecodePipeline()
 
     func loadPair(_ pair: PhotoPair) async {
@@ -44,6 +47,14 @@ final class ViewerState {
     /// HEIF always goes through ImageIO. If we're currently showing RAW, we
     /// re-decode immediately with the new decoder. If on HEIF, the change is
     /// silent — it kicks in next time the user goes to RAW.
+    func toggleClipping() {
+        overlays.clipping.toggle()
+    }
+
+    func toggleSidebar() {
+        sidebarVisible.toggle()
+    }
+
     func cycleDecoder() {
         guard pair != nil else { return }
         decoder = (decoder == .imageIO) ? .libRaw : .imageIO
@@ -88,6 +99,22 @@ final class ViewerState {
         }
     }
 
+    private func kickOffHistogramCompute(for image: DecodedImage) {
+        histogramGeneration += 1
+        let gen = histogramGeneration
+        let cgImage = image.cgImage
+        Task { [weak self] in
+            // Detached child runs the CPU work off main; .value returns us
+            // here (MainActor), where weak self is safely accessed.
+            let h = await Task.detached(priority: .utility) {
+                HistogramComputer.compute(from: cgImage)
+            }.value
+            guard let self else { return }
+            guard self.histogramGeneration == gen else { return }
+            self.currentHistogram = h
+        }
+    }
+
     private func applyRequestedVariant() async {
         guard let pair else { return }
         let variant = requestedVariant
@@ -101,6 +128,7 @@ final class ViewerState {
             guard variant == self.requestedVariant, chosenDecoder == self.decoder else { return }
             self.currentImage = decoded
             self.displayedVariant = variant
+            kickOffHistogramCompute(for: decoded)
         } catch {
             Log.app.error("applyRequestedVariant: \(String(describing: error), privacy: .public)")
             self.errorMessage = String(describing: error)

@@ -5,6 +5,47 @@ struct ContentView: View {
     @FocusState private var canvasFocused: Bool
 
     var body: some View {
+        HStack(spacing: 0) {
+            canvas
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if state.sidebarVisible {
+                SidebarView(state: state)
+                    .transition(.move(edge: .trailing))
+            }
+        }
+        .frame(minWidth: 900, minHeight: 600)
+        .focusable()
+        .focusEffectDisabled()
+        .focused($canvasFocused)
+        .onAppear { canvasFocused = true }
+        .onKeyPress(keys: ["z", "Z"]) { _ in
+            state.toggleRequestedVariant()
+            return .handled
+        }
+        .onKeyPress(keys: ["x", "X"]) { _ in
+            state.setViewportToFit()
+            return .handled
+        }
+        .onKeyPress(keys: ["d", "D"]) { _ in
+            state.cycleDecoder()
+            return .handled
+        }
+        .onKeyPress(keys: ["c", "C"]) { _ in
+            state.toggleClipping()
+            return .handled
+        }
+        .onKeyPress(keys: ["b", "B"]) { _ in
+            withAnimation(.easeInOut(duration: 0.15)) {
+                state.toggleSidebar()
+            }
+            return .handled
+        }
+        .dropDestination(for: URL.self) { urls, _ in
+            handleDrop(urls)
+        }
+    }
+
+    private var canvas: some View {
         ZStack {
             Color(white: 0.07).ignoresSafeArea()
 
@@ -12,6 +53,7 @@ struct ContentView: View {
                 ImageCanvasView(
                     image: image.cgImage,
                     viewport: state.viewport,
+                    showClipping: state.overlays.clipping,
                     onViewportChange: { vp, pz in
                         state.updateViewportFromCanvas(vp, pixelZoom: pz)
                     }
@@ -35,26 +77,6 @@ struct ContentView: View {
 
             statusOverlay
             decodingPill
-        }
-        .frame(minWidth: 900, minHeight: 600)
-        .focusable()
-        .focusEffectDisabled()
-        .focused($canvasFocused)
-        .onAppear { canvasFocused = true }
-        .onKeyPress(keys: ["z", "Z"]) { _ in
-            state.toggleRequestedVariant()
-            return .handled
-        }
-        .onKeyPress(keys: ["x", "X"]) { _ in
-            state.setViewportToFit()
-            return .handled
-        }
-        .onKeyPress(keys: ["d", "D"]) { _ in
-            state.cycleDecoder()
-            return .handled
-        }
-        .dropDestination(for: URL.self) { urls, _ in
-            handleDrop(urls)
         }
     }
 
@@ -92,6 +114,9 @@ struct ContentView: View {
         }
         parts.append("\(Int(image.decodeMS)) ms")
         parts.append(zoomLabel)
+        if state.overlays.clipping {
+            parts.append("CLIP")
+        }
         return parts.joined(separator: " • ")
     }
 

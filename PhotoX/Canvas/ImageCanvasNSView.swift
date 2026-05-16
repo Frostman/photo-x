@@ -54,6 +54,7 @@ final class ImageCanvasNSView: NSView {
                 self.pendingImage = nil
             }
             renderer?.setViewport(viewport)
+            renderer?.setShowClipping(showClipping)
         }
         updateDrawableSize()
         scheduleDraw()
@@ -100,6 +101,14 @@ final class ImageCanvasNSView: NSView {
         guard viewport != newViewport else { return }
         viewport = newViewport
         renderer?.setViewport(viewport)
+        scheduleDraw()
+    }
+
+    private var showClipping: Bool = false
+    func setShowClipping(_ on: Bool) {
+        guard on != showClipping else { return }
+        showClipping = on
+        renderer?.setShowClipping(on)
         scheduleDraw()
     }
 

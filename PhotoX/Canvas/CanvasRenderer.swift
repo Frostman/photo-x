@@ -11,6 +11,11 @@ final class CanvasRenderer {
     private var baseTexture: MTLTexture?
     private var imagePixelSize: CGSize = .zero
     private var viewport: CanvasViewport = .identity
+    private var showClipping: Bool = false
+
+    private struct FragmentUniforms {
+        var showClipping: Int32
+    }
 
     init?(layerPixelFormat: MTLPixelFormat) {
         guard let device = MTLCreateSystemDefaultDevice(),
@@ -116,6 +121,10 @@ final class CanvasRenderer {
         self.viewport = viewport
     }
 
+    func setShowClipping(_ on: Bool) {
+        self.showClipping = on
+    }
+
     func draw(in layer: CAMetalLayer) {
         guard let baseTexture else {
             drawClear(in: layer)
@@ -141,6 +150,12 @@ final class CanvasRenderer {
         vertices.withUnsafeBytes { ptr in
             encoder.setVertexBytes(ptr.baseAddress!, length: bufferLength, index: 0)
         }
+
+        var fragmentUniforms = FragmentUniforms(showClipping: showClipping ? 1 : 0)
+        encoder.setFragmentBytes(&fragmentUniforms,
+                                  length: MemoryLayout<FragmentUniforms>.stride,
+                                  index: 0)
+
         encoder.setRenderPipelineState(pipelineState)
         encoder.setFragmentTexture(baseTexture, index: 0)
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)

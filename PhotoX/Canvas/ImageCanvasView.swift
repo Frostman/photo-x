@@ -5,6 +5,7 @@ import SwiftUI
 struct ImageCanvasView: NSViewRepresentable {
     let image: CGImage?
     let viewport: CanvasViewport
+    let showClipping: Bool
     let onViewportChange: (CanvasViewport, CGFloat) -> Void
 
     @MainActor
@@ -18,6 +19,7 @@ struct ImageCanvasView: NSViewRepresentable {
         let view = ImageCanvasNSView()
         view.onViewportChange = onViewportChange
         view.setViewportFromExternal(viewport)
+        view.setShowClipping(showClipping)
         if let image {
             view.setImage(image)
             context.coordinator.lastImageID = ObjectIdentifier(image as AnyObject)
@@ -28,6 +30,7 @@ struct ImageCanvasView: NSViewRepresentable {
     func updateNSView(_ nsView: ImageCanvasNSView, context: Context) {
         nsView.onViewportChange = onViewportChange
         nsView.setViewportFromExternal(viewport)
+        nsView.setShowClipping(showClipping)
         if let image {
             let id = ObjectIdentifier(image as AnyObject)
             if id != context.coordinator.lastImageID {
