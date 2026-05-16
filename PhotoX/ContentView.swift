@@ -129,6 +129,7 @@ struct ContentView: View {
             statusOverlay
             decodingPill
             helpHint
+            ratingBadge
         }
     }
 
@@ -146,6 +147,33 @@ struct ContentView: View {
             }
             .padding(12)
             Spacer()
+        }
+    }
+
+    @ViewBuilder
+    private var ratingBadge: some View {
+        if state.currentImage != nil, state.currentXMP.hasDecision {
+            VStack {
+                HStack {
+                    Spacer()
+                    HStack(spacing: 8) {
+                        if state.currentXMP.isReject {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.red)
+                        } else if let stars = state.currentXMP.starCount {
+                            StarsView(count: stars)
+                        }
+                        if let label = state.currentXMP.label, !label.isEmpty {
+                            LabelChip(label: label)
+                        }
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(.black.opacity(0.5), in: Capsule())
+                }
+                .padding(12)
+                Spacer()
+            }
         }
     }
 

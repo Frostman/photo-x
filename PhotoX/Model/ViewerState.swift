@@ -37,6 +37,9 @@ final class ViewerState {
     var currentAFSettings: AFSettings = AFSettings()
     private var afGeneration: Int = 0
 
+    var currentXMP: XMPSidecar = .empty
+    private var xmpGeneration: Int = 0
+
     let pipeline: DecodePipeline = DecodePipeline()
 
     /// Loads a shoot and focuses on a specific pair within it. Replaces the
@@ -136,10 +139,26 @@ final class ViewerState {
         self.currentExif = nil
         self.currentAFRegions = []
         self.currentAFSettings = AFSettings()
+        self.currentXMP = .empty
         kickOffExifLoad(for: pair)
         kickOffAFLoad(for: pair)
+        kickOffXMPLoad(for: pair)
         await applyRequestedVariant()
         prefetchNeighborHEIFs()
+    }
+
+    private func kickOffXMPLoad(for pair: PhotoPair) {
+        xmpGeneration += 1
+        let gen = xmpGeneration
+        let pairCopy = pair
+        Task { [weak self] in
+            let xmp = await Task.detached(priority: .utility) {
+                XMPSidecarReader.read(for: pairCopy)
+            }.value
+            guard let self else { return }
+            guard self.xmpGeneration == gen else { return }
+            self.currentXMP = xmp
+        }
     }
 
     /// Warm the pipeline cache with HEIFs for index ±1 so arrow-key

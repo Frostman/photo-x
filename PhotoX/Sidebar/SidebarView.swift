@@ -8,6 +8,12 @@ struct SidebarView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
+                if state.currentXMP.hasDecision {
+                    section(title: "Decisions") {
+                        DecisionsPanelView(xmp: state.currentXMP)
+                    }
+                }
+
                 section(title: "Histogram") {
                     HistogramView(histogram: state.currentHistogram)
                         .frame(height: 140)
