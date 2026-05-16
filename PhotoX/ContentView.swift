@@ -41,8 +41,12 @@ struct ContentView: View {
         .focusEffectDisabled()
         .focused($canvasFocused)
         .onAppear { canvasFocused = true }
-        .onKeyPress(keys: ["r", "R"]) { _ in
+        .onKeyPress(keys: ["z", "Z"]) { _ in
             state.toggleRequestedVariant()
+            return .handled
+        }
+        .onKeyPress(keys: ["x", "X"]) { _ in
+            state.setViewportToFit()
             return .handled
         }
         .dropDestination(for: URL.self) { urls, _ in
