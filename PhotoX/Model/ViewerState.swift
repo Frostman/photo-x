@@ -14,5 +14,10 @@ final class ViewerState {
     var overlays: OverlayToggles = .init()
     var sidebarVisible: Bool = true
 
+    var viewport: CanvasViewport = .identity
+    var currentImage: DecodedImage?
+    var isDecoding: Bool = false
+    var errorMessage: String?
+
     var lastDecodeMS: [DecoderChoice: Double] = [:]
 }
