@@ -49,6 +49,10 @@ struct ContentView: View {
             state.setViewportToFit()
             return .handled
         }
+        .onKeyPress(keys: ["d", "D"]) { _ in
+            state.cycleDecoder()
+            return .handled
+        }
         .dropDestination(for: URL.self) { urls, _ in
             handleDrop(urls)
         }

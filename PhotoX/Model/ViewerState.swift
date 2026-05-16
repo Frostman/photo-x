@@ -40,6 +40,18 @@ final class ViewerState {
         Task { await applyRequestedVariant() }
     }
 
+    /// Cycles between ImageIO and LibRaw. Only meaningful for the RAW variant —
+    /// HEIF is always ImageIO. If currently showing HEIF, also force a RAW
+    /// request so the user sees the effect immediately.
+    func cycleDecoder() {
+        guard pair != nil else { return }
+        decoder = (decoder == .imageIO) ? .libRaw : .imageIO
+        if displayedVariant == .heif {
+            requestedVariant = .raw
+        }
+        Task { await applyRequestedVariant() }
+    }
+
     func setViewportToFit() {
         // Just request fit; the canvas emits the new pixelZoom back when the
         // viewport actually changes. If we're already at fit, the existing

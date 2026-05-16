@@ -6,7 +6,7 @@ final class DecodePipeline {
 
     private let heifDecoder: any ImageDecoder = HEIFDecoder()
     private let rawImageIODecoder: any ImageDecoder = RAWImageIODecoder()
-    // RAWLibRawDecoder added in commit 6
+    private let rawLibRawDecoder: any ImageDecoder = RAWLibRawDecoder()
 
     private var inflight: [DecodeKey: Task<DecodedImage, Error>] = [:]
 
@@ -49,7 +49,7 @@ final class DecodePipeline {
         case .raw:
             switch choice {
             case .imageIO: return rawImageIODecoder
-            case .libRaw:  return rawImageIODecoder  // until commit 6 swaps in LibRaw
+            case .libRaw:  return rawLibRawDecoder
             }
         }
     }

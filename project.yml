@@ -39,6 +39,17 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
+        # Obj-C++ bridge for LibRaw
+        SWIFT_OBJC_BRIDGING_HEADER: PhotoX/PhotoX-Bridging-Header.h
+        CLANG_ENABLE_OBJC_ARC: YES
+        CLANG_CXX_LANGUAGE_STANDARD: "gnu++17"
+        # LibRaw via Homebrew (dev dependency: brew install libraw)
+        HEADER_SEARCH_PATHS:
+          - /opt/homebrew/include
+        LIBRARY_SEARCH_PATHS:
+          - /opt/homebrew/lib
+        OTHER_LDFLAGS:
+          - -lraw_r
 
   PhotoXTests:
     type: bundle.unit-test
