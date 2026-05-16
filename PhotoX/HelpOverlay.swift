@@ -22,7 +22,7 @@ struct HelpOverlay: View {
             .init(keys: "Drag / Two-finger scroll", label: "Pan"),
         ]),
         ("Overlays", [
-            .init(keys: "C", label: "Highlight / shadow clipping zebra"),
+            .init(keys: "C", label: "Clipping zebra — magenta = blown highlights (any channel ≥ 99%), blue = crushed shadows (max ≤ 2%)"),
             .init(keys: "B", label: "Toggle sidebar (histogram, etc.)"),
         ]),
         ("Files", [
