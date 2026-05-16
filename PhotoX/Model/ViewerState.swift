@@ -23,6 +23,9 @@ final class ViewerState {
     var currentHistogram: Histogram?
     private var histogramGeneration: Int = 0
 
+    var currentExif: ExifSummary?
+    private var exifGeneration: Int = 0
+
     let pipeline: DecodePipeline = DecodePipeline()
 
     func loadPair(_ pair: PhotoPair) async {
@@ -34,7 +37,23 @@ final class ViewerState {
         self.requestedVariant = .heif
         self.viewport = .identity
         self.currentPixelZoom = 1.0
+        self.currentExif = nil
+        kickOffExifLoad(for: pair)
         await applyRequestedVariant()
+    }
+
+    private func kickOffExifLoad(for pair: PhotoPair) {
+        exifGeneration += 1
+        let gen = exifGeneration
+        let url = pair.rawURL  // EXIF is read from the canonical RAW file
+        Task { [weak self] in
+            let exif = await Task.detached(priority: .utility) {
+                ImageIOMetadata.read(from: url)
+            }.value
+            guard let self else { return }
+            guard self.exifGeneration == gen else { return }
+            self.currentExif = exif
+        }
     }
 
     func toggleRequestedVariant() {
