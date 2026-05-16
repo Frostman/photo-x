@@ -16,12 +16,12 @@ final class ViewerState {
 
     var viewport: CanvasViewport = .identity
     var currentImage: DecodedImage?
+    var currentPixelZoom: CGFloat = 1.0
     var isDecoding: Bool = false
     var errorMessage: String?
 
     let pipeline: DecodePipeline = DecodePipeline()
 
-    /// Sets the active pair and decodes the HEIF preview (always start on HEIF).
     func loadPair(_ pair: PhotoPair) async {
         pipeline.cache.clear()
         self.pair = pair
@@ -29,14 +29,45 @@ final class ViewerState {
         self.errorMessage = nil
         self.displayedVariant = .heif
         self.requestedVariant = .heif
+        self.viewport = .identity
+        self.currentPixelZoom = 1.0
         await applyRequestedVariant()
     }
 
-    /// Flips requestedVariant between heif and raw and triggers decode.
     func toggleRequestedVariant() {
         guard pair != nil else { return }
         requestedVariant = (requestedVariant == .heif) ? .raw : .heif
         Task { await applyRequestedVariant() }
+    }
+
+    func setViewportToFit() {
+        viewport = .identity
+        // pixelZoom recalc happens when the NSView reports back; meanwhile
+        // approximate as 0 to release the auto-swap latch.
+        currentPixelZoom = 0
+        Task { await maybeAutoSwap() }
+    }
+
+    /// Called by the canvas after gestures. Updates viewport + pixel zoom and
+    /// kicks an auto-swap check.
+    func updateViewportFromCanvas(_ vp: CanvasViewport, pixelZoom: CGFloat) {
+        self.viewport = vp
+        self.currentPixelZoom = pixelZoom
+        Task { await maybeAutoSwap() }
+    }
+
+    /// Auto-swap rules from the plan: ≥1.0 pixel zoom → request RAW; <0.9 → request HEIF.
+    /// Hysteresis avoids flicker at the boundary.
+    private func maybeAutoSwap() async {
+        guard autoSwapEnabled, pair != nil else { return }
+        let pz = currentPixelZoom
+        if pz >= 1.0, requestedVariant == .heif {
+            requestedVariant = .raw
+            await applyRequestedVariant()
+        } else if pz < 0.9, requestedVariant == .raw, displayedVariant == .raw {
+            requestedVariant = .heif
+            await applyRequestedVariant()
+        }
     }
 
     private func applyRequestedVariant() async {
@@ -49,7 +80,6 @@ final class ViewerState {
 
         do {
             let decoded = try await pipeline.decode(pair: pair, variant: variant, decoder: chosenDecoder)
-            // If user toggled again while we were decoding, ignore stale result.
             guard variant == self.requestedVariant, chosenDecoder == self.decoder else { return }
             self.currentImage = decoded
             self.displayedVariant = variant

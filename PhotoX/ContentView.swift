@@ -9,8 +9,14 @@ struct ContentView: View {
             Color(white: 0.07).ignoresSafeArea()
 
             if let image = state.currentImage {
-                ImageCanvasView(image: image.cgImage, viewport: state.viewport)
-                    .ignoresSafeArea()
+                ImageCanvasView(
+                    image: image.cgImage,
+                    viewport: state.viewport,
+                    onViewportChange: { vp, pz in
+                        state.updateViewportFromCanvas(vp, pixelZoom: pz)
+                    }
+                )
+                .ignoresSafeArea()
             } else if state.isDecoding {
                 ProgressView("Decoding…")
                     .controlSize(.large)
@@ -59,7 +65,7 @@ struct ContentView: View {
                             .background(.black.opacity(0.5), in: Capsule())
                     }
                     Spacer()
-                    Text("\(state.displayedVariant.displayName) • \(state.decoder.displayName) • \(Int(image.decodeMS)) ms")
+                    Text("\(state.displayedVariant.displayName) • \(state.decoder.displayName) • \(Int(image.decodeMS)) ms • \(zoomLabel)")
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.white.opacity(0.85))
                         .padding(.horizontal, 10)
@@ -71,7 +77,15 @@ struct ContentView: View {
         }
     }
 
-    /// "Decoding RAW…" pill shown overlaid while the RAW is decoding but HEIF is still on screen.
+    private var zoomLabel: String {
+        let pct = state.currentPixelZoom * 100
+        if pct >= 100 {
+            return "\(Int(pct.rounded()))%"
+        } else {
+            return String(format: "%.0f%%", pct)
+        }
+    }
+
     @ViewBuilder
     private var decodingPill: some View {
         if state.isDecoding && state.currentImage != nil && state.displayedVariant != state.requestedVariant {

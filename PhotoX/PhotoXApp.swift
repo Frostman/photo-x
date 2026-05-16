@@ -17,6 +17,15 @@ struct PhotoXApp: App {
                 }
                 .keyboardShortcut("o", modifiers: .command)
             }
+            CommandMenu("View") {
+                Button("Fit") {
+                    viewerState.setViewportToFit()
+                }
+                .keyboardShortcut("0", modifiers: .command)
+                // ⌘1 actual-pixels lands once the canvas exposes a way for
+                // ViewerState to compute oneToOne. Double-click already toggles
+                // fit ↔ 1:1 which covers the common case.
+            }
         }
     }
 
