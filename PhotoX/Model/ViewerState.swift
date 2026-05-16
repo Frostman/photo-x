@@ -41,11 +41,11 @@ final class ViewerState {
     }
 
     func setViewportToFit() {
+        // Just request fit; the canvas emits the new pixelZoom back when the
+        // viewport actually changes. If we're already at fit, the existing
+        // value stays correct (don't pre-zero — that desynced the pill on a
+        // second X press).
         viewport = .identity
-        // pixelZoom recalc happens when the NSView reports back; meanwhile
-        // approximate as 0 to release the auto-swap latch.
-        currentPixelZoom = 0
-        Task { await maybeAutoSwap() }
     }
 
     /// Called by the canvas after gestures. Updates viewport + pixel zoom and
