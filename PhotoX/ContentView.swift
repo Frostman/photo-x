@@ -210,12 +210,11 @@ struct ContentView: View {
 
     @discardableResult
     private func handleDrop(_ urls: [URL]) -> Bool {
-        let files = PairFinder.expand(urls)
-        guard let pair = PairFinder.firstPair(in: files) else {
+        guard let (shoot, focus) = ShootScanner.resolve(droppedURLs: urls) else {
             state.errorMessage = "No ARW + HIF pair found in dropped items"
             return false
         }
-        Task { await state.loadPair(pair) }
+        Task { await state.loadShoot(shoot, focus: focus) }
         return true
     }
 }

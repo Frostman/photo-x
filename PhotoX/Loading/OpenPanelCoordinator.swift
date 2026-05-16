@@ -3,21 +3,22 @@ import UniformTypeIdentifiers
 
 @MainActor
 enum OpenPanelCoordinator {
-    static func runPairPicker() -> PhotoPair? {
+    /// Opens a folder or a set of files and returns (shoot, focus pair).
+    static func runShootPicker() -> (shoot: Shoot, focus: PhotoPair)? {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = true
         panel.canChooseFiles = true
         panel.resolvesAliases = true
-        panel.message = "Select an ARW + HIF pair (or a folder containing one)"
+        panel.message = "Pick a folder of ARW + HIF pairs, or any pair inside one"
         panel.prompt = "Open"
 
-        var types: [UTType] = [.image]
+        var types: [UTType] = [.image, .folder]
         if let arw = UTType(filenameExtension: "arw") { types.append(arw) }
         if let hif = UTType(filenameExtension: "hif") { types.append(hif) }
         panel.allowedContentTypes = types
 
         guard panel.runModal() == .OK else { return nil }
-        return PairFinder.firstPair(in: PairFinder.expand(panel.urls))
+        return ShootScanner.resolve(droppedURLs: panel.urls)
     }
 }

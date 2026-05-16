@@ -24,4 +24,13 @@ enum SamplePathProvider {
         }
         return PairFinder.firstPair(in: contents)
     }
+
+    /// Resolves the sample directory into a (shoot, focus) tuple if any pairs
+    /// are present. Used by the bootstrap auto-load.
+    static func resolveShoot() -> (shoot: Shoot, focus: PhotoPair)? {
+        let dir = sampleDirectory()
+        let shoot = ShootScanner.scan(folder: dir)
+        guard let first = shoot.pairs.first else { return nil }
+        return (shoot, first)
+    }
 }

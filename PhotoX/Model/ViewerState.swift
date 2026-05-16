@@ -4,7 +4,14 @@ import SwiftUI
 @MainActor
 @Observable
 final class ViewerState {
-    var pair: PhotoPair?
+    var shoot: Shoot?
+    var currentIndex: Int = 0
+
+    var pair: PhotoPair? {
+        guard let shoot, shoot.pairs.indices.contains(currentIndex) else { return nil }
+        return shoot.pairs[currentIndex]
+    }
+
     var decoder: DecoderChoice = .imageIO
 
     var displayedVariant: ImageVariant = .heif
@@ -32,15 +39,99 @@ final class ViewerState {
 
     let pipeline: DecodePipeline = DecodePipeline()
 
-    func loadPair(_ pair: PhotoPair) async {
+    /// Loads a shoot and focuses on a specific pair within it. Replaces the
+    /// previous single-pair flow.
+    func loadShoot(_ shoot: Shoot, focus: PhotoPair) async {
         pipeline.cache.clear()
-        self.pair = pair
+        self.shoot = shoot
+        self.currentIndex = shoot.index(of: focus) ?? 0
+        await applyCurrentPair(resetViewport: true)
+    }
+
+    /// Move to a new pair within the current shoot (clamped).
+    func navigate(to index: Int) {
+        guard let shoot, !shoot.isEmpty else { return }
+        let clamped = max(0, min(index, shoot.pairs.count - 1))
+        guard clamped != currentIndex else { return }
+        currentIndex = clamped
+        Task { await applyCurrentPair(resetViewport: false) }
+    }
+
+    func nextPair() { navigate(to: currentIndex + 1) }
+    func previousPair() { navigate(to: currentIndex - 1) }
+    func firstPair() { navigate(to: 0) }
+    func lastPair() {
+        guard let shoot, !shoot.isEmpty else { return }
+        navigate(to: shoot.pairs.count - 1)
+    }
+
+    func toggleRequestedVariant() {
+        guard pair != nil else { return }
+        requestedVariant = (requestedVariant == .heif) ? .raw : .heif
+        Task { await applyRequestedVariant() }
+    }
+
+    func toggleClipping() {
+        overlays.clipping.toggle()
+    }
+
+    func togglePeaking() {
+        overlays.focusPeaking.toggle()
+    }
+
+    func toggleSidebar() {
+        sidebarVisible.toggle()
+    }
+
+    func toggleAFOverlay() {
+        overlays.afPoints.toggle()
+    }
+
+    func cycleDecoder() {
+        guard pair != nil else { return }
+        decoder = (decoder == .imageIO) ? .libRaw : .imageIO
+        if requestedVariant == .raw {
+            Task { await applyRequestedVariant() }
+        }
+    }
+
+    func setViewportToFit() {
+        viewport = .identity
+    }
+
+    func updateViewportFromCanvas(_ vp: CanvasViewport, pixelZoom: CGFloat) {
+        self.viewport = vp
+        self.currentPixelZoom = pixelZoom
+        Task { await maybeAutoSwap() }
+    }
+
+    private var lastAutoSwapPixelZoom: CGFloat = 0
+
+    private func maybeAutoSwap() async {
+        let prev = lastAutoSwapPixelZoom
+        let curr = currentPixelZoom
+        lastAutoSwapPixelZoom = curr
+
+        guard autoSwapEnabled, pair != nil else { return }
+        if curr >= 1.0 && prev < 1.0 && requestedVariant == .heif {
+            Log.app.notice("auto-swap: HEIF → RAW (pz \(prev, format: .fixed(precision: 2)) → \(curr, format: .fixed(precision: 2)))")
+            requestedVariant = .raw
+            await applyRequestedVariant()
+        }
+    }
+
+    /// Apply everything for the current pair: clear stale per-pair state,
+    /// kick off metadata loads, decode the HEIF preview.
+    private func applyCurrentPair(resetViewport: Bool) async {
+        guard let pair else { return }
         self.currentImage = nil
         self.errorMessage = nil
         self.displayedVariant = .heif
         self.requestedVariant = .heif
-        self.viewport = .identity
-        self.currentPixelZoom = 1.0
+        if resetViewport {
+            self.viewport = .identity
+            self.currentPixelZoom = 1.0
+        }
         self.currentExif = nil
         self.currentAFRegions = []
         self.currentAFSettings = AFSettings()
@@ -49,8 +140,18 @@ final class ViewerState {
         await applyRequestedVariant()
     }
 
-    func toggleAFOverlay() {
-        overlays.afPoints.toggle()
+    private func kickOffExifLoad(for pair: PhotoPair) {
+        exifGeneration += 1
+        let gen = exifGeneration
+        let url = pair.rawURL
+        Task { [weak self] in
+            let exif = await Task.detached(priority: .utility) {
+                ImageIOMetadata.read(from: url)
+            }.value
+            guard let self else { return }
+            guard self.exifGeneration == gen else { return }
+            self.currentExif = exif
+        }
     }
 
     private func kickOffAFLoad(for pair: PhotoPair) {
@@ -69,93 +170,11 @@ final class ViewerState {
         }
     }
 
-    private func kickOffExifLoad(for pair: PhotoPair) {
-        exifGeneration += 1
-        let gen = exifGeneration
-        let url = pair.rawURL  // EXIF is read from the canonical RAW file
-        Task { [weak self] in
-            let exif = await Task.detached(priority: .utility) {
-                ImageIOMetadata.read(from: url)
-            }.value
-            guard let self else { return }
-            guard self.exifGeneration == gen else { return }
-            self.currentExif = exif
-        }
-    }
-
-    func toggleRequestedVariant() {
-        guard pair != nil else { return }
-        requestedVariant = (requestedVariant == .heif) ? .raw : .heif
-        Task { await applyRequestedVariant() }
-    }
-
-    /// Cycles between ImageIO and LibRaw. The decoder is a RAW-only concern;
-    /// HEIF always goes through ImageIO. If we're currently showing RAW, we
-    /// re-decode immediately with the new decoder. If on HEIF, the change is
-    /// silent — it kicks in next time the user goes to RAW.
-    func toggleClipping() {
-        overlays.clipping.toggle()
-    }
-
-    func togglePeaking() {
-        overlays.focusPeaking.toggle()
-    }
-
-    func toggleSidebar() {
-        sidebarVisible.toggle()
-    }
-
-    func cycleDecoder() {
-        guard pair != nil else { return }
-        decoder = (decoder == .imageIO) ? .libRaw : .imageIO
-        if requestedVariant == .raw {
-            Task { await applyRequestedVariant() }
-        }
-    }
-
-    func setViewportToFit() {
-        // Just request fit; the canvas emits the new pixelZoom back when the
-        // viewport actually changes. If we're already at fit, the existing
-        // value stays correct (don't pre-zero — that desynced the pill on a
-        // second X press).
-        viewport = .identity
-    }
-
-    /// Called by the canvas after gestures. Updates viewport + pixel zoom and
-    /// kicks an auto-swap check.
-    func updateViewportFromCanvas(_ vp: CanvasViewport, pixelZoom: CGFloat) {
-        self.viewport = vp
-        self.currentPixelZoom = pixelZoom
-        Task { await maybeAutoSwap() }
-    }
-
-    private var lastAutoSwapPixelZoom: CGFloat = 0
-
-    /// Auto-swap is a one-way upgrade fired ONLY on the upward crossing of
-    /// pixel zoom past 1.0 — not while pixel zoom is sustained above 1.0.
-    /// Otherwise toggling Z back to HEIF while zoomed in would immediately
-    /// yank you back to RAW on the next canvas emit (e.g., when the image
-    /// dimensions shift slightly between HEIF and LibRaw output).
-    private func maybeAutoSwap() async {
-        let prev = lastAutoSwapPixelZoom
-        let curr = currentPixelZoom
-        lastAutoSwapPixelZoom = curr
-
-        guard autoSwapEnabled, pair != nil else { return }
-        if curr >= 1.0 && prev < 1.0 && requestedVariant == .heif {
-            Log.app.notice("auto-swap: HEIF → RAW (pz \(prev, format: .fixed(precision: 2)) → \(curr, format: .fixed(precision: 2)))")
-            requestedVariant = .raw
-            await applyRequestedVariant()
-        }
-    }
-
     private func kickOffHistogramCompute(for image: DecodedImage) {
         histogramGeneration += 1
         let gen = histogramGeneration
         let cgImage = image.cgImage
         Task { [weak self] in
-            // Detached child runs the CPU work off main; .value returns us
-            // here (MainActor), where weak self is safely accessed.
             let h = await Task.detached(priority: .utility) {
                 HistogramComputer.compute(from: cgImage)
             }.value
