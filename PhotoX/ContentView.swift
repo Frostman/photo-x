@@ -3,14 +3,21 @@ import SwiftUI
 struct ContentView: View {
     @Bindable var state: ViewerState
     @FocusState private var canvasFocused: Bool
+    @State private var showHelp: Bool = false
 
     var body: some View {
-        HStack(spacing: 0) {
-            canvas
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            if state.sidebarVisible {
-                SidebarView(state: state)
-                    .transition(.move(edge: .trailing))
+        ZStack {
+            HStack(spacing: 0) {
+                canvas
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                if state.sidebarVisible {
+                    SidebarView(state: state)
+                        .transition(.move(edge: .trailing))
+                }
+            }
+
+            if showHelp {
+                HelpOverlay(onDismiss: { showHelp = false })
             }
         }
         .frame(minWidth: 900, minHeight: 600)
@@ -38,6 +45,15 @@ struct ContentView: View {
             withAnimation(.easeInOut(duration: 0.15)) {
                 state.toggleSidebar()
             }
+            return .handled
+        }
+        .onKeyPress(KeyEquivalent("?")) {
+            withAnimation(.easeInOut(duration: 0.12)) { showHelp.toggle() }
+            return .handled
+        }
+        .onKeyPress(.escape) {
+            guard showHelp else { return .ignored }
+            withAnimation(.easeInOut(duration: 0.12)) { showHelp = false }
             return .handled
         }
         .dropDestination(for: URL.self) { urls, _ in
@@ -77,6 +93,24 @@ struct ContentView: View {
 
             statusOverlay
             decodingPill
+            helpHint
+        }
+    }
+
+    @ViewBuilder
+    private var helpHint: some View {
+        VStack {
+            HStack {
+                Text("? for shortcuts")
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.white.opacity(0.5))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(.black.opacity(0.4), in: Capsule())
+                Spacer()
+            }
+            .padding(12)
+            Spacer()
         }
     }
 
