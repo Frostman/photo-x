@@ -56,16 +56,14 @@ final class ViewerState {
         Task { await maybeAutoSwap() }
     }
 
-    /// Auto-swap rules from the plan: ≥1.0 pixel zoom → request RAW; <0.9 → request HEIF.
-    /// Hysteresis avoids flicker at the boundary.
+    /// Auto-swap is a one-way upgrade: HEIF → RAW when pixel zoom crosses 1.0.
+    /// We never auto-revert to HEIF on zoom-out — once you've paid for the RAW
+    /// decode it's cached, and flicker-y back-and-forth on resize is worse than
+    /// staying on RAW. R still toggles manually.
     private func maybeAutoSwap() async {
         guard autoSwapEnabled, pair != nil else { return }
-        let pz = currentPixelZoom
-        if pz >= 1.0, requestedVariant == .heif {
+        if currentPixelZoom >= 1.0, requestedVariant == .heif {
             requestedVariant = .raw
-            await applyRequestedVariant()
-        } else if pz < 0.9, requestedVariant == .raw, displayedVariant == .raw {
-            requestedVariant = .heif
             await applyRequestedVariant()
         }
     }
