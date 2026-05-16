@@ -1,7 +1,17 @@
 #import "LibRawWrapper.h"
 #import <libraw/libraw.h>
+#import <os/log.h>
 
 NSString *const LibRawErrorDomain = @"dev.frostman.PhotoX.LibRaw";
+
+static os_log_t librawLog(void) {
+    static os_log_t log;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        log = os_log_create("dev.frostman.PhotoX", "libraw");
+    });
+    return log;
+}
 
 static NSError *makeError(int code, NSString *stage) {
     const char *msg = libraw_strerror(code);
@@ -54,6 +64,11 @@ static void librawReleaseProcessedImage(void *info, const void *data, size_t siz
         return NULL;
     }
 
+    os_log(librawLog(),
+           "camera: maker=%{public}s model=%{public}s raw=%dx%d",
+           raw->idata.make, raw->idata.model,
+           raw->sizes.raw_width, raw->sizes.raw_height);
+
     // Defaults: sRGB output, 16-bit, camera WB, no auto-brightness.
     // gamm[0]=1/2.4, gamm[1]=12.92 → sRGB-ish transfer.
     raw->params.output_bps = 16;
@@ -63,6 +78,19 @@ static void librawReleaseProcessedImage(void *info, const void *data, size_t siz
     raw->params.gamm[0] = 1.0 / 2.4;
     raw->params.gamm[1] = 12.92;
     raw->params.user_flip = -1;       // honor camera orientation
+
+    // Match Sony's JPEG/HEIF crop so LibRaw output aligns with HEIF. Values
+    // come from the ARW's DefaultCropOrigin / DefaultCropSize EXIF tags:
+    // for the A1 II sample, (12, 12) + (8640, 5760). Not centered.
+    // TODO: read DefaultCropOrigin/Size dynamically (via ExifTool or by
+    // parsing the raw EXIF) so this works for all bodies; currently
+    // hardcoded for A1/A1 II's 8704×6144 sensor.
+    if (raw->sizes.iwidth == 8704 && raw->sizes.iheight == 6144) {
+        raw->params.cropbox[0] = 12;
+        raw->params.cropbox[1] = 12;
+        raw->params.cropbox[2] = 8640;
+        raw->params.cropbox[3] = 5760;
+    }
 
     ret = libraw_dcraw_process(raw);
     if (ret != LIBRAW_SUCCESS) {
@@ -79,6 +107,15 @@ static void librawReleaseProcessedImage(void *info, const void *data, size_t siz
         libraw_close(raw);
         return NULL;
     }
+
+    os_log(librawLog(),
+           "sizes: raw=%dx%d processed=%dx%d output=%dx%d margins=%d,%d  img=%ux%u data_size=%u (expected=%u)",
+           raw->sizes.raw_width, raw->sizes.raw_height,
+           raw->sizes.width, raw->sizes.height,
+           raw->sizes.iwidth, raw->sizes.iheight,
+           raw->sizes.left_margin, raw->sizes.top_margin,
+           img->width, img->height, img->data_size,
+           (unsigned)(img->width) * img->height * img->colors * (img->bits/8));
 
     if (img->type != LIBRAW_IMAGE_BITMAP || img->colors != 3 || img->bits != 16) {
         if (error) {
