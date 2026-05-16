@@ -10,7 +10,6 @@ struct AFSettingsPanelView: View {
             row("Tracking", settings.afTracking)
             row("Distance", settings.focusDistance)
             row("Points Used", settings.pointsUsed.map { "\($0)" })
-            row("Frame Size", settings.focusFrameSize)
         }
     }
 
