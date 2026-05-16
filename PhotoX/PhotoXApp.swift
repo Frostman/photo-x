@@ -2,9 +2,11 @@ import SwiftUI
 
 @main
 struct PhotoXApp: App {
+    @State private var viewerState = ViewerState()
+
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            ContentView(state: viewerState)
         }
         .windowResizability(.contentMinSize)
     }
