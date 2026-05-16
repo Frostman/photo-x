@@ -26,6 +26,9 @@ final class ViewerState {
     var currentExif: ExifSummary?
     private var exifGeneration: Int = 0
 
+    var currentAFRegions: [AFRegion] = []
+    private var afGeneration: Int = 0
+
     let pipeline: DecodePipeline = DecodePipeline()
 
     func loadPair(_ pair: PhotoPair) async {
@@ -38,8 +41,29 @@ final class ViewerState {
         self.viewport = .identity
         self.currentPixelZoom = 1.0
         self.currentExif = nil
+        self.currentAFRegions = []
         kickOffExifLoad(for: pair)
+        kickOffAFLoad(for: pair)
         await applyRequestedVariant()
+    }
+
+    func toggleAFOverlay() {
+        overlays.afPoints.toggle()
+    }
+
+    private func kickOffAFLoad(for pair: PhotoPair) {
+        afGeneration += 1
+        let gen = afGeneration
+        let url = pair.rawURL
+        Task { [weak self] in
+            let regions = await Task.detached(priority: .utility) {
+                ExifToolRunner.readAFRegions(from: url)
+            }.value
+            guard let self else { return }
+            guard self.afGeneration == gen else { return }
+            self.currentAFRegions = regions
+            Log.app.notice("AF regions loaded: \(regions.count) for \(pair.stem, privacy: .public)")
+        }
     }
 
     private func kickOffExifLoad(for pair: PhotoPair) {

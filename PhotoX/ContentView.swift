@@ -45,6 +45,10 @@ struct ContentView: View {
             state.togglePeaking()
             return .handled
         }
+        .onKeyPress(keys: ["a", "A"]) { _ in
+            state.toggleAFOverlay()
+            return .handled
+        }
         .onKeyPress(keys: ["b", "B"]) { _ in
             withAnimation(.easeInOut(duration: 0.15)) {
                 state.toggleSidebar()
@@ -80,6 +84,16 @@ struct ContentView: View {
                     }
                 )
                 .ignoresSafeArea()
+                .overlay {
+                    if state.overlays.afPoints {
+                        AFPointOverlay(
+                            imagePixelSize: image.pixelSize,
+                            viewport: state.viewport,
+                            regions: state.currentAFRegions
+                        )
+                        .allowsHitTesting(false)
+                    }
+                }
             } else if state.isDecoding {
                 ProgressView("Decoding…")
                     .controlSize(.large)
@@ -158,6 +172,9 @@ struct ContentView: View {
         }
         if state.overlays.focusPeaking {
             parts.append("PEAK")
+        }
+        if state.overlays.afPoints {
+            parts.append("AF")
         }
         return parts.joined(separator: " • ")
     }
