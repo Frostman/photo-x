@@ -227,7 +227,7 @@ struct ContentView: View {
         case (false, false): break
         }
         if files.xmp { parts.append("+XMP") }
-        return parts.joined(separator: " ")
+        return parts.joined()
     }
 
     /// Reserve enough horizontal space for the largest possible "N/M" string
