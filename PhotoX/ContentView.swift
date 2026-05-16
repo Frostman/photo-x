@@ -152,7 +152,8 @@ struct ContentView: View {
 
     @ViewBuilder
     private var ratingBadge: some View {
-        if state.currentImage != nil, state.currentXMP.hasDecision {
+        // Sidebar already shows Decisions panel — don't duplicate the badge.
+        if state.currentImage != nil, state.currentXMP.hasDecision, !state.sidebarVisible {
             VStack {
                 HStack {
                     Spacer()
@@ -183,14 +184,7 @@ struct ContentView: View {
             VStack {
                 Spacer()
                 HStack {
-                    if let pair = state.pair {
-                        Text(stemAndIndex(pair: pair))
-                            .font(.caption.monospaced())
-                            .foregroundStyle(.white.opacity(0.7))
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 5)
-                            .background(.black.opacity(0.5), in: Capsule())
-                    }
+                    if let pair = state.pair { stemPill(pair: pair) }
                     Spacer()
                     Text(statusText(image: image))
                         .font(.caption.monospacedDigit())
@@ -204,9 +198,44 @@ struct ContentView: View {
         }
     }
 
-    private func stemAndIndex(pair: PhotoPair) -> String {
-        guard let shoot = state.shoot, shoot.count > 1 else { return pair.stem }
-        return "\(pair.stem)   \(state.currentIndex + 1)/\(shoot.count)"
+    @ViewBuilder
+    private func stemPill(pair: PhotoPair) -> some View {
+        HStack(spacing: 8) {
+            if let shoot = state.shoot, shoot.count > 1 {
+                Text("\(state.currentIndex + 1)/\(shoot.count)")
+                    .frame(width: indexSlotWidth(for: shoot.count), alignment: .leading)
+                    .foregroundStyle(.white.opacity(0.55))
+            }
+            Text(pair.stem)
+                .foregroundStyle(.white.opacity(0.85))
+            Text(filesBadge)
+                .foregroundStyle(.white.opacity(0.45))
+        }
+        .font(.caption.monospacedDigit())
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(.black.opacity(0.5), in: Capsule())
+    }
+
+    private var filesBadge: String {
+        let files = state.currentPairFiles
+        var parts: [String] = []
+        switch (files.arw, files.hif) {
+        case (true, true):  parts.append("ARW+HIF")
+        case (true, false): parts.append("ARW")
+        case (false, true): parts.append("HIF")
+        case (false, false): break
+        }
+        if files.xmp { parts.append("+XMP") }
+        return parts.joined(separator: " ")
+    }
+
+    /// Reserve enough horizontal space for the largest possible "N/M" string
+    /// in this shoot, so the pair name lands at a stable x as N changes.
+    private func indexSlotWidth(for count: Int) -> CGFloat {
+        let digits = String(count).count
+        let chars = digits * 2 + 1               // "N/M" character count
+        return CGFloat(chars) * 7.5 + 2          // monospaced caption ≈ 7-8pt/char
     }
 
     private func statusText(image: DecodedImage) -> String {

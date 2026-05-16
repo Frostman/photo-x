@@ -40,6 +40,15 @@ final class ViewerState {
     var currentXMP: XMPSidecar = .empty
     private var xmpGeneration: Int = 0
 
+    var currentPairFiles: PairFiles = .none
+
+    struct PairFiles: Hashable, Sendable {
+        var arw: Bool = false
+        var hif: Bool = false
+        var xmp: Bool = false
+        static let none = PairFiles()
+    }
+
     let pipeline: DecodePipeline = DecodePipeline()
 
     /// Loads a shoot and focuses on a specific pair within it. Replaces the
@@ -144,11 +153,22 @@ final class ViewerState {
         self.currentAFRegions = []
         self.currentAFSettings = AFSettings()
         self.currentXMP = .empty
+        self.currentPairFiles = pairFiles(for: pair)
         kickOffExifLoad(for: pair)
         kickOffAFLoad(for: pair)
         kickOffXMPLoad(for: pair)
         await applyRequestedVariant()
         prefetchNeighborHEIFs()
+    }
+
+    private func pairFiles(for pair: PhotoPair) -> PairFiles {
+        let fm = FileManager.default
+        let xmpURL = pair.rawURL.deletingPathExtension().appendingPathExtension("xmp")
+        return PairFiles(
+            arw: fm.fileExists(atPath: pair.rawURL.path),
+            hif: fm.fileExists(atPath: pair.heifURL.path),
+            xmp: fm.fileExists(atPath: xmpURL.path)
+        )
     }
 
     private func kickOffXMPLoad(for pair: PhotoPair) {
