@@ -55,6 +55,22 @@ struct ContentView: View {
             }
             return .handled
         }
+        .onKeyPress(.leftArrow) {
+            state.previousPair()
+            return .handled
+        }
+        .onKeyPress(.rightArrow) {
+            state.nextPair()
+            return .handled
+        }
+        .onKeyPress(.home) {
+            state.firstPair()
+            return .handled
+        }
+        .onKeyPress(.end) {
+            state.lastPair()
+            return .handled
+        }
         .onKeyPress(KeyEquivalent("?")) {
             withAnimation(.easeInOut(duration: 0.12)) { showHelp.toggle() }
             return .handled
@@ -140,7 +156,7 @@ struct ContentView: View {
                 Spacer()
                 HStack {
                     if let pair = state.pair {
-                        Text(pair.stem)
+                        Text(stemAndIndex(pair: pair))
                             .font(.caption.monospaced())
                             .foregroundStyle(.white.opacity(0.7))
                             .padding(.horizontal, 10)
@@ -158,6 +174,11 @@ struct ContentView: View {
                 .padding(12)
             }
         }
+    }
+
+    private func stemAndIndex(pair: PhotoPair) -> String {
+        guard let shoot = state.shoot, shoot.count > 1 else { return pair.stem }
+        return "\(pair.stem)   \(state.currentIndex + 1)/\(shoot.count)"
     }
 
     private func statusText(image: DecodedImage) -> String {

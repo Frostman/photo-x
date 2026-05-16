@@ -121,7 +121,8 @@ final class ViewerState {
     }
 
     /// Apply everything for the current pair: clear stale per-pair state,
-    /// kick off metadata loads, decode the HEIF preview.
+    /// kick off metadata loads, decode the HEIF preview, then warm the cache
+    /// with the neighbors' HEIFs so ←/→ feels instant.
     private func applyCurrentPair(resetViewport: Bool) async {
         guard let pair else { return }
         self.currentImage = nil
@@ -138,6 +139,23 @@ final class ViewerState {
         kickOffExifLoad(for: pair)
         kickOffAFLoad(for: pair)
         await applyRequestedVariant()
+        prefetchNeighborHEIFs()
+    }
+
+    /// Warm the pipeline cache with HEIFs for index ±1 so arrow-key
+    /// navigation feels instant. Best-effort; we ignore failures.
+    private func prefetchNeighborHEIFs() {
+        guard let shoot else { return }
+        let neighborIndices = [currentIndex - 1, currentIndex + 1]
+            .filter { shoot.pairs.indices.contains($0) }
+        for idx in neighborIndices {
+            let neighbor = shoot.pairs[idx]
+            Task { [weak self] in
+                _ = try? await self?.pipeline.decode(
+                    pair: neighbor, variant: .heif, decoder: .imageIO
+                )
+            }
+        }
     }
 
     private func kickOffExifLoad(for pair: PhotoPair) {

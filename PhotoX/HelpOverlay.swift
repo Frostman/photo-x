@@ -14,6 +14,10 @@ struct HelpOverlay: View {
             .init(keys: "Z", label: "Toggle HEIF ↔ RAW"),
             .init(keys: "D", label: "Cycle decoder (ImageIO / LibRaw)"),
         ]),
+        ("Navigation", [
+            .init(keys: "← / →", label: "Previous / next pair in the shoot"),
+            .init(keys: "Home / End", label: "Jump to first / last pair"),
+        ]),
         ("View", [
             .init(keys: "X", label: "Fit to window"),
             .init(keys: "⌘0", label: "Fit to window"),

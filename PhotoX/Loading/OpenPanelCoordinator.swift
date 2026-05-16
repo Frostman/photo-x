@@ -12,6 +12,7 @@ enum OpenPanelCoordinator {
         panel.resolvesAliases = true
         panel.message = "Pick a folder of ARW + HIF pairs, or any pair inside one"
         panel.prompt = "Open"
+        panel.canCreateDirectories = false
 
         var types: [UTType] = [.image, .folder]
         if let arw = UTType(filenameExtension: "arw") { types.append(arw) }

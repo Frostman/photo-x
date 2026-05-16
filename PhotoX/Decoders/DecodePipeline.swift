@@ -10,7 +10,7 @@ final class DecodePipeline {
 
     private var inflight: [DecodeKey: Task<DecodedImage, Error>] = [:]
 
-    init(cacheCapacity: Int = 4) {
+    init(cacheCapacity: Int = 12) {
         self.cache = DecodedImageCache(capacity: cacheCapacity)
     }
 
