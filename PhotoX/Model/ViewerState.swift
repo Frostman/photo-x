@@ -40,16 +40,16 @@ final class ViewerState {
         Task { await applyRequestedVariant() }
     }
 
-    /// Cycles between ImageIO and LibRaw. Only meaningful for the RAW variant —
-    /// HEIF is always ImageIO. If currently showing HEIF, also force a RAW
-    /// request so the user sees the effect immediately.
+    /// Cycles between ImageIO and LibRaw. The decoder is a RAW-only concern;
+    /// HEIF always goes through ImageIO. If we're currently showing RAW, we
+    /// re-decode immediately with the new decoder. If on HEIF, the change is
+    /// silent — it kicks in next time the user goes to RAW.
     func cycleDecoder() {
         guard pair != nil else { return }
         decoder = (decoder == .imageIO) ? .libRaw : .imageIO
-        if displayedVariant == .heif {
-            requestedVariant = .raw
+        if requestedVariant == .raw {
+            Task { await applyRequestedVariant() }
         }
-        Task { await applyRequestedVariant() }
     }
 
     func setViewportToFit() {

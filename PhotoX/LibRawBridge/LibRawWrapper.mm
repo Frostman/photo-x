@@ -111,8 +111,10 @@ static void librawReleaseProcessedImage(void *info, const void *data, size_t siz
     }
 
     CGColorSpaceRef cs = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
-    // LibRaw writes pixels as 16-bit big-endian RGB triplets.
-    CGBitmapInfo bitmapInfo = (CGBitmapInfo)((uint32_t)kCGImageByteOrder16Big
+    // LibRaw writes 16-bit samples in HOST byte order (little-endian on
+    // Apple Silicon). Tagging the CGImage with Big here was producing
+    // byte-swapped noise.
+    CGBitmapInfo bitmapInfo = (CGBitmapInfo)((uint32_t)kCGImageByteOrder16Little
                                            | (uint32_t)kCGImageAlphaNone);
 
     CGImageRef cgImage = CGImageCreate(

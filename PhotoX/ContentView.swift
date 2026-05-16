@@ -73,7 +73,7 @@ struct ContentView: View {
                             .background(.black.opacity(0.5), in: Capsule())
                     }
                     Spacer()
-                    Text("\(state.displayedVariant.displayName) • \(state.decoder.displayName) • \(Int(image.decodeMS)) ms • \(zoomLabel)")
+                    Text(statusText(image: image))
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.white.opacity(0.85))
                         .padding(.horizontal, 10)
@@ -83,6 +83,16 @@ struct ContentView: View {
                 .padding(12)
             }
         }
+    }
+
+    private func statusText(image: DecodedImage) -> String {
+        var parts: [String] = [state.displayedVariant.displayName]
+        if state.displayedVariant == .raw {
+            parts.append(state.decoder.displayName)
+        }
+        parts.append("\(Int(image.decodeMS)) ms")
+        parts.append(zoomLabel)
+        return parts.joined(separator: " • ")
     }
 
     private var zoomLabel: String {

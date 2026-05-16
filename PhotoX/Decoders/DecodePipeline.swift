@@ -15,7 +15,11 @@ final class DecodePipeline {
     }
 
     func decode(pair: PhotoPair, variant: ImageVariant, decoder: DecoderChoice) async throws -> DecodedImage {
-        let key = DecodeKey(pairID: pair.id, variant: variant, decoder: decoder)
+        // Decoder is a RAW-only concern: HEIF always goes through HEIFDecoder.
+        // Normalize the cache key so we don't double-cache the same HEIF under
+        // different decoder slots.
+        let keyDecoder: DecoderChoice = (variant == .heif) ? .imageIO : decoder
+        let key = DecodeKey(pairID: pair.id, variant: variant, decoder: keyDecoder)
 
         if let cached = cache.get(key) {
             Log.decode.notice("cache hit: \(key.pairID, privacy: .public) \(key.variant.rawValue, privacy: .public)/\(key.decoder.rawValue, privacy: .public)")
