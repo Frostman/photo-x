@@ -51,6 +51,10 @@ final class ViewerState {
         overlays.clipping.toggle()
     }
 
+    func togglePeaking() {
+        overlays.focusPeaking.toggle()
+    }
+
     func toggleSidebar() {
         sidebarVisible.toggle()
     }

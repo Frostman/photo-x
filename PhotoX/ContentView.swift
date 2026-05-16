@@ -41,6 +41,10 @@ struct ContentView: View {
             state.toggleClipping()
             return .handled
         }
+        .onKeyPress(keys: ["f", "F"]) { _ in
+            state.togglePeaking()
+            return .handled
+        }
         .onKeyPress(keys: ["b", "B"]) { _ in
             withAnimation(.easeInOut(duration: 0.15)) {
                 state.toggleSidebar()
@@ -70,6 +74,7 @@ struct ContentView: View {
                     image: image.cgImage,
                     viewport: state.viewport,
                     showClipping: state.overlays.clipping,
+                    showPeaking: state.overlays.focusPeaking,
                     onViewportChange: { vp, pz in
                         state.updateViewportFromCanvas(vp, pixelZoom: pz)
                     }
@@ -150,6 +155,9 @@ struct ContentView: View {
         parts.append(zoomLabel)
         if state.overlays.clipping {
             parts.append("CLIP")
+        }
+        if state.overlays.focusPeaking {
+            parts.append("PEAK")
         }
         return parts.joined(separator: " • ")
     }

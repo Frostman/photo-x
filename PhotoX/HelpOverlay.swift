@@ -23,6 +23,7 @@ struct HelpOverlay: View {
         ]),
         ("Overlays", [
             .init(keys: "C", label: "Clipping zebra — magenta = blown highlights (any channel ≥ 99%), blue = crushed shadows (max ≤ 2%)"),
+            .init(keys: "F", label: "Focus peaking — orange tint over in-focus edges (Sobel on luminance)"),
             .init(keys: "B", label: "Toggle sidebar (histogram, etc.)"),
         ]),
         ("Files", [

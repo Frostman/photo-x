@@ -12,9 +12,13 @@ final class CanvasRenderer {
     private var imagePixelSize: CGSize = .zero
     private var viewport: CanvasViewport = .identity
     private var showClipping: Bool = false
+    private var showPeaking: Bool = false
+    private var peakingThreshold: Float = 0.15
 
     private struct FragmentUniforms {
         var showClipping: Int32
+        var showPeaking: Int32
+        var peakingThreshold: Float
     }
 
     init?(layerPixelFormat: MTLPixelFormat) {
@@ -125,6 +129,10 @@ final class CanvasRenderer {
         self.showClipping = on
     }
 
+    func setShowPeaking(_ on: Bool) {
+        self.showPeaking = on
+    }
+
     func draw(in layer: CAMetalLayer) {
         guard let baseTexture else {
             drawClear(in: layer)
@@ -151,7 +159,11 @@ final class CanvasRenderer {
             encoder.setVertexBytes(ptr.baseAddress!, length: bufferLength, index: 0)
         }
 
-        var fragmentUniforms = FragmentUniforms(showClipping: showClipping ? 1 : 0)
+        var fragmentUniforms = FragmentUniforms(
+            showClipping: showClipping ? 1 : 0,
+            showPeaking: showPeaking ? 1 : 0,
+            peakingThreshold: peakingThreshold
+        )
         encoder.setFragmentBytes(&fragmentUniforms,
                                   length: MemoryLayout<FragmentUniforms>.stride,
                                   index: 0)

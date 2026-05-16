@@ -55,6 +55,7 @@ final class ImageCanvasNSView: NSView {
             }
             renderer?.setViewport(viewport)
             renderer?.setShowClipping(showClipping)
+            renderer?.setShowPeaking(showPeaking)
         }
         updateDrawableSize()
         scheduleDraw()
@@ -109,6 +110,14 @@ final class ImageCanvasNSView: NSView {
         guard on != showClipping else { return }
         showClipping = on
         renderer?.setShowClipping(on)
+        scheduleDraw()
+    }
+
+    private var showPeaking: Bool = false
+    func setShowPeaking(_ on: Bool) {
+        guard on != showPeaking else { return }
+        showPeaking = on
+        renderer?.setShowPeaking(on)
         scheduleDraw()
     }
 
