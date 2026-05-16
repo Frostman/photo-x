@@ -1,7 +1,9 @@
 import SwiftUI
+import AppKit
 
 @main
 struct PhotoXApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var viewerState = ViewerState()
 
     var body: some Scene {
@@ -40,5 +42,11 @@ struct PhotoXApp: App {
     private func openWithPanel() async {
         guard let pair = OpenPanelCoordinator.runPairPicker() else { return }
         await viewerState.loadPair(pair)
+    }
+}
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        true
     }
 }
