@@ -1,9 +1,11 @@
+import AppKit
 import SwiftUI
 
 struct ContentView: View {
     @Bindable var state: ViewerState
     @FocusState private var canvasFocused: Bool
     @State private var showHelp: Bool = false
+    @State private var copiedFlash: Bool = false
 
     var body: some View {
         ZStack {
@@ -206,8 +208,10 @@ struct ContentView: View {
                     .frame(width: indexSlotWidth(for: shoot.count), alignment: .leading)
                     .foregroundStyle(.white.opacity(0.55))
             }
-            Text(pair.stem)
+            Text(copiedFlash ? "Copied path" : pair.stem)
                 .foregroundStyle(.white.opacity(0.85))
+                .onTapGesture { copyPath(for: pair) }
+                .help("Click to copy ARW path (HIF if ARW is missing)")
             Text(filesBadge)
                 .foregroundStyle(.white.opacity(0.45))
         }
@@ -228,6 +232,23 @@ struct ContentView: View {
         }
         if files.xmp { parts.append("+XMP") }
         return parts.joined()
+    }
+
+    private func copyPath(for pair: PhotoPair) {
+        let fm = FileManager.default
+        let url: URL? = {
+            if fm.fileExists(atPath: pair.rawURL.path) { return pair.rawURL }
+            if fm.fileExists(atPath: pair.heifURL.path) { return pair.heifURL }
+            return nil
+        }()
+        guard let url else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(url.path, forType: .string)
+        copiedFlash = true
+        Task {
+            try? await Task.sleep(for: .milliseconds(800))
+            await MainActor.run { copiedFlash = false }
+        }
     }
 
     /// Reserve enough horizontal space for the largest possible "N/M" string
