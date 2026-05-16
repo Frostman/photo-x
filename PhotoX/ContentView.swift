@@ -58,10 +58,12 @@ struct ContentView: View {
             return .handled
         }
         .onKeyPress(.leftArrow) {
+            PerfTracker.begin("← key")
             state.previousPair()
             return .handled
         }
         .onKeyPress(.rightArrow) {
+            PerfTracker.begin("→ key")
             state.nextPair()
             return .handled
         }

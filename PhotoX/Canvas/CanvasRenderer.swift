@@ -49,11 +49,7 @@ final class CanvasRenderer {
     }
 
     func setImage(_ cgImage: CGImage) {
-        // MTKTextureLoader trips on 10-bit HEIF (rdar://143602439 — Sony A1 II HIF
-        // is 10-bpc / RGB10A2 packed), so we redraw into an 8-bpc BGRA buffer and
-        // upload manually. Costs ~50-200 ms per 50MP image on the main thread; an
-        // acceptable tradeoff for commit 3, will revisit when the 16-bit / Display
-        // P3 pipeline lands.
+        PerfTracker.mark("CanvasRenderer.setImage entered")
         guard let texture = makeTexture(from: cgImage) else {
             Log.canvas.error("setImage: makeTexture returned nil for \(cgImage.width)x\(cgImage.height)")
             baseTexture = nil
@@ -62,7 +58,7 @@ final class CanvasRenderer {
         }
         baseTexture = texture
         imagePixelSize = CGSize(width: cgImage.width, height: cgImage.height)
-        Log.canvas.notice("setImage: \(cgImage.width)x\(cgImage.height) bpc=\(cgImage.bitsPerComponent) bpp=\(cgImage.bitsPerPixel) → texture uploaded")
+        PerfTracker.mark("CanvasRenderer.setImage done")
     }
 
     private func makeTexture(from cgImage: CGImage) -> MTLTexture? {
@@ -86,9 +82,11 @@ final class CanvasRenderer {
             Log.canvas.error("makeTexture: CGContext creation failed")
             return nil
         }
+        PerfTracker.mark("CGContext allocated (\(bytesPerRow * height / 1_000_000) MB)")
 
         context.interpolationQuality = .high
         context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+        PerfTracker.mark("CGContext.draw done")
 
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .bgra8Unorm_srgb,
@@ -103,6 +101,7 @@ final class CanvasRenderer {
             Log.canvas.error("makeTexture: MTLTexture creation failed")
             return nil
         }
+        PerfTracker.mark("MTLTexture allocated")
 
         texture.replace(
             region: MTLRegionMake2D(0, 0, width, height),
@@ -110,6 +109,7 @@ final class CanvasRenderer {
             withBytes: dataPtr,
             bytesPerRow: bytesPerRow
         )
+        PerfTracker.mark("MTLTexture.replace done")
 
         if let cmd = commandQueue.makeCommandBuffer(),
            let blit = cmd.makeBlitCommandEncoder() {
@@ -117,6 +117,7 @@ final class CanvasRenderer {
             blit.endEncoding()
             cmd.commit()
         }
+        PerfTracker.mark("mipmap blit committed")
 
         return texture
     }
@@ -138,10 +139,12 @@ final class CanvasRenderer {
             drawClear(in: layer)
             return
         }
+        PerfTracker.mark("CanvasRenderer.draw entered")
 
         let drawableSize = layer.drawableSize
         guard drawableSize.width > 0, drawableSize.height > 0,
               let drawable = layer.nextDrawable() else { return }
+        PerfTracker.mark("nextDrawable acquired")
 
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = drawable.texture
@@ -175,6 +178,7 @@ final class CanvasRenderer {
 
         commandBuffer.present(drawable)
         commandBuffer.commit()
+        PerfTracker.mark("commandBuffer committed + present")
     }
 
     private func drawClear(in layer: CAMetalLayer) {

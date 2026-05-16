@@ -66,6 +66,7 @@ final class ViewerState {
         let clamped = max(0, min(index, shoot.pairs.count - 1))
         guard clamped != currentIndex else { return }
         currentIndex = clamped
+        PerfTracker.mark("ViewerState.navigate → spawning task")
         Task { await applyCurrentPair(resetViewport: false) }
     }
 
@@ -137,6 +138,7 @@ final class ViewerState {
     /// with the neighbors' HEIFs so ←/→ feels instant.
     private func applyCurrentPair(resetViewport: Bool) async {
         guard let pair else { return }
+        PerfTracker.mark("applyCurrentPair entered")
         // Keep currentImage as-is so the previous frame stays on screen until
         // the new one decodes — avoids a flash to ProgressView (which would
         // tear down the ImageCanvasView and lose SwiftUI focus). The
@@ -254,9 +256,12 @@ final class ViewerState {
         defer { isDecoding = false }
 
         do {
+            PerfTracker.mark("about to await pipeline.decode")
             let decoded = try await pipeline.decode(pair: pair, variant: variant, decoder: chosenDecoder)
+            PerfTracker.mark("pipeline.decode returned")
             guard variant == self.requestedVariant, chosenDecoder == self.decoder else { return }
             self.currentImage = decoded
+            PerfTracker.mark("currentImage set")
             self.displayedVariant = variant
             kickOffHistogramCompute(for: decoded)
         } catch {

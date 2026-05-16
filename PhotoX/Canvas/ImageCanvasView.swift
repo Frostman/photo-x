@@ -30,6 +30,7 @@ struct ImageCanvasView: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: ImageCanvasNSView, context: Context) {
+        PerfTracker.mark("ImageCanvasView.updateNSView called")
         nsView.onViewportChange = onViewportChange
         nsView.setViewportFromExternal(viewport)
         nsView.setShowClipping(showClipping)
@@ -37,6 +38,7 @@ struct ImageCanvasView: NSViewRepresentable {
         if let image {
             let id = ObjectIdentifier(image as AnyObject)
             if id != context.coordinator.lastImageID {
+                PerfTracker.mark("updateNSView: image changed → nsView.setImage")
                 nsView.setImage(image)
                 context.coordinator.lastImageID = id
             }

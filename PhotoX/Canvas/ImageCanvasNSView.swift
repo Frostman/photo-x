@@ -90,6 +90,7 @@ final class ImageCanvasNSView: NSView {
     }
 
     func setImage(_ cgImage: CGImage) {
+        PerfTracker.mark("ImageCanvasNSView.setImage entered")
         if let renderer {
             renderer.setImage(cgImage)
             imagePixelSize = CGSize(width: cgImage.width, height: cgImage.height)
