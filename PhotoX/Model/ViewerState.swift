@@ -27,6 +27,7 @@ final class ViewerState {
     private var exifGeneration: Int = 0
 
     var currentAFRegions: [AFRegion] = []
+    var currentAFSettings: AFSettings = AFSettings()
     private var afGeneration: Int = 0
 
     let pipeline: DecodePipeline = DecodePipeline()
@@ -42,6 +43,7 @@ final class ViewerState {
         self.currentPixelZoom = 1.0
         self.currentExif = nil
         self.currentAFRegions = []
+        self.currentAFSettings = AFSettings()
         kickOffExifLoad(for: pair)
         kickOffAFLoad(for: pair)
         await applyRequestedVariant()
@@ -56,13 +58,14 @@ final class ViewerState {
         let gen = afGeneration
         let url = pair.rawURL
         Task { [weak self] in
-            let regions = await Task.detached(priority: .utility) {
-                ExifToolRunner.readAFRegions(from: url)
+            let data = await Task.detached(priority: .utility) {
+                ExifToolRunner.readAF(from: url)
             }.value
             guard let self else { return }
             guard self.afGeneration == gen else { return }
-            self.currentAFRegions = regions
-            Log.app.notice("AF regions loaded: \(regions.count) for \(pair.stem, privacy: .public)")
+            self.currentAFRegions = data.regions
+            self.currentAFSettings = data.settings
+            Log.app.notice("AF regions loaded: \(data.regions.count) for \(pair.stem, privacy: .public)")
         }
     }
 

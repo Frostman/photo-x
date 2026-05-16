@@ -4,6 +4,7 @@ import Foundation
 struct AFRegion: Identifiable, Hashable, Sendable {
     enum Kind: String, Hashable, Sendable {
         case primaryFocus
+        case focalPlanePoint    // one of the 9 (or N) AF points on the AF sensor
         case face
         case subject
     }

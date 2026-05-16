@@ -18,6 +18,12 @@ struct SidebarView: View {
                         ExifPanelView(summary: exif)
                     }
                 }
+
+                if !state.currentAFSettings.isEmpty {
+                    section(title: "Autofocus") {
+                        AFSettingsPanelView(settings: state.currentAFSettings)
+                    }
+                }
             }
             .padding(12)
         }

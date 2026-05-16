@@ -32,23 +32,30 @@ struct AFPointOverlay: View {
             let topLeftXPts = centerXPts - imageWPts / 2
             let topLeftYPts = centerYPts - imageHPts / 2
 
-            ForEach(regions) { region in
-                rect(for: region,
-                     topLeftX: topLeftXPts,
-                     topLeftY: topLeftYPts,
-                     effScale: effScale)
+            // Draw focal-plane dots BEHIND boxes so the primary box reads on top.
+            ForEach(regions.filter { $0.kind == .focalPlanePoint }) { region in
+                focalPlaneDot(for: region,
+                              topLeftX: topLeftXPts,
+                              topLeftY: topLeftYPts,
+                              effScale: effScale)
+            }
+            ForEach(regions.filter { $0.kind != .focalPlanePoint }) { region in
+                box(for: region,
+                    topLeftX: topLeftXPts,
+                    topLeftY: topLeftYPts,
+                    effScale: effScale)
             }
         }
         .allowsHitTesting(false)
     }
 
     @ViewBuilder
-    private func rect(for region: AFRegion,
-                      topLeftX: CGFloat,
-                      topLeftY: CGFloat,
-                      effScale: CGFloat) -> some View {
+    private func box(for region: AFRegion,
+                     topLeftX: CGFloat,
+                     topLeftY: CGFloat,
+                     effScale: CGFloat) -> some View {
         let r = region.rect
-        let w = max(r.width * effScale, 8)   // floor for visibility at low zoom
+        let w = max(r.width * effScale, 8)
         let h = max(r.height * effScale, 8)
         let x = topLeftX + r.midX * effScale
         let y = topLeftY + r.midY * effScale
@@ -57,7 +64,6 @@ struct AFPointOverlay: View {
             Rectangle()
                 .stroke(color(for: region.kind), lineWidth: 1.5)
                 .frame(width: w, height: h)
-            // L-shaped corner brackets for visual punch
             CornerBrackets()
                 .stroke(color(for: region.kind), lineWidth: 2.5)
                 .frame(width: w, height: h)
@@ -66,11 +72,30 @@ struct AFPointOverlay: View {
         .shadow(color: .black.opacity(0.6), radius: 2)
     }
 
+    @ViewBuilder
+    private func focalPlaneDot(for region: AFRegion,
+                               topLeftX: CGFloat,
+                               topLeftY: CGFloat,
+                               effScale: CGFloat) -> some View {
+        let r = region.rect
+        let size = max(min(r.width, r.height) * effScale * 0.4, 5)
+        let x = topLeftX + r.midX * effScale
+        let y = topLeftY + r.midY * effScale
+
+        Circle()
+            .fill(color(for: region.kind).opacity(0.55))
+            .overlay(Circle().stroke(color(for: region.kind), lineWidth: 1))
+            .frame(width: size, height: size)
+            .position(x: x, y: y)
+            .shadow(color: .black.opacity(0.5), radius: 1)
+    }
+
     private func color(for kind: AFRegion.Kind) -> Color {
         switch kind {
-        case .primaryFocus: return .yellow
-        case .face:         return .green
-        case .subject:      return .cyan
+        case .primaryFocus:    return .yellow
+        case .focalPlanePoint: return .yellow
+        case .face:            return .green
+        case .subject:         return .cyan
         }
     }
 }
