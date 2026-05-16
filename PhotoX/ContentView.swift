@@ -18,16 +18,20 @@ struct ContentView: View {
                 VStack(spacing: 8) {
                     Text("Could not load image").font(.headline)
                     Text(message).foregroundStyle(.secondary).font(.callout)
+                        .multilineTextAlignment(.center)
                 }
                 .padding()
             } else {
-                Text("No pair loaded")
+                Text("Drop an ARW + HIF pair, or press ⌘O")
                     .foregroundStyle(.secondary)
             }
 
             statusOverlay
         }
         .frame(minWidth: 900, minHeight: 600)
+        .dropDestination(for: URL.self) { urls, _ in
+            handleDrop(urls)
+        }
     }
 
     @ViewBuilder
@@ -36,6 +40,14 @@ struct ContentView: View {
             VStack {
                 Spacer()
                 HStack {
+                    if let pair = state.pair {
+                        Text(pair.stem)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.white.opacity(0.7))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(.black.opacity(0.5), in: Capsule())
+                    }
                     Spacer()
                     Text("\(state.displayedVariant.displayName) • \(state.decoder.displayName) • \(Int(image.decodeMS)) ms")
                         .font(.caption.monospacedDigit())
@@ -43,10 +55,21 @@ struct ContentView: View {
                         .padding(.horizontal, 10)
                         .padding(.vertical, 5)
                         .background(.black.opacity(0.5), in: Capsule())
-                        .padding(12)
                 }
+                .padding(12)
             }
         }
+    }
+
+    @discardableResult
+    private func handleDrop(_ urls: [URL]) -> Bool {
+        let files = PairFinder.expand(urls)
+        guard let pair = PairFinder.firstPair(in: files) else {
+            state.errorMessage = "No ARW + HIF pair found in dropped items"
+            return false
+        }
+        Task { await state.loadPair(pair) }
+        return true
     }
 }
 

@@ -10,27 +10,26 @@ struct PhotoXApp: App {
                 .task { await bootstrap() }
         }
         .windowResizability(.contentMinSize)
+        .commands {
+            CommandGroup(replacing: .newItem) {
+                Button("Open Pair…") {
+                    Task { await openWithPanel() }
+                }
+                .keyboardShortcut("o", modifiers: .command)
+            }
+        }
     }
 
-    // Hardcoded sample auto-load for commit 3. SamplePathProvider replaces this in commit 4.
     private func bootstrap() async {
-        let sampleURL = URL(fileURLWithPath: "/Users/frostman/workspace/personal/photo-x/sample/DSC04177.HIF")
-        guard FileManager.default.fileExists(atPath: sampleURL.path) else {
-            viewerState.errorMessage = "Sample not found at \(sampleURL.path)"
-            return
+        if let pair = SamplePathProvider.firstPair() {
+            await viewerState.loadPair(pair)
+        } else {
+            viewerState.errorMessage = "No ARW + HIF pair found in \(SamplePathProvider.sampleDirectory().path). Drop a pair on the window or use ⌘O."
         }
+    }
 
-        viewerState.isDecoding = true
-        defer { viewerState.isDecoding = false }
-
-        do {
-            let decoded = try await HEIFDecoder().decode(url: sampleURL)
-            viewerState.currentImage = decoded
-            viewerState.lastDecodeMS[.imageIO] = decoded.decodeMS
-            viewerState.displayedVariant = .heif
-            viewerState.errorMessage = nil
-        } catch {
-            viewerState.errorMessage = String(describing: error)
-        }
+    private func openWithPanel() async {
+        guard let pair = OpenPanelCoordinator.runPairPicker() else { return }
+        await viewerState.loadPair(pair)
     }
 }

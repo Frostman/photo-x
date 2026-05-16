@@ -1,6 +1,5 @@
 import CoreGraphics
 import Metal
-import MetalKit
 import QuartzCore
 
 @MainActor
@@ -8,7 +7,6 @@ final class CanvasRenderer {
     let device: MTLDevice
     private let commandQueue: MTLCommandQueue
     private let pipelineState: MTLRenderPipelineState
-    private let textureLoader: MTKTextureLoader
 
     private var baseTexture: MTLTexture?
     private var imagePixelSize: CGSize = .zero
@@ -20,7 +18,10 @@ final class CanvasRenderer {
               let library = try? device.makeDefaultLibrary(bundle: .main),
               let vertexFn = library.makeFunction(name: "vertex_main"),
               let fragmentFn = library.makeFunction(name: "fragment_main")
-        else { return nil }
+        else {
+            Log.canvas.error("CanvasRenderer init failed: device/queue/library setup")
+            return nil
+        }
 
         let descriptor = MTLRenderPipelineDescriptor()
         descriptor.vertexFunction = vertexFn
@@ -29,32 +30,86 @@ final class CanvasRenderer {
         descriptor.colorAttachments[0].isBlendingEnabled = false
 
         guard let pipeline = try? device.makeRenderPipelineState(descriptor: descriptor) else {
+            Log.canvas.error("CanvasRenderer init failed: pipeline state")
             return nil
         }
 
         self.device = device
         self.commandQueue = queue
         self.pipelineState = pipeline
-        self.textureLoader = MTKTextureLoader(device: device)
     }
 
     func setImage(_ cgImage: CGImage) {
-        // SRGB: true → texture format is bgra8Unorm_sRGB → GPU decodes gamma on sample.
-        // Pair this with a bgra8Unorm_sRGB layer so writes are re-encoded — produces a
-        // visually-correct image on screen. Full Display P3 / 16-bit pipeline comes later.
-        let options: [MTKTextureLoader.Option: Any] = [
-            .SRGB: true,
-            .textureUsage: NSNumber(value: MTLTextureUsage.shaderRead.rawValue),
-            .textureStorageMode: NSNumber(value: MTLStorageMode.private.rawValue),
-            .generateMipmaps: true
-        ]
-        do {
-            baseTexture = try textureLoader.newTexture(cgImage: cgImage, options: options)
-            imagePixelSize = CGSize(width: cgImage.width, height: cgImage.height)
-        } catch {
+        // MTKTextureLoader trips on 10-bit HEIF (rdar://143602439 — Sony A1 II HIF
+        // is 10-bpc / RGB10A2 packed), so we redraw into an 8-bpc BGRA buffer and
+        // upload manually. Costs ~50-200 ms per 50MP image on the main thread; an
+        // acceptable tradeoff for commit 3, will revisit when the 16-bit / Display
+        // P3 pipeline lands.
+        guard let texture = makeTexture(from: cgImage) else {
+            Log.canvas.error("setImage: makeTexture returned nil for \(cgImage.width)x\(cgImage.height)")
             baseTexture = nil
             imagePixelSize = .zero
+            return
         }
+        baseTexture = texture
+        imagePixelSize = CGSize(width: cgImage.width, height: cgImage.height)
+        Log.canvas.notice("setImage: \(cgImage.width)x\(cgImage.height) bpc=\(cgImage.bitsPerComponent) bpp=\(cgImage.bitsPerPixel) → texture uploaded")
+    }
+
+    private func makeTexture(from cgImage: CGImage) -> MTLTexture? {
+        let width = cgImage.width
+        let height = cgImage.height
+        let bytesPerRow = width * 4
+
+        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
+        let bitmapInfo: UInt32 = CGImageAlphaInfo.premultipliedFirst.rawValue
+                               | CGBitmapInfo.byteOrder32Little.rawValue
+
+        guard let context = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: bytesPerRow,
+            space: colorSpace,
+            bitmapInfo: bitmapInfo
+        ), let dataPtr = context.data else {
+            Log.canvas.error("makeTexture: CGContext creation failed")
+            return nil
+        }
+
+        context.interpolationQuality = .high
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .bgra8Unorm_srgb,
+            width: width,
+            height: height,
+            mipmapped: true
+        )
+        descriptor.usage = [.shaderRead]
+        descriptor.storageMode = .shared
+
+        guard let texture = device.makeTexture(descriptor: descriptor) else {
+            Log.canvas.error("makeTexture: MTLTexture creation failed")
+            return nil
+        }
+
+        texture.replace(
+            region: MTLRegionMake2D(0, 0, width, height),
+            mipmapLevel: 0,
+            withBytes: dataPtr,
+            bytesPerRow: bytesPerRow
+        )
+
+        if let cmd = commandQueue.makeCommandBuffer(),
+           let blit = cmd.makeBlitCommandEncoder() {
+            blit.generateMipmaps(for: texture)
+            blit.endEncoding()
+            cmd.commit()
+        }
+
+        return texture
     }
 
     func setViewport(_ viewport: CanvasViewport) {
