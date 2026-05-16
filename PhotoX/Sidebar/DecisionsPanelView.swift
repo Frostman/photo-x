@@ -7,7 +7,6 @@ struct DecisionsPanelView: View {
         VStack(alignment: .leading, spacing: 6) {
             ratingRow
             labelRow
-            if xmp.isReject { rejectedRow }
         }
     }
 
@@ -18,33 +17,33 @@ struct DecisionsPanelView: View {
                 .font(.caption.smallCaps())
                 .foregroundStyle(.secondary)
                 .frame(width: 70, alignment: .leading)
-            StarsView(count: xmp.starCount ?? 0)
-        }
-    }
-
-    @ViewBuilder
-    private var labelRow: some View {
-        if let label = xmp.label, !label.isEmpty {
-            HStack(spacing: 6) {
-                Text("Label")
-                    .font(.caption.smallCaps())
-                    .foregroundStyle(.secondary)
-                    .frame(width: 70, alignment: .leading)
-                LabelChip(label: label)
+            if xmp.isReject {
+                HStack(spacing: 4) {
+                    Image(systemName: "xmark.circle.fill")
+                    Text("Rejected")
+                }
+                .font(.caption)
+                .foregroundStyle(.red)
+            } else {
+                StarsView(count: xmp.starCount ?? 0)
             }
         }
     }
 
     @ViewBuilder
-    private var rejectedRow: some View {
+    private var labelRow: some View {
         HStack(spacing: 6) {
-            Text("Status")
+            Text("Label")
                 .font(.caption.smallCaps())
                 .foregroundStyle(.secondary)
                 .frame(width: 70, alignment: .leading)
-            Label("Rejected", systemImage: "xmark.circle.fill")
-                .font(.caption)
-                .foregroundStyle(.red)
+            if let label = xmp.label, !label.isEmpty {
+                LabelChip(label: label)
+            } else {
+                Text("—")
+                    .font(.caption)
+                    .foregroundStyle(.secondary.opacity(0.4))
+            }
         }
     }
 }
@@ -57,7 +56,7 @@ struct StarsView: View {
             ForEach(0..<5) { i in
                 Image(systemName: i < count ? "star.fill" : "star")
                     .font(.caption2)
-                    .foregroundStyle(i < count ? Color.yellow : Color.secondary.opacity(0.5))
+                    .foregroundStyle(i < count ? Color.yellow : Color.secondary.opacity(0.35))
             }
         }
     }

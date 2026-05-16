@@ -8,10 +8,11 @@ struct SidebarView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                if state.currentXMP.hasDecision {
-                    section(title: "Decisions") {
-                        DecisionsPanelView(xmp: state.currentXMP)
-                    }
+                // Always render the Decisions section so its space is reserved
+                // and the rest of the sidebar doesn't reflow as you navigate
+                // through rated / unrated photos.
+                section(title: "Decisions") {
+                    DecisionsPanelView(xmp: state.currentXMP)
                 }
 
                 section(title: "Histogram") {
