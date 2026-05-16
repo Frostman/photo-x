@@ -59,7 +59,10 @@ final class ImageCanvasNSView: NSView {
         }
         updateDrawableSize()
         scheduleDraw()
-        window?.makeFirstResponder(self)
+        // Intentionally do NOT call window?.makeFirstResponder(self) —
+        // mouse/scroll events work without first-responder status, and stealing
+        // it from SwiftUI's focusable container kills .onKeyPress for arrow
+        // keys after every NSView rebuild.
     }
 
     override func layout() {

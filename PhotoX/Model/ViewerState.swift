@@ -128,7 +128,11 @@ final class ViewerState {
     /// with the neighbors' HEIFs so ←/→ feels instant.
     private func applyCurrentPair(resetViewport: Bool) async {
         guard let pair else { return }
-        self.currentImage = nil
+        // Keep currentImage as-is so the previous frame stays on screen until
+        // the new one decodes — avoids a flash to ProgressView (which would
+        // tear down the ImageCanvasView and lose SwiftUI focus). The
+        // metadata-side panels (XMP, EXIF, AF) DO clear, because they're
+        // pair-specific and a brief blank is better than showing stale info.
         self.errorMessage = nil
         self.displayedVariant = .heif
         self.requestedVariant = .heif
