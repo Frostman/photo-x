@@ -68,13 +68,21 @@ final class ViewerState {
         Task { await maybeAutoSwap() }
     }
 
-    /// Auto-swap is a one-way upgrade: HEIF → RAW when pixel zoom crosses 1.0.
-    /// We never auto-revert to HEIF on zoom-out — once you've paid for the RAW
-    /// decode it's cached, and flicker-y back-and-forth on resize is worse than
-    /// staying on RAW. R still toggles manually.
+    private var lastAutoSwapPixelZoom: CGFloat = 0
+
+    /// Auto-swap is a one-way upgrade fired ONLY on the upward crossing of
+    /// pixel zoom past 1.0 — not while pixel zoom is sustained above 1.0.
+    /// Otherwise toggling Z back to HEIF while zoomed in would immediately
+    /// yank you back to RAW on the next canvas emit (e.g., when the image
+    /// dimensions shift slightly between HEIF and LibRaw output).
     private func maybeAutoSwap() async {
+        let prev = lastAutoSwapPixelZoom
+        let curr = currentPixelZoom
+        lastAutoSwapPixelZoom = curr
+
         guard autoSwapEnabled, pair != nil else { return }
-        if currentPixelZoom >= 1.0, requestedVariant == .heif {
+        if curr >= 1.0 && prev < 1.0 && requestedVariant == .heif {
+            Log.app.notice("auto-swap: HEIF → RAW (pz \(prev, format: .fixed(precision: 2)) → \(curr, format: .fixed(precision: 2)))")
             requestedVariant = .raw
             await applyRequestedVariant()
         }
