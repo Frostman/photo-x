@@ -8,7 +8,7 @@ enum SettingsKey {
     static let sidebarVisible    = "settings.sidebarVisibleByDefault"
     static let filmstripVisible  = "settings.filmstripVisibleByDefault"
     static let autoSwapToRAW     = "settings.autoSwapToRAW"
-    static let defaultFolderPath = "settings.sampleDirectory"  // legacy key kept for backward compat
+    static let defaultFolderPath = "settings.defaultFolderPath"
 
     enum Defaults {
         static let sidebarVisible = true
