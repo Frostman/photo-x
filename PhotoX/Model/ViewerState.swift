@@ -16,7 +16,7 @@ final class ViewerState {
 
     var displayedVariant: ImageVariant = .heif
     var requestedVariant: ImageVariant = .heif
-    var autoSwapEnabled: Bool = true
+    var autoSwapEnabled: Bool = false
 
     var overlays: OverlayToggles = .init()
     var sidebarVisible: Bool = true
@@ -50,7 +50,7 @@ final class ViewerState {
     }
 
     // Filmstrip
-    var filmstripVisible: Bool = false
+    var filmstripVisible: Bool = true
     var thumbnails: [String: CGImage] = [:]
     var pairXMPs: [String: XMPSidecar] = [:]
     private var shootMetadataTask: Task<Void, Never>?
