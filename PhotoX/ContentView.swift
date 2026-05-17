@@ -13,12 +13,16 @@ struct ContentView: View {
                 VStack(spacing: 0) {
                     canvas
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    if state.filmstripVisible {
+                    // Sidebar/filmstrip are gated on having a shoot loaded —
+                    // when the window is in the empty state, there's nothing
+                    // for them to show, so we collapse to the full canvas.
+                    // Once a folder is loaded they follow the user's defaults.
+                    if state.filmstripVisible && state.shoot != nil {
                         FilmstripView(state: state)
                             .transition(.move(edge: .bottom))
                     }
                 }
-                if state.sidebarVisible {
+                if state.sidebarVisible && state.shoot != nil {
                     SidebarView(state: state)
                         .transition(.move(edge: .trailing))
                 }
