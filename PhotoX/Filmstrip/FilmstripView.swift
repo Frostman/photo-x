@@ -16,7 +16,8 @@ struct FilmstripView: View {
                                 isSelected: idx == state.currentIndex,
                                 thumbnail: state.thumbnails[pair.stem],
                                 xmp: state.pairXMPs[pair.stem] ?? .empty,
-                                onTap: { state.navigate(to: idx) }
+                                onTap: { state.navigate(to: idx) },
+                                onAppear: { state.requestThumbnail(for: pair) }
                             )
                             .id(idx)
                         }
@@ -48,6 +49,7 @@ struct FilmstripThumbnailView: View {
     let thumbnail: CGImage?
     let xmp: XMPSidecar
     let onTap: () -> Void
+    let onAppear: () -> Void
 
     private static let thumbHeight: CGFloat = 84
     private static let thumbAspectFallbackWidth: CGFloat = 126 // 3:2
@@ -64,6 +66,7 @@ struct FilmstripThumbnailView: View {
         )
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
+        .onAppear(perform: onAppear)
         .help(pair.stem)
     }
 

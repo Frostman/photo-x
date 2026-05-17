@@ -54,6 +54,7 @@ final class ViewerState {
     var thumbnails: [String: CGImage] = [:]
     var pairXMPs: [String: XMPSidecar] = [:]
     private var shootMetadataTask: Task<Void, Never>?
+    private var thumbnailRequestedFor: Set<String> = []
 
     let pipeline: DecodePipeline = DecodePipeline()
 
@@ -73,27 +74,68 @@ final class ViewerState {
         filmstripVisible.toggle()
     }
 
-    /// Background-load thumbnails and XMP for every pair in the shoot, so the
-    /// filmstrip has data to render without blocking foreground work.
+    /// Background-load XMP sidecars for every pair so filmstrip badges are
+    /// correct. Batched writes to pairXMPs (every 100 items / 250 ms) so
+    /// SwiftUI doesn't re-render a 5000-item ForEach on every single update.
+    /// Thumbnails are loaded LAZILY — see requestThumbnail(for:).
     private func kickOffShootMetadata() {
         guard let shoot else { return }
         shootMetadataTask?.cancel()
         let pairs = shoot.pairs
         shootMetadataTask = Task(priority: .utility) { [weak self] in
+            var batch: [(String, XMPSidecar)] = []
+            var lastFlush = CFAbsoluteTimeGetCurrent()
+            let flushSize = 100
+            let flushIntervalSec: Double = 0.25
+
             for pair in pairs {
                 if Task.isCancelled { return }
-                let heifURL = pair.heifURL
-                let thumb = await Task.detached(priority: .utility) {
-                    ThumbnailLoader.load(from: heifURL)
-                }.value
                 let xmp = await Task.detached(priority: .utility) {
                     XMPSidecarReader.read(for: pair)
                 }.value
-                guard let self else { return }
-                if let thumb {
-                    self.thumbnails[pair.stem] = thumb
+                batch.append((pair.stem, xmp))
+
+                let now = CFAbsoluteTimeGetCurrent()
+                if batch.count >= flushSize || (now - lastFlush) > flushIntervalSec {
+                    let snapshot = batch
+                    batch.removeAll(keepingCapacity: true)
+                    lastFlush = now
+                    await self?.flushXMPBatch(snapshot)
                 }
-                self.pairXMPs[pair.stem] = xmp
+            }
+            if !batch.isEmpty {
+                await self?.flushXMPBatch(batch)
+            }
+        }
+    }
+
+    private func flushXMPBatch(_ items: [(String, XMPSidecar)]) {
+        for (stem, xmp) in items {
+            // Don't overwrite an optimistic user update. If the user has
+            // already set a rating on this pair, our in-memory value is the
+            // source of truth (and the disk write either landed or is in
+            // flight). Either way, skipping is correct.
+            if pairXMPs[stem] == nil {
+                pairXMPs[stem] = xmp
+            }
+        }
+    }
+
+    /// Called by the filmstrip when a thumbnail cell appears. Loads the
+    /// thumbnail off main and caches it. Deduped — a second request for the
+    /// same pair is a no-op while the first is in flight.
+    func requestThumbnail(for pair: PhotoPair) {
+        guard thumbnails[pair.stem] == nil,
+              !thumbnailRequestedFor.contains(pair.stem) else { return }
+        thumbnailRequestedFor.insert(pair.stem)
+        let heifURL = pair.heifURL
+        Task { [weak self] in
+            let thumb = await Task.detached(priority: .utility) {
+                ThumbnailLoader.load(from: heifURL)
+            }.value
+            guard let self else { return }
+            if let thumb {
+                self.thumbnails[pair.stem] = thumb
             }
         }
     }
