@@ -26,6 +26,12 @@ struct PhotoXApp: App {
                 .keyboardShortcut("0", modifiers: .command)
             }
         }
+
+        // Standard macOS Settings scene — binds ⌘, automatically and adds
+        // "Settings…" to the app menu.
+        Settings {
+            SettingsView()
+        }
     }
 
     private func bootstrap() async {

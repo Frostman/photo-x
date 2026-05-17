@@ -16,10 +16,10 @@ final class ViewerState {
 
     var displayedVariant: ImageVariant = .heif
     var requestedVariant: ImageVariant = .heif
-    var autoSwapEnabled: Bool = false
+    var autoSwapEnabled: Bool
 
     var overlays: OverlayToggles = .init()
-    var sidebarVisible: Bool = true
+    var sidebarVisible: Bool
 
     var viewport: CanvasViewport = .identity
     var currentImage: DecodedImage?
@@ -62,13 +62,23 @@ final class ViewerState {
     }
 
     // Filmstrip
-    var filmstripVisible: Bool = true
+    var filmstripVisible: Bool
     var thumbnails: [String: CGImage] = [:]
     var pairXMPs: [String: XMPSidecar] = [:]
     private var shootMetadataTask: Task<Void, Never>?
     private var thumbnailRequestedFor: Set<String> = []
 
     let pipeline: DecodePipeline = DecodePipeline()
+
+    init() {
+        let defaults = UserDefaults.standard
+        self.sidebarVisible = defaults.object(forKey: SettingsKey.sidebarVisible) as? Bool
+            ?? SettingsKey.Defaults.sidebarVisible
+        self.filmstripVisible = defaults.object(forKey: SettingsKey.filmstripVisible) as? Bool
+            ?? SettingsKey.Defaults.filmstripVisible
+        self.autoSwapEnabled = defaults.object(forKey: SettingsKey.autoSwapToRAW) as? Bool
+            ?? SettingsKey.Defaults.autoSwapToRAW
+    }
 
     /// Loads a shoot and focuses on a specific pair within it. Replaces the
     /// previous single-pair flow.

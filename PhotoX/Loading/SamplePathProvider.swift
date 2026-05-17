@@ -7,8 +7,14 @@ enum SamplePathProvider {
     static let defaultDirectory = URL(fileURLWithPath: "/Users/frostman/workspace/personal/photo-x/sample")
 
     static func sampleDirectory() -> URL {
+        // Env var wins (handy for Xcode-scheme overrides), then user setting,
+        // then the hardcoded default.
         if let env = ProcessInfo.processInfo.environment["PHOTOX_SAMPLE_DIR"], !env.isEmpty {
             return URL(fileURLWithPath: (env as NSString).expandingTildeInPath)
+        }
+        if let custom = UserDefaults.standard.string(forKey: SettingsKey.sampleDirectory),
+           !custom.isEmpty {
+            return URL(fileURLWithPath: (custom as NSString).expandingTildeInPath)
         }
         return defaultDirectory
     }
