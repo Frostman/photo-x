@@ -39,6 +39,7 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         # Obj-C++ bridge for LibRaw
         SWIFT_OBJC_BRIDGING_HEADER: PhotoX/PhotoX-Bridging-Header.h
         CLANG_ENABLE_OBJC_ARC: YES
