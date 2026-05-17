@@ -288,7 +288,6 @@ struct ContentView: View {
         if state.displayedVariant == .raw {
             parts.append(state.decoder.displayName)
         }
-        parts.append("\(Int(image.decodeMS)) ms")
         parts.append(zoomLabel)
         if state.overlays.clipping {
             parts.append("CLIP")

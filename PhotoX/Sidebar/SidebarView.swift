@@ -31,6 +31,10 @@ struct SidebarView: View {
                         AFSettingsPanelView(settings: state.currentAFSettings)
                     }
                 }
+
+                section(title: "Perf") {
+                    PerfPanelView(stats: state.perfStats)
+                }
             }
             .padding(12)
         }

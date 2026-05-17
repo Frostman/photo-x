@@ -42,6 +42,21 @@ final class ViewerState {
     var currentXMP: XMPSidecar = .empty
     private var xmpGeneration: Int = 0
 
+    var perfStats: PerfStats = PerfStats()
+
+    struct PerfStats: Hashable, Sendable {
+        var imageMS: Double?
+        var imageCached: Bool = false
+        var imagePixelWidth: Int?
+        var imagePixelHeight: Int?
+        var imageColorSpace: String?
+        var afMS: Double?
+        var afCached: Bool = false
+        var xmpMS: Double?
+        var thumbnailCount: Int = 0   // for current shoot
+        var thumbnailLoadMS: Double?
+    }
+
     var currentPairFiles: PairFiles = .none
 
     struct PairFiles: Hashable, Sendable {
@@ -303,6 +318,7 @@ final class ViewerState {
         xmpGeneration += 1
         let gen = xmpGeneration
         let pairCopy = pair
+        let t0 = CFAbsoluteTimeGetCurrent()
         Task { [weak self] in
             let xmp = await Task.detached(priority: .utility) {
                 XMPSidecarReader.read(for: pairCopy)
@@ -310,6 +326,7 @@ final class ViewerState {
             guard let self else { return }
             guard self.xmpGeneration == gen else { return }
             self.currentXMP = xmp
+            self.perfStats.xmpMS = (CFAbsoluteTimeGetCurrent() - t0) * 1000.0
         }
     }
 
@@ -351,13 +368,18 @@ final class ViewerState {
     private func kickOffAFLoad(for pair: PhotoPair) {
         afGeneration += 1
         let gen = afGeneration
+        let wasCached = pairAFData[pair.stem] != nil
+        let t0 = CFAbsoluteTimeGetCurrent()
         Task { [weak self] in
             guard let self else { return }
             let data = await self.loadAFData(for: pair)
             guard self.afGeneration == gen else { return }
+            let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000.0
             self.currentAFRegions = data.regions
             self.currentAFSettings = data.settings
-            Log.app.notice("AF regions loaded: \(data.regions.count) for \(pair.stem, privacy: .public)")
+            self.perfStats.afMS = ms
+            self.perfStats.afCached = wasCached
+            Log.app.notice("AF regions loaded: \(data.regions.count) for \(pair.stem, privacy: .public) in \(ms, format: .fixed(precision: 1)) ms (cached=\(wasCached))")
         }
     }
 
@@ -409,10 +431,18 @@ final class ViewerState {
 
         do {
             PerfTracker.mark("about to await pipeline.decode")
+            let wasCached = pipeline.isCached(pair: pair, variant: variant, decoder: chosenDecoder)
+            let t0 = CFAbsoluteTimeGetCurrent()
             let decoded = try await pipeline.decode(pair: pair, variant: variant, decoder: chosenDecoder)
+            let imageWallMS = (CFAbsoluteTimeGetCurrent() - t0) * 1000.0
             PerfTracker.mark("pipeline.decode returned")
             guard variant == self.requestedVariant, chosenDecoder == self.decoder else { return }
             self.currentImage = decoded
+            self.perfStats.imageMS = imageWallMS
+            self.perfStats.imageCached = wasCached
+            self.perfStats.imagePixelWidth = Int(decoded.pixelSize.width)
+            self.perfStats.imagePixelHeight = Int(decoded.pixelSize.height)
+            self.perfStats.imageColorSpace = decoded.colorSpaceName
             PerfTracker.mark("currentImage set")
             self.displayedVariant = variant
             kickOffHistogramCompute(for: decoded)

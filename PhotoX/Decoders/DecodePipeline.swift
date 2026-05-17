@@ -14,6 +14,15 @@ final class DecodePipeline {
         self.cache = DecodedImageCache(capacity: cacheCapacity)
     }
 
+    /// Cheap pre-check — does the pipeline already have this image cached?
+    /// Used by callers that want to record whether a decode was instant
+    /// (cache hit) or paid wall time (fresh decode).
+    func isCached(pair: PhotoPair, variant: ImageVariant, decoder: DecoderChoice) -> Bool {
+        let keyDecoder: DecoderChoice = (variant == .heif) ? .imageIO : decoder
+        let key = DecodeKey(pairID: pair.id, variant: variant, decoder: keyDecoder)
+        return cache.get(key) != nil
+    }
+
     func decode(pair: PhotoPair, variant: ImageVariant, decoder: DecoderChoice) async throws -> DecodedImage {
         // Decoder is a RAW-only concern: HEIF always goes through HEIFDecoder.
         // Normalize the cache key so we don't double-cache the same HEIF under
