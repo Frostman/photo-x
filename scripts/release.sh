@@ -193,9 +193,19 @@ fi
 
 # ── 8. Splice into docs/appcast.xml, commit, push, publish ──────────────────
 echo "[release] splice appcast"
-awk -v snip="$SNIPPET" '/<\/channel>/ { print snip } { print }' \
-  docs/appcast.xml > docs/appcast.xml.new
+SNIPPET_FILE=$(mktemp)
+trap 'rm -f "$SNIPPET_FILE" docs/appcast.xml.new' EXIT
+printf '%s\n' "$SNIPPET" > "$SNIPPET_FILE"
+# Splice the snippet just before </channel>. BSD awk on macOS can't handle
+# embedded newlines in -v values, so use sed + assembly via three streams.
+{
+  sed -n '/<\/channel>/,$!p' docs/appcast.xml  # everything before </channel>
+  cat "$SNIPPET_FILE"                          # the new <item>
+  sed -n '/<\/channel>/,$p' docs/appcast.xml   # </channel> and below
+} > docs/appcast.xml.new
 mv docs/appcast.xml.new docs/appcast.xml
+rm -f "$SNIPPET_FILE"
+trap - EXIT
 
 git add docs/appcast.xml
 git -c commit.gpgsign=false commit -m "Release $DESCRIBE"
