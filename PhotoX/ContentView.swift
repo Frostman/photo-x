@@ -147,6 +147,17 @@ struct ContentView: View {
             }
 
             ToolbarItem(placement: .primaryAction) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.12)) { showHelp.toggle() }
+                } label: {
+                    Label("Shortcuts", systemImage: "questionmark.circle")
+                }
+                .controlSize(.small)
+                .padding(.horizontal, 5)
+                .help("Show keyboard shortcuts (?)")
+            }
+
+            ToolbarItem(placement: .primaryAction) {
                 Toggle(isOn: $state.filmstripVisible) {
                     Label("Filmstrip", systemImage: "rectangle.split.3x1")
                 }
@@ -217,7 +228,6 @@ struct ContentView: View {
 
             statusOverlay
             decodingPill
-            helpHint
             ratingBadge
         }
     }
@@ -255,23 +265,6 @@ struct ContentView: View {
         Task {
             guard let (shoot, focus) = OpenPanelCoordinator.runShootPicker() else { return }
             await state.loadShoot(shoot, focus: focus)
-        }
-    }
-
-    @ViewBuilder
-    private var helpHint: some View {
-        VStack {
-            HStack {
-                Text("? for shortcuts")
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(.white.opacity(0.5))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(.black.opacity(0.4), in: Capsule())
-                Spacer()
-            }
-            .padding(12)
-            Spacer()
         }
     }
 
