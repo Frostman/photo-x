@@ -102,6 +102,17 @@ final class ViewerState {
         }
         return (rated, rejected, unrated, shoot.pairs.count)
     }
+
+    /// How many pairs the user is currently looking at (= total minus the
+    /// hidden categories). Derived from shootStats + hide-* toggles.
+    var shownCount: Int {
+        let s = shootStats
+        var n = 0
+        if !hideRated    { n += s.rated }
+        if !hideRejected { n += s.rejected }
+        if !hideUnrated  { n += s.unrated }
+        return n
+    }
     var thumbnails: [String: CGImage] = [:]
     var pairXMPs: [String: XMPSidecar] = [:]
     private var shootMetadataTask: Task<Void, Never>?

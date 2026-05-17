@@ -30,10 +30,12 @@ struct StatusBarView: View {
             statChip(label: "rejected", count: s.rejected, color: .red)
             Text("·").foregroundStyle(.secondary)
             statChip(label: "unrated",  count: s.unrated,  color: .secondary)
-            Text("·").foregroundStyle(.secondary)
-            Text("\(s.total) total")
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
+            if state.filmstripVisible {
+                Text("·").foregroundStyle(.secondary)
+                Text("\(state.shownCount) shown")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
