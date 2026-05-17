@@ -5,8 +5,9 @@ import Foundation
 ///  * Never touches the ARW/HIF files — only the sidecar.
 ///  * Atomic write — `Data.write(.atomic)` uses a temp file + rename, so the
 ///    sidecar is never observed in a partially-written state.
-///  * Preserves all other tags (xmp:Label, keywords, history, etc.) by
-///    re-parsing the existing XMP and modifying only the targeted element(s).
+///  * Preserves all other tags (xmp:Label, xmp:Rating, keywords, history,
+///    etc.) by re-parsing the existing XMP and modifying only the targeted
+///    element(s).
 ///
 /// Adobe-standard namespaces only, so Lightroom and PhotoCuller round-trip
 /// correctly.
@@ -27,10 +28,28 @@ enum XMPSidecarWriter {
     private static let rdfNamespace = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
     private static let metaNamespace = "adobe:ns:meta/"
 
-    /// Set xmp:Rating to the given value, or remove it entirely when `rating`
-    /// is nil. Per Adobe convention: -1 = rejected, 0 = explicitly unrated,
-    /// 1...5 = star count.
     static func updateRating(_ rating: Int?, for pair: PhotoPair) throws {
+        try mutate(pair) { desc in
+            removeChildren(named: "xmp:Rating", from: desc)
+            if let rating {
+                desc.addChild(XMLElement(name: "xmp:Rating", stringValue: String(rating)))
+            }
+        }
+    }
+
+    static func updateLabel(_ label: String?, for pair: PhotoPair) throws {
+        try mutate(pair) { desc in
+            removeChildren(named: "xmp:Label", from: desc)
+            if let label, !label.isEmpty {
+                desc.addChild(XMLElement(name: "xmp:Label", stringValue: label))
+            }
+        }
+    }
+
+    /// Generic mutator: opens (or creates) the sidecar, lets the caller modify
+    /// the rdf:Description element, then bumps the modify timestamps + creator
+    /// and atomically writes the result.
+    private static func mutate(_ pair: PhotoPair, _ block: (XMLElement) -> Void) throws {
         let xmpURL = pair.rawURL.deletingPathExtension().appendingPathExtension("xmp")
 
         let doc: XMLDocument
@@ -49,21 +68,14 @@ enum XMPSidecarWriter {
             throw WriteError.missingDescription
         }
 
-        // Replace xmp:Rating
-        removeChildren(named: "xmp:Rating", from: desc)
-        if let rating {
-            desc.addChild(XMLElement(name: "xmp:Rating", stringValue: String(rating)))
-        }
+        block(desc)
 
-        // Stamp timestamps + creator
         let now = isoFormatter.string(from: Date())
         setSingleChild(named: "xmp:ModifyDate",   to: now, in: desc)
         setSingleChild(named: "xmp:MetadataDate", to: now, in: desc)
         setSingleChild(named: "xmp:CreatorTool",  to: "PhotoX", in: desc)
 
         let serialized = doc.xmlData(options: [.nodePrettyPrint])
-        // .atomic = Foundation writes to a temp file then rename(2) into place.
-        // POSIX rename is atomic; the sidecar can't be observed half-written.
         try serialized.write(to: xmpURL, options: .atomic)
     }
 
@@ -101,7 +113,6 @@ enum XMPSidecarWriter {
            </rdf:RDF>
         </x:xmpmeta>
         """
-        // Force-try is safe: literal XML, parsing can't fail.
         return try! XMLDocument(xmlString: xml)
     }
 

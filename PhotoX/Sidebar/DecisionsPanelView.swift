@@ -70,15 +70,28 @@ struct DecisionsPanelView: View {
                 .font(.caption.smallCaps())
                 .foregroundStyle(.secondary)
                 .frame(width: 70, alignment: .leading)
-            if let label = xmp.label, !label.isEmpty {
-                LabelChip(label: label)
-            } else {
-                Text("—")
-                    .font(.caption)
-                    .foregroundStyle(.secondary.opacity(0.4))
+            HStack(spacing: 6) {
+                ForEach(DecisionsPanelView.labelOrder, id: \.self) { name in
+                    Button {
+                        state.toggleLabel(name)
+                    } label: {
+                        Circle()
+                            .fill(LabelChip.color(for: name))
+                            .frame(width: 14, height: 14)
+                            .overlay(
+                                Circle()
+                                    .stroke(xmp.label == name ? Color.white : Color.white.opacity(0.12),
+                                            lineWidth: xmp.label == name ? 2 : 1)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .help("Set color label to \(name)")
+                }
             }
         }
     }
+
+    static let labelOrder = ["Red", "Yellow", "Green", "Blue", "Purple"]
 }
 
 struct StarsView: View {
@@ -104,10 +117,10 @@ struct LabelChip: View {
             .foregroundStyle(.white)
             .padding(.horizontal, 8)
             .padding(.vertical, 2)
-            .background(color(for: label), in: Capsule())
+            .background(Self.color(for: label), in: Capsule())
     }
 
-    private func color(for label: String) -> Color {
+    static func color(for label: String) -> Color {
         switch label.lowercased() {
         case "red":    return .red
         case "yellow": return .yellow.opacity(0.85)

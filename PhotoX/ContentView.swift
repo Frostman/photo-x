@@ -69,12 +69,30 @@ struct ContentView: View {
             }
             return .handled
         }
-        // Scoring: 1-5 toggle stars, 0 clears, R toggles reject
-        .onKeyPress(keys: ["1"]) { _ in state.toggleRating(1); return .handled }
-        .onKeyPress(keys: ["2"]) { _ in state.toggleRating(2); return .handled }
-        .onKeyPress(keys: ["3"]) { _ in state.toggleRating(3); return .handled }
-        .onKeyPress(keys: ["4"]) { _ in state.toggleRating(4); return .handled }
-        .onKeyPress(keys: ["5"]) { _ in state.toggleRating(5); return .handled }
+        // Scoring (1-5 stars / Shift+1-5 color labels) + 0 clears + R reject.
+        // KeyPress.key reports the un-shifted KeyEquivalent on macOS, so both
+        // bare digit and Shift+digit dispatch the same handler; we branch on
+        // press.modifiers.contains(.shift).
+        .onKeyPress(keys: ["1"]) { press in
+            press.modifiers.contains(.shift) ? state.toggleLabel("Red") : state.toggleRating(1)
+            return .handled
+        }
+        .onKeyPress(keys: ["2"]) { press in
+            press.modifiers.contains(.shift) ? state.toggleLabel("Yellow") : state.toggleRating(2)
+            return .handled
+        }
+        .onKeyPress(keys: ["3"]) { press in
+            press.modifiers.contains(.shift) ? state.toggleLabel("Green") : state.toggleRating(3)
+            return .handled
+        }
+        .onKeyPress(keys: ["4"]) { press in
+            press.modifiers.contains(.shift) ? state.toggleLabel("Blue") : state.toggleRating(4)
+            return .handled
+        }
+        .onKeyPress(keys: ["5"]) { press in
+            press.modifiers.contains(.shift) ? state.toggleLabel("Purple") : state.toggleRating(5)
+            return .handled
+        }
         .onKeyPress(keys: ["0"]) { _ in state.setRating(nil); return .handled }
         .onKeyPress(keys: ["r", "R"]) { _ in state.toggleReject(); return .handled }
         .onKeyPress(.leftArrow, phases: [.down, .repeat]) { press in

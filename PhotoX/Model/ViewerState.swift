@@ -236,6 +236,39 @@ final class ViewerState {
         setRating(currentXMP.rating == rating ? nil : rating)
     }
 
+    /// Sets the XMP color label, or clears it (nil). Optimistic with rollback.
+    func setLabel(_ label: String?) {
+        guard let pair else { return }
+        let previous = currentXMP
+        var updated = currentXMP
+        updated.label = label
+        currentXMP = updated
+        pairXMPs[pair.stem] = updated
+        currentPairFiles.xmp = true
+        let capturedPair = pair
+
+        Task {
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    try XMPSidecarWriter.updateLabel(label, for: capturedPair)
+                }.value
+                Log.app.notice("XMP label write OK: \(capturedPair.stem, privacy: .public) label=\(label ?? "nil", privacy: .public)")
+            } catch {
+                if self.pair?.id == capturedPair.id {
+                    self.currentXMP = previous
+                }
+                self.pairXMPs[capturedPair.stem] = previous
+                self.errorMessage = "Failed to write XMP label for \(capturedPair.stem): \(String(describing: error))"
+                Log.app.error("XMP label write FAILED: \(capturedPair.stem, privacy: .public) — \(String(describing: error), privacy: .public)")
+            }
+        }
+    }
+
+    /// Click same color again clears.
+    func toggleLabel(_ label: String) {
+        setLabel(currentXMP.label == label ? nil : label)
+    }
+
     func cycleDecoder() {
         guard pair != nil else { return }
         decoder = (decoder == .imageIO) ? .libRaw : .imageIO
