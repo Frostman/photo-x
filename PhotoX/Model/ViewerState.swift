@@ -255,6 +255,39 @@ final class ViewerState {
         kickOffShootMetadata()
     }
 
+    /// Drop the current shoot and return to the empty starter state. Cancels
+    /// any in-flight background work and clears all per-shoot caches so the
+    /// next loadShoot() starts from a clean slate.
+    func closeShoot() {
+        shootMetadataTask?.cancel()
+        shootMetadataTask = nil
+        afInflight.values.forEach { $0.cancel() }
+        afInflight.removeAll()
+        pipeline.cache.clear()
+
+        shoot = nil
+        currentIndex = 0
+        currentImage = nil
+        currentXMP = .empty
+        currentExif = nil
+        currentHistogram = nil
+        currentAFRegions = []
+        currentAFSettings = AFSettings()
+        currentPairFiles = .none
+        perfStats = PerfStats()
+        errorMessage = nil
+        isDecoding = false
+        viewport = .identity
+        currentPixelZoom = 1.0
+        displayedVariant = .heif
+        requestedVariant = .heif
+
+        thumbnails.removeAll()
+        thumbnailRequestedFor.removeAll()
+        pairXMPs.removeAll()
+        pairAFData.removeAll()
+    }
+
     func toggleFilmstrip() {
         filmstripVisible.toggle()
     }

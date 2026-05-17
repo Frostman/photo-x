@@ -8,6 +8,7 @@ struct ContentView: View {
     @State private var copiedFlash: Bool = false
     @AppStorage(SettingsKey.appearance) private var appearanceRaw = SettingsKey.Defaults.appearance
     @State private var recents = RecentShoots.shared
+    @Environment(\.openSettings) private var openSettings
 
     private var appearance: AppearanceMode {
         AppearanceMode(rawValue: appearanceRaw) ?? .system
@@ -133,21 +134,28 @@ struct ContentView: View {
                 // Always populate the principal slot — when it returns
                 // EmptyView, SwiftUI collapses the toolbar's three-region
                 // layout and the .primaryAction items drift toward center
-                // instead of hugging the right edge.
-                Group {
-                    if let url = state.shoot?.folderURL {
-                        Text((url.path as NSString).abbreviatingWithTildeInPath)
-                            .help(url.path)
-                    } else {
-                        Text("— no folder open —")
-                            .help("Press ⌘O or click Open Folder to load a shoot")
+                // instead of hugging the right edge. The text is wrapped in
+                // a plain Button so clicking it opens the file picker
+                // (equivalent to clicking Open Folder).
+                Button {
+                    openWithPanel()
+                } label: {
+                    Group {
+                        if let url = state.shoot?.folderURL {
+                            Text((url.path as NSString).abbreviatingWithTildeInPath)
+                                .help(url.path)
+                        } else {
+                            Text("— no folder open —")
+                        }
                     }
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .padding(.horizontal, 10)
                 }
-                .font(.caption.monospaced())
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .padding(.horizontal, 10)
+                .buttonStyle(.plain)
+                .help("Open another folder (⌘O)")
             }
 
             ToolbarItem(placement: .primaryAction) {
@@ -161,6 +169,19 @@ struct ContentView: View {
                 .help("Open folder of ARW + HIF pairs (⌘O)")
             }
 
+            if state.shoot != nil {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        state.closeShoot()
+                    } label: {
+                        Label("Close Folder", systemImage: "xmark.circle")
+                    }
+                    .controlSize(.small)
+                    .padding(.horizontal, 5)
+                    .help("Close the current shoot and return to the starter screen")
+                }
+            }
+
             ToolbarItem(placement: .primaryAction) {
                 Button {
                     appearanceRaw = appearance.next.rawValue
@@ -170,6 +191,17 @@ struct ContentView: View {
                 .controlSize(.small)
                 .padding(.horizontal, 5)
                 .help("Theme: \(appearance.displayName) — click to cycle System → Light → Dark")
+            }
+
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    openSettings()
+                } label: {
+                    Label("Settings", systemImage: "gearshape")
+                }
+                .controlSize(.small)
+                .padding(.horizontal, 5)
+                .help("Open Settings (⌘,)")
             }
 
             ToolbarItem(placement: .primaryAction) {
