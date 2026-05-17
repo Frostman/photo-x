@@ -10,6 +10,7 @@ enum SettingsKey {
     static let filmstripVisible  = "settings.filmstripVisibleByDefault"
     static let autoSwapToRAW     = "settings.autoSwapToRAW"
     static let afOverlayVisible  = "settings.afOverlayVisibleByDefault"
+    static let autoAdvance       = "settings.autoAdvanceAfterRating"
     static let defaultFolderPath = "settings.defaultFolderPath"
 
     enum Defaults {
@@ -18,6 +19,7 @@ enum SettingsKey {
         static let filmstripVisible = true
         static let autoSwapToRAW = false
         static let afOverlayVisible = false
+        static let autoAdvance = false
         static let defaultFolderPath = ""  // empty = no auto-load on launch
     }
 }
@@ -51,6 +53,7 @@ struct SettingsView: View {
     @AppStorage(SettingsKey.filmstripVisible)  private var filmstripVisible  = SettingsKey.Defaults.filmstripVisible
     @AppStorage(SettingsKey.autoSwapToRAW)     private var autoSwapToRAW     = SettingsKey.Defaults.autoSwapToRAW
     @AppStorage(SettingsKey.afOverlayVisible)  private var afOverlayVisible  = SettingsKey.Defaults.afOverlayVisible
+    @AppStorage(SettingsKey.autoAdvance)        private var autoAdvance       = SettingsKey.Defaults.autoAdvance
     @AppStorage(SettingsKey.defaultFolderPath) private var defaultFolderPath = SettingsKey.Defaults.defaultFolderPath
 
     var body: some View {
@@ -80,6 +83,11 @@ struct SettingsView: View {
                     .help("One-way swap on the upward crossing only. Manual Z still toggles either direction.")
             }
 
+            Section("Workflow") {
+                Toggle("Auto-advance after rating", isOn: $autoAdvance)
+                    .help("After you set a star rating, color label, or reject, jump to the next pair. Clearing a rating does not advance.")
+            }
+
             Section("Default folder") {
                 HStack {
                     TextField("Path (empty = none)", text: $defaultFolderPath)
@@ -94,7 +102,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 620, height: 580)
+        .frame(width: 620, height: 660)
         .navigationTitle("PhotoX Settings")
     }
 

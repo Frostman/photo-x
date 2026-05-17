@@ -70,6 +70,12 @@ final class ViewerState {
 
     let pipeline: DecodePipeline = DecodePipeline()
 
+    /// Read live from UserDefaults so changes in Settings take effect on the
+    /// next rating action — no app restart required.
+    private var autoAdvanceAfterRating: Bool {
+        UserDefaults.standard.bool(forKey: SettingsKey.autoAdvance)
+    }
+
     init() {
         let defaults = UserDefaults.standard
         self.sidebarVisible = defaults.object(forKey: SettingsKey.sidebarVisible) as? Bool
@@ -218,6 +224,12 @@ final class ViewerState {
         currentPairFiles.xmp = true
         let capturedPair = pair
 
+        // Auto-advance only on SET (non-nil) — clearing is usually a "fix
+        // this mistake" action, not a decision worth moving past.
+        if rating != nil, autoAdvanceAfterRating {
+            nextPair()
+        }
+
         Task {
             do {
                 try await Task.detached(priority: .userInitiated) {
@@ -260,6 +272,10 @@ final class ViewerState {
         pairXMPs[pair.stem] = updated
         currentPairFiles.xmp = true
         let capturedPair = pair
+
+        if label != nil, autoAdvanceAfterRating {
+            nextPair()
+        }
 
         Task {
             do {
