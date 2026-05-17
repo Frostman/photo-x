@@ -36,6 +36,8 @@ final class ViewerState {
     var currentAFRegions: [AFRegion] = []
     var currentAFSettings: AFSettings = AFSettings()
     private var afGeneration: Int = 0
+    private var pairAFData: [String: ExifToolRunner.AFData] = [:]
+    private var afInflight: [String: Task<ExifToolRunner.AFData, Never>] = [:]
 
     var currentXMP: XMPSidecar = .empty
     private var xmpGeneration: Int = 0
@@ -324,6 +326,11 @@ final class ViewerState {
                     pair: neighbor, variant: .heif, decoder: .imageIO
                 )
             }
+            // Warm the AF cache too — one exiftool call per neighbor, off main,
+            // deduped against any concurrent foreground request via loadAFData.
+            Task(priority: .utility) { [weak self] in
+                _ = await self?.loadAFData(for: neighbor)
+            }
         }
     }
 
@@ -344,17 +351,38 @@ final class ViewerState {
     private func kickOffAFLoad(for pair: PhotoPair) {
         afGeneration += 1
         let gen = afGeneration
-        let url = pair.rawURL
         Task { [weak self] in
-            let data = await Task.detached(priority: .utility) {
-                ExifToolRunner.readAF(from: url)
-            }.value
             guard let self else { return }
+            let data = await self.loadAFData(for: pair)
             guard self.afGeneration == gen else { return }
             self.currentAFRegions = data.regions
             self.currentAFSettings = data.settings
             Log.app.notice("AF regions loaded: \(data.regions.count) for \(pair.stem, privacy: .public)")
         }
+    }
+
+    /// Shared loader for AF data. Returns from cache when available, dedups
+    /// in-flight requests so foreground + prefetch for the same pair don't
+    /// spawn two exiftool calls.
+    func loadAFData(for pair: PhotoPair) async -> ExifToolRunner.AFData {
+        if let cached = pairAFData[pair.stem] {
+            return cached
+        }
+        if let existing = afInflight[pair.stem] {
+            return await existing.value
+        }
+        let url = pair.rawURL
+        let stem = pair.stem
+        let task = Task<ExifToolRunner.AFData, Never>(priority: .utility) {
+            await Task.detached(priority: .utility) {
+                ExifToolRunner.readAF(from: url)
+            }.value
+        }
+        afInflight[stem] = task
+        defer { afInflight[stem] = nil }
+        let data = await task.value
+        pairAFData[stem] = data
+        return data
     }
 
     private func kickOffHistogramCompute(for image: DecodedImage) {
