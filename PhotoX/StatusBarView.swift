@@ -12,6 +12,8 @@ struct StatusBarView: View {
         HStack(spacing: 12) {
             stats
             Spacer()
+            sortMenu
+            Divider().frame(height: 18)
             toggles
         }
         .padding(.horizontal, 12)
@@ -19,6 +21,33 @@ struct StatusBarView: View {
         .background(Color(nsColor: .windowBackgroundColor))
         .overlay(alignment: .top) {
             Rectangle().fill(Color(nsColor: .separatorColor)).frame(height: 1)
+        }
+    }
+
+    private var sortMenu: some View {
+        Menu {
+            ForEach(SortMode.allCases) { mode in
+                Button {
+                    state.setSortMode(mode)
+                } label: {
+                    Label(label(for: mode), systemImage: mode.systemImage)
+                }
+            }
+        } label: {
+            Label(state.sortMode.displayName, systemImage: state.sortMode.systemImage)
+                .labelStyle(.titleAndIcon)
+                .font(.caption)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Sort order for the filmstrip and ←/→ navigation")
+    }
+
+    private func label(for mode: SortMode) -> String {
+        switch mode {
+        case .name:             return "Name"
+        case .scoreAscending:   return "Score (low → high)"
+        case .scoreDescending:  return "Score (high → low)"
         }
     }
 

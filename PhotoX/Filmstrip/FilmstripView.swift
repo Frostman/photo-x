@@ -9,8 +9,8 @@ struct FilmstripView: View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 6) {
-                    if let shoot = state.shoot {
-                        let visible = shoot.pairs.enumerated().filter { state.isVisible($1) }
+                    if state.shoot != nil {
+                        let visible = state.sortedPairs.enumerated().filter { state.isVisible($1) }
                         ForEach(visible, id: \.element.id) { idx, pair in
                             FilmstripThumbnailView(
                                 pair: pair,

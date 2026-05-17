@@ -9,6 +9,34 @@ enum RatingInputSource {
     case sidebar
 }
 
+/// Order in which pairs appear in the filmstrip + navigation. Filmstrip is
+/// horizontal, so the directional arrows on the score modes show where the
+/// higher-rated images land: → means highest-on-right, ← means highest-on-left.
+enum SortMode: String, CaseIterable, Identifiable, Hashable, Sendable {
+    case name
+    case scoreAscending   // 1★ on the left, 5★ on the right
+    case scoreDescending  // 5★ on the left, 1★ on the right
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .name:             return "Name"
+        case .scoreAscending:   return "Score"
+        case .scoreDescending:  return "Score"
+        }
+    }
+
+    /// Icon shown in the status bar pill / menu rows.
+    var systemImage: String {
+        switch self {
+        case .name:             return "textformat"
+        case .scoreAscending:   return "arrow.right"
+        case .scoreDescending:  return "arrow.left"
+        }
+    }
+}
+
 @MainActor
 @Observable
 final class ViewerState {
@@ -16,8 +44,9 @@ final class ViewerState {
     var currentIndex: Int = 0
 
     var pair: PhotoPair? {
-        guard let shoot, shoot.pairs.indices.contains(currentIndex) else { return nil }
-        return shoot.pairs[currentIndex]
+        let pairs = sortedPairs
+        guard pairs.indices.contains(currentIndex) else { return nil }
+        return pairs[currentIndex]
     }
 
     var decoder: DecoderChoice = .imageIO
@@ -71,6 +100,57 @@ final class ViewerState {
 
     // Filmstrip
     var filmstripVisible: Bool
+
+    /// Sort order for the filmstrip + navigation. Session-only (not persisted).
+    /// Mutating this through `setSortMode(_:)` preserves the currently-focused
+    /// pair across the reorder. Direct assignment (e.g. via a Picker binding)
+    /// does NOT remap currentIndex — always go through setSortMode.
+    private(set) var sortMode: SortMode = .name
+
+    /// `shoot.pairs` re-ordered per `sortMode`. Recomputed on every access;
+    /// for the largest shoots we test against (~5 k pairs) that's <10 ms.
+    /// Score-mode ties break on stem so the order is deterministic.
+    var sortedPairs: [PhotoPair] {
+        guard let shoot else { return [] }
+        switch sortMode {
+        case .name:
+            return shoot.pairs
+        case .scoreAscending:
+            return shoot.pairs.sorted { a, b in
+                let sa = sortScore(of: a)
+                let sb = sortScore(of: b)
+                if sa != sb { return sa < sb }
+                return a.stem < b.stem
+            }
+        case .scoreDescending:
+            return shoot.pairs.sorted { a, b in
+                let sa = sortScore(of: a)
+                let sb = sortScore(of: b)
+                if sa != sb { return sa > sb }
+                return a.stem < b.stem
+            }
+        }
+    }
+
+    /// Numeric score for sort comparisons. Rejected (-1) sinks below unrated
+    /// (0) in asc mode and stays at the bottom in desc mode by sort symmetry.
+    private func sortScore(of pair: PhotoPair) -> Int {
+        pairXMPs[pair.stem]?.rating ?? 0
+    }
+
+    /// Change the sort mode while preserving which pair is currently focused.
+    /// Use this instead of writing to `sortMode` directly — otherwise the
+    /// pair under `currentIndex` will shift to whatever pair happens to land
+    /// at that index in the new order.
+    func setSortMode(_ newMode: SortMode) {
+        guard newMode != sortMode else { return }
+        let currentStem = pair?.stem
+        sortMode = newMode
+        if let stem = currentStem,
+           let idx = sortedPairs.firstIndex(where: { $0.stem == stem }) {
+            currentIndex = idx
+        }
+    }
 
     // Filters (session-only — not persisted). On = category is included
     // in the filmstrip + navigation.
@@ -235,10 +315,12 @@ final class ViewerState {
         }
     }
 
-    /// Move to a new pair within the current shoot (clamped).
+    /// Move to a new pair within the current shoot (clamped). Index is into
+    /// `sortedPairs`, i.e. display order.
     func navigate(to index: Int) {
-        guard let shoot, !shoot.isEmpty else { return }
-        let clamped = max(0, min(index, shoot.pairs.count - 1))
+        let pairs = sortedPairs
+        guard !pairs.isEmpty else { return }
+        let clamped = max(0, min(index, pairs.count - 1))
         guard clamped != currentIndex else { return }
         currentIndex = clamped
         PerfTracker.mark("ViewerState.navigate → spawning task")
@@ -264,20 +346,21 @@ final class ViewerState {
         }
     }
     func lastPair() {
-        guard let shoot, !shoot.isEmpty else { return }
-        if let idx = nextVisibleIndex(from: shoot.pairs.count, direction: -1) {
+        let pairs = sortedPairs
+        guard !pairs.isEmpty else { return }
+        if let idx = nextVisibleIndex(from: pairs.count, direction: -1) {
             navigate(to: idx)
         }
     }
 
     /// Walk from `from` in `direction` (±1), skipping pairs filtered out by
-    /// the current hide-* toggles. Returns nil if no visible pair lies in
-    /// that direction.
+    /// the current show-* toggles. Walks `sortedPairs` (display order).
+    /// Returns nil if no visible pair lies in that direction.
     private func nextVisibleIndex(from: Int, direction: Int) -> Int? {
-        guard let shoot else { return nil }
+        let pairs = sortedPairs
         var i = from + direction
-        while shoot.pairs.indices.contains(i) {
-            if isVisible(shoot.pairs[i]) { return i }
+        while pairs.indices.contains(i) {
+            if isVisible(pairs[i]) { return i }
             i += direction
         }
         return nil
@@ -496,11 +579,11 @@ final class ViewerState {
     /// Warm the pipeline cache with HEIFs for index ±1 so arrow-key
     /// navigation feels instant. Best-effort; we ignore failures.
     private func prefetchNeighborHEIFs() {
-        guard let shoot else { return }
+        let pairs = sortedPairs
         let neighborIndices = [currentIndex - 1, currentIndex + 1]
-            .filter { shoot.pairs.indices.contains($0) }
+            .filter { pairs.indices.contains($0) }
         for idx in neighborIndices {
-            let neighbor = shoot.pairs[idx]
+            let neighbor = pairs[idx]
             Task { [weak self] in
                 _ = try? await self?.pipeline.decode(
                     pair: neighbor, variant: .heif, decoder: .imageIO
