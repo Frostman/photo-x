@@ -78,6 +78,10 @@ final class ViewerState {
             ?? SettingsKey.Defaults.filmstripVisible
         self.autoSwapEnabled = defaults.object(forKey: SettingsKey.autoSwapToRAW) as? Bool
             ?? SettingsKey.Defaults.autoSwapToRAW
+        var initialOverlays = OverlayToggles()
+        initialOverlays.afPoints = defaults.object(forKey: SettingsKey.afOverlayVisible) as? Bool
+            ?? SettingsKey.Defaults.afOverlayVisible
+        self.overlays = initialOverlays
     }
 
     /// Loads a shoot and focuses on a specific pair within it. Replaces the

@@ -8,12 +8,14 @@ enum SettingsKey {
     static let sidebarVisible    = "settings.sidebarVisibleByDefault"
     static let filmstripVisible  = "settings.filmstripVisibleByDefault"
     static let autoSwapToRAW     = "settings.autoSwapToRAW"
+    static let afOverlayVisible  = "settings.afOverlayVisibleByDefault"
     static let defaultFolderPath = "settings.defaultFolderPath"
 
     enum Defaults {
         static let sidebarVisible = true
         static let filmstripVisible = true
         static let autoSwapToRAW = false
+        static let afOverlayVisible = false
         static let defaultFolderPath = ""  // empty = no auto-load on launch
     }
 }
@@ -22,6 +24,7 @@ struct SettingsView: View {
     @AppStorage(SettingsKey.sidebarVisible)    private var sidebarVisible    = SettingsKey.Defaults.sidebarVisible
     @AppStorage(SettingsKey.filmstripVisible)  private var filmstripVisible  = SettingsKey.Defaults.filmstripVisible
     @AppStorage(SettingsKey.autoSwapToRAW)     private var autoSwapToRAW     = SettingsKey.Defaults.autoSwapToRAW
+    @AppStorage(SettingsKey.afOverlayVisible)  private var afOverlayVisible  = SettingsKey.Defaults.afOverlayVisible
     @AppStorage(SettingsKey.defaultFolderPath) private var defaultFolderPath = SettingsKey.Defaults.defaultFolderPath
 
     var body: some View {
@@ -29,6 +32,11 @@ struct SettingsView: View {
             Section("Layout") {
                 Toggle("Show sidebar by default", isOn: $sidebarVisible)
                 Toggle("Show filmstrip by default", isOn: $filmstripVisible)
+            }
+
+            Section("Overlays") {
+                Toggle("Show AF data by default", isOn: $afOverlayVisible)
+                    .help("Draws focus boxes on the image. Toggle with A at any time.")
             }
 
             Section("Image variant") {
@@ -50,7 +58,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 560, height: 360)
+        .frame(width: 620, height: 500)
         .navigationTitle("PhotoX Settings")
     }
 
