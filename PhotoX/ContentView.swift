@@ -119,6 +119,34 @@ struct ContentView: View {
         .dropDestination(for: URL.self) { urls, _ in
             handleDrop(urls)
         }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    openWithPanel()
+                } label: {
+                    Label("Open Folder", systemImage: "folder")
+                }
+                .help("Open folder of ARW + HIF pairs (⌘O)")
+            }
+
+            ToolbarItem(placement: .primaryAction) {
+                Toggle(isOn: $state.filmstripVisible) {
+                    Label("Filmstrip", systemImage: "rectangle.split.3x1")
+                }
+                .toggleStyle(.button)
+                .help("Toggle filmstrip (T)")
+                .disabled(state.shoot == nil)
+            }
+
+            ToolbarItem(placement: .primaryAction) {
+                Toggle(isOn: $state.sidebarVisible) {
+                    Label("Sidebar", systemImage: "sidebar.right")
+                }
+                .toggleStyle(.button)
+                .help("Toggle sidebar (B)")
+                .disabled(state.shoot == nil)
+            }
+        }
     }
 
     private var canvas: some View {
