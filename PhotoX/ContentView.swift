@@ -7,6 +7,7 @@ struct ContentView: View {
     @State private var showHelp: Bool = false
     @State private var copiedFlash: Bool = false
     @AppStorage(SettingsKey.appearance) private var appearanceRaw = SettingsKey.Defaults.appearance
+    @State private var recents = RecentShoots.shared
 
     private var appearance: AppearanceMode {
         AppearanceMode(rawValue: appearanceRaw) ?? .system
@@ -129,15 +130,24 @@ struct ContentView: View {
         }
         .toolbar {
             ToolbarItem(placement: .principal) {
-                if let url = state.shoot?.folderURL {
-                    Text((url.path as NSString).abbreviatingWithTildeInPath)
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .padding(.horizontal, 10)
-                        .help(url.path)
+                // Always populate the principal slot — when it returns
+                // EmptyView, SwiftUI collapses the toolbar's three-region
+                // layout and the .primaryAction items drift toward center
+                // instead of hugging the right edge.
+                Group {
+                    if let url = state.shoot?.folderURL {
+                        Text((url.path as NSString).abbreviatingWithTildeInPath)
+                            .help(url.path)
+                    } else {
+                        Text("— no folder open —")
+                            .help("Press ⌘O or click Open Folder to load a shoot")
+                    }
                 }
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .padding(.horizontal, 10)
             }
 
             ToolbarItem(placement: .primaryAction) {
@@ -173,26 +183,29 @@ struct ContentView: View {
                 .help("Show keyboard shortcuts (?)")
             }
 
-            ToolbarItem(placement: .primaryAction) {
-                Toggle(isOn: $state.filmstripVisible) {
-                    Label("Filmstrip", systemImage: "rectangle.split.3x1")
+            // Pane toggles are only meaningful when a shoot is loaded. Hide
+            // them on the starter screen entirely so the toolbar reads as
+            // "Open · theme · ?" instead of "Open · theme · ? · grayed · grayed".
+            if state.shoot != nil {
+                ToolbarItem(placement: .primaryAction) {
+                    Toggle(isOn: $state.filmstripVisible) {
+                        Label("Filmstrip", systemImage: "rectangle.split.3x1")
+                    }
+                    .toggleStyle(.button)
+                    .controlSize(.small)
+                    .padding(.horizontal, 5)
+                    .help("Toggle filmstrip (T)")
                 }
-                .toggleStyle(.button)
-                .controlSize(.small)
-                .padding(.horizontal, 5)
-                .help("Toggle filmstrip (T)")
-                .disabled(state.shoot == nil)
-            }
 
-            ToolbarItem(placement: .primaryAction) {
-                Toggle(isOn: $state.sidebarVisible) {
-                    Label("Sidebar", systemImage: "sidebar.right")
+                ToolbarItem(placement: .primaryAction) {
+                    Toggle(isOn: $state.sidebarVisible) {
+                        Label("Sidebar", systemImage: "sidebar.right")
+                    }
+                    .toggleStyle(.button)
+                    .controlSize(.small)
+                    .padding(.horizontal, 5)
+                    .help("Toggle sidebar (B)")
                 }
-                .toggleStyle(.button)
-                .controlSize(.small)
-                .padding(.horizontal, 5)
-                .help("Toggle sidebar (B)")
-                .disabled(state.shoot == nil)
             }
         }
     }
@@ -274,12 +287,62 @@ struct ContentView: View {
             }
             .controlSize(.large)
             .keyboardShortcut("o", modifiers: .command)
+
+            if !recents.paths.isEmpty {
+                recentsSection
+            }
         }
+    }
+
+    private var recentsSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Recent")
+                .font(.caption.smallCaps())
+                .foregroundStyle(.secondary)
+                .padding(.bottom, 2)
+            ForEach(recents.paths.prefix(5), id: \.self) { path in
+                Button {
+                    openPath(path)
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "folder")
+                            .foregroundStyle(.secondary)
+                        Text((path as NSString).abbreviatingWithTildeInPath)
+                            .font(.callout.monospaced())
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+                .buttonStyle(.plain)
+                .help(path)
+            }
+        }
+        .padding(.top, 6)
+        .frame(maxWidth: 520, alignment: .leading)
     }
 
     private func openWithPanel() {
         Task {
             guard let (shoot, focus) = OpenPanelCoordinator.runShootPicker() else { return }
+            await state.loadShoot(shoot, focus: focus)
+        }
+    }
+
+    private func openPath(_ path: String) {
+        Task {
+            let url = URL(fileURLWithPath: path)
+            var isDir: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir),
+                  isDir.boolValue else {
+                state.errorMessage = "Folder no longer exists: \(path)"
+                return
+            }
+            let shoot = ShootScanner.scan(folder: url)
+            guard let focus = shoot.pairs.first else {
+                state.errorMessage = "No ARW + HIF pairs found in \(url.lastPathComponent)"
+                return
+            }
             await state.loadShoot(shoot, focus: focus)
         }
     }
