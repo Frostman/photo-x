@@ -26,7 +26,11 @@ struct PhotoXApp: App {
             // sha. macOS's default About panel would just show CFBundleShortVersionString
             // ("0.86.0"), losing the commit identifier.
             CommandGroup(replacing: .appInfo) {
-                Button("About PhotoX") { showAboutPanel() }
+                Button {
+                    showAboutPanel()
+                } label: {
+                    Label("About PhotoX", systemImage: "info.circle")
+                }
             }
             CommandGroup(after: .appInfo) {
                 CheckForUpdatesView(controller: updater)
