@@ -10,8 +10,14 @@ struct ContentView: View {
     var body: some View {
         ZStack {
             HStack(spacing: 0) {
-                canvas
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                VStack(spacing: 0) {
+                    canvas
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    if state.filmstripVisible {
+                        FilmstripView(state: state)
+                            .transition(.move(edge: .bottom))
+                    }
+                }
                 if state.sidebarVisible {
                     SidebarView(state: state)
                         .transition(.move(edge: .trailing))
@@ -54,6 +60,12 @@ struct ContentView: View {
         .onKeyPress(keys: ["b", "B"]) { _ in
             withAnimation(.easeInOut(duration: 0.15)) {
                 state.toggleSidebar()
+            }
+            return .handled
+        }
+        .onKeyPress(keys: ["t", "T"]) { _ in
+            withAnimation(.easeInOut(duration: 0.15)) {
+                state.toggleFilmstrip()
             }
             return .handled
         }

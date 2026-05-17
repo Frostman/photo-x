@@ -49,6 +49,12 @@ final class ViewerState {
         static let none = PairFiles()
     }
 
+    // Filmstrip
+    var filmstripVisible: Bool = false
+    var thumbnails: [String: CGImage] = [:]
+    var pairXMPs: [String: XMPSidecar] = [:]
+    private var shootMetadataTask: Task<Void, Never>?
+
     let pipeline: DecodePipeline = DecodePipeline()
 
     /// Loads a shoot and focuses on a specific pair within it. Replaces the
@@ -57,7 +63,39 @@ final class ViewerState {
         pipeline.cache.clear()
         self.shoot = shoot
         self.currentIndex = shoot.index(of: focus) ?? 0
+        self.thumbnails = [:]
+        self.pairXMPs = [:]
         await applyCurrentPair(resetViewport: true)
+        kickOffShootMetadata()
+    }
+
+    func toggleFilmstrip() {
+        filmstripVisible.toggle()
+    }
+
+    /// Background-load thumbnails and XMP for every pair in the shoot, so the
+    /// filmstrip has data to render without blocking foreground work.
+    private func kickOffShootMetadata() {
+        guard let shoot else { return }
+        shootMetadataTask?.cancel()
+        let pairs = shoot.pairs
+        shootMetadataTask = Task(priority: .utility) { [weak self] in
+            for pair in pairs {
+                if Task.isCancelled { return }
+                let heifURL = pair.heifURL
+                let thumb = await Task.detached(priority: .utility) {
+                    ThumbnailLoader.load(from: heifURL)
+                }.value
+                let xmp = await Task.detached(priority: .utility) {
+                    XMPSidecarReader.read(for: pair)
+                }.value
+                guard let self else { return }
+                if let thumb {
+                    self.thumbnails[pair.stem] = thumb
+                }
+                self.pairXMPs[pair.stem] = xmp
+            }
+        }
     }
 
     /// Move to a new pair within the current shoot (clamped).
