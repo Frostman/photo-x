@@ -72,29 +72,47 @@ func renderIcon(size sizePx: Int) -> CGImage? {
                             cornerWidth: photoCorner, cornerHeight: photoCorner,
                             transform: nil)
 
-    // Drop shadow
+    // Drop shadow (separates the photo from the dark squircle)
     ctx.saveGState()
-    ctx.setShadow(offset: CGSize(width: 0, height: -s * 0.012),
-                   blur: s * 0.045,
-                   color: CGColor(red: 0, green: 0, blue: 0, alpha: 0.55))
+    ctx.setShadow(offset: CGSize(width: 0, height: -s * 0.018),
+                   blur: s * 0.06,
+                   color: CGColor(red: 0, green: 0, blue: 0, alpha: 0.75))
     ctx.addPath(photoPath)
-    ctx.setFillColor(CGColor(red: 0.27, green: 0.27, blue: 0.30, alpha: 1.0))
+    ctx.setFillColor(CGColor(red: 0.40, green: 0.40, blue: 0.44, alpha: 1.0))
     ctx.fillPath()
     ctx.restoreGState()
 
-    // Photo inner gradient
+    // Photo inner gradient — much brighter top than before, so the photo
+    // clearly stands away from the dark squircle.
     ctx.saveGState()
     ctx.addPath(photoPath)
     ctx.clip()
     let photoColors = [
-        CGColor(red: 0.34, green: 0.34, blue: 0.38, alpha: 1.0),  // top
-        CGColor(red: 0.18, green: 0.18, blue: 0.20, alpha: 1.0),  // bottom
+        CGColor(red: 0.55, green: 0.58, blue: 0.62, alpha: 1.0),  // top — sky-ish
+        CGColor(red: 0.20, green: 0.20, blue: 0.22, alpha: 1.0),  // bottom — ground-ish
     ] as CFArray
     let photoGradient = CGGradient(colorsSpace: cs, colors: photoColors, locations: [0, 1])!
     ctx.drawLinearGradient(photoGradient,
                             start: CGPoint(x: 0, y: photoY + photoH),
                             end: CGPoint(x: 0, y: photoY),
                             options: [])
+
+    // Soft horizon line ~42 % from bottom — suggests "a photo of something"
+    // without committing to literal content.
+    let horizonY = photoY + photoH * 0.42
+    ctx.setStrokeColor(CGColor(red: 0, green: 0, blue: 0, alpha: 0.35))
+    ctx.setLineWidth(s * 0.004)
+    ctx.move(to: CGPoint(x: photoX + photoW * 0.05, y: horizonY))
+    ctx.addLine(to: CGPoint(x: photoX + photoW * 0.95, y: horizonY))
+    ctx.strokePath()
+    ctx.restoreGState()
+
+    // Thin inner highlight border — gives the photo a slight glass / lit feel.
+    ctx.saveGState()
+    ctx.addPath(photoPath)
+    ctx.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: 0.22))
+    ctx.setLineWidth(s * 0.005)
+    ctx.strokePath()
     ctx.restoreGState()
 
     // ------ 4. Gold star centered on the photo ------
@@ -118,8 +136,9 @@ func drawStar(in ctx: CGContext,
     for i in 0..<(points * 2) {
         let isOuter = i % 2 == 0
         let radius = isOuter ? rOut : rIn
-        // Start at the top, go clockwise
-        let angle = -CGFloat.pi / 2 + CGFloat(i) * .pi / CGFloat(points)
+        // CG coords are y-up — for the first vertex to appear at the TOP of
+        // the rendered image we want HIGH y in CG, so start at +π/2.
+        let angle = CGFloat.pi / 2 + CGFloat(i) * .pi / CGFloat(points)
         let x = center.x + radius * cos(angle)
         let y = center.y + radius * sin(angle)
         if i == 0 {
