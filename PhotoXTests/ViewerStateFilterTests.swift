@@ -22,7 +22,7 @@ final class ViewerStateFilterTests: XCTestCase {
             "C": XMPSidecar(rating: 0, label: nil),  // explicitly cleared = unrated
             "D": XMPSidecar(rating: nil, label: "Red"),
         ]
-        XCTAssertEqual(state.ratingCategory(for: "A"), .rated)
+        XCTAssertEqual(state.ratingCategory(for: "A"), .rated(stars: 5))
         XCTAssertEqual(state.ratingCategory(for: "B"), .rejected)
         XCTAssertEqual(state.ratingCategory(for: "C"), .unrated)
         XCTAssertEqual(state.ratingCategory(for: "D"), .unrated,
@@ -31,7 +31,7 @@ final class ViewerStateFilterTests: XCTestCase {
 
     // MARK: isVisible
 
-    func test_isVisible_respectsAllThreeShowToggles() {
+    func test_isVisible_respectsAllShowToggles() {
         let state = makeState(stems: ["A", "B", "C"])
         state.pairXMPs = [
             "A": XMPSidecar(rating: 5),
@@ -47,18 +47,37 @@ final class ViewerStateFilterTests: XCTestCase {
         XCTAssertTrue(state.isVisible(pairB))
         XCTAssertTrue(state.isVisible(pairC))
 
-        state.showRated = false
+        // Drop 5★ from showStars → A becomes hidden
+        state.showStars.remove(5)
         XCTAssertFalse(state.isVisible(pairA))
         XCTAssertTrue(state.isVisible(pairB))
         XCTAssertTrue(state.isVisible(pairC))
 
-        state.showRated = true
+        state.showStars.insert(5)
         state.showRejected = false
         XCTAssertFalse(state.isVisible(pairB))
 
         state.showRejected = true
         state.showUnrated = false
         XCTAssertFalse(state.isVisible(pairC))
+    }
+
+    func test_isVisible_perStarGranularity() {
+        let state = makeState(stems: ["A", "B", "C", "D", "E"])
+        state.pairXMPs = [
+            "A": XMPSidecar(rating: 1),
+            "B": XMPSidecar(rating: 2),
+            "C": XMPSidecar(rating: 3),
+            "D": XMPSidecar(rating: 4),
+            "E": XMPSidecar(rating: 5),
+        ]
+        state.showStars = [3, 5]   // only show 3★ and 5★
+        let pairs = state.shoot!.pairs
+        XCTAssertFalse(state.isVisible(pairs[0]))  // 1★
+        XCTAssertFalse(state.isVisible(pairs[1]))  // 2★
+        XCTAssertTrue (state.isVisible(pairs[2]))  // 3★
+        XCTAssertFalse(state.isVisible(pairs[3]))  // 4★
+        XCTAssertTrue (state.isVisible(pairs[4]))  // 5★
     }
 
     // MARK: shootStats + shownCount
@@ -76,9 +95,12 @@ final class ViewerStateFilterTests: XCTestCase {
         XCTAssertEqual(s.rejected, 1)
         XCTAssertEqual(s.unrated,  2)
         XCTAssertEqual(s.total,    5)
+        XCTAssertEqual(s.stars[5], 1)
+        XCTAssertEqual(s.stars[3], 1)
+        XCTAssertNil(s.stars[4])   // no 4-star pair
     }
 
-    func test_shownCount_isSumOfEnabledCategories() {
+    func test_shownCount_respectsPerStarToggles() {
         let state = makeState(stems: ["A", "B", "C", "D", "E"])
         state.pairXMPs = [
             "A": XMPSidecar(rating: 5),
@@ -88,8 +110,10 @@ final class ViewerStateFilterTests: XCTestCase {
         XCTAssertEqual(state.shownCount, 5)
         state.showRejected = false
         XCTAssertEqual(state.shownCount, 4)
-        state.showRated = false
-        XCTAssertEqual(state.shownCount, 2)
+        state.showStars.remove(5)
+        XCTAssertEqual(state.shownCount, 3)
+        state.showStars.remove(3)
+        XCTAssertEqual(state.shownCount, 2)   // only unrated D, E
         state.showUnrated = false
         XCTAssertEqual(state.shownCount, 0)
     }

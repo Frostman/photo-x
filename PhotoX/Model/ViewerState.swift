@@ -155,41 +155,51 @@ final class ViewerState {
     // Filters (session-only — not persisted). On = category is included
     // in the filmstrip + navigation.
     var showRejected: Bool = true
-    var showRated: Bool = true
     var showUnrated: Bool = true
+    /// Which star ratings (1...5) to include. Default: all. Toggling individual
+    /// stars off in the status bar replaces the previous single "Rated" flag.
+    var showStars: Set<Int> = [1, 2, 3, 4, 5]
 
     enum RatingCategory: Sendable, Hashable {
-        case rejected, rated, unrated
+        case rejected
+        case rated(stars: Int)   // 1...5
+        case unrated
     }
 
     func ratingCategory(for stem: String) -> RatingCategory {
         let xmp = pairXMPs[stem] ?? .empty
         if xmp.isReject { return .rejected }
-        if let stars = xmp.starCount, stars > 0 { return .rated }
+        if let stars = xmp.starCount, stars > 0 { return .rated(stars: stars) }
         return .unrated
     }
 
     func isVisible(_ pair: PhotoPair) -> Bool {
         switch ratingCategory(for: pair.stem) {
-        case .rejected: return showRejected
-        case .rated:    return showRated
-        case .unrated:  return showUnrated
+        case .rejected:           return showRejected
+        case .rated(let stars):   return showStars.contains(stars)
+        case .unrated:            return showUnrated
         }
     }
 
     /// Counts across the entire shoot. O(N) per call; ok for filmstrip-scale
     /// shoots, may want memoising if we ever go past tens of thousands.
-    var shootStats: (rated: Int, rejected: Int, unrated: Int, total: Int) {
-        guard let shoot else { return (0, 0, 0, 0) }
+    /// `stars[i]` (i = 1...5) holds the per-star count; `rated` is the sum.
+    var shootStats: (rated: Int, rejected: Int, unrated: Int, stars: [Int: Int], total: Int) {
+        guard let shoot else { return (0, 0, 0, [:], 0) }
         var rated = 0, rejected = 0, unrated = 0
+        var stars: [Int: Int] = [:]
         for pair in shoot.pairs {
             switch ratingCategory(for: pair.stem) {
-            case .rated:    rated += 1
-            case .rejected: rejected += 1
-            case .unrated:  unrated += 1
+            case .rated(let n):
+                rated += 1
+                stars[n, default: 0] += 1
+            case .rejected:
+                rejected += 1
+            case .unrated:
+                unrated += 1
             }
         }
-        return (rated, rejected, unrated, shoot.pairs.count)
+        return (rated, rejected, unrated, stars, shoot.pairs.count)
     }
 
     /// How many pairs the user is currently looking at (= sum of enabled
@@ -197,7 +207,7 @@ final class ViewerState {
     var shownCount: Int {
         let s = shootStats
         var n = 0
-        if showRated    { n += s.rated }
+        for (stars, count) in s.stars where showStars.contains(stars) { n += count }
         if showRejected { n += s.rejected }
         if showUnrated  { n += s.unrated }
         return n

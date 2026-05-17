@@ -81,10 +81,19 @@ struct StatusBarView: View {
 
     private var toggles: some View {
         HStack(spacing: 4) {
-            Toggle(isOn: $state.showRated) {
-                Image(systemName: "star.fill")
+            // Per-star filter row. Each toggle shows a star icon + the rating
+            // number; pressed/highlighted = that star count is visible in the
+            // filmstrip. Replaces the previous single "Rated" toggle so the
+            // user can cull at 5★, isolate everything below 3★ for review,
+            // etc., without leaving the status bar.
+            HStack(spacing: 2) {
+                ForEach(1...5, id: \.self) { stars in
+                    Toggle(isOn: starBinding(for: stars)) {
+                        starLabel(for: stars)
+                    }
+                    .help("Show / hide \(stars)-star frames")
+                }
             }
-            .help("Show / hide rated frames")
 
             Toggle(isOn: $state.showRejected) {
                 Image(systemName: "xmark.circle.fill")
@@ -98,5 +107,26 @@ struct StatusBarView: View {
         }
         .toggleStyle(.button)
         .controlSize(.small)
+    }
+
+    /// Binding that maps `Set<Int>` membership for a given star count to a Bool
+    /// suitable for SwiftUI's Toggle.
+    private func starBinding(for stars: Int) -> Binding<Bool> {
+        Binding(
+            get: { state.showStars.contains(stars) },
+            set: { on in
+                if on { state.showStars.insert(stars) }
+                else  { state.showStars.remove(stars) }
+            }
+        )
+    }
+
+    @ViewBuilder
+    private func starLabel(for stars: Int) -> some View {
+        HStack(spacing: 1) {
+            Image(systemName: "star.fill")
+            Text("\(stars)")
+                .font(.caption2.monospacedDigit().bold())
+        }
     }
 }
