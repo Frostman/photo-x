@@ -3,6 +3,16 @@ import SwiftUI
 struct HelpOverlay: View {
     let onDismiss: () -> Void
 
+    /// Card background only changes when the user is on the Light appearance.
+    /// On Dark we keep the original near-black to match the previous look.
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var cardBackground: Color {
+        colorScheme == .dark
+            ? Color(white: 0.13)
+            : Color(nsColor: .windowBackgroundColor)
+    }
+
     private struct Shortcut: Identifiable {
         let id = UUID()
         let keys: String
@@ -89,7 +99,7 @@ struct HelpOverlay: View {
                                     .foregroundStyle(.primary)
                                     .padding(.horizontal, 6)
                                     .padding(.vertical, 2)
-                                    .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 4))
+                                    .background(Color.primary.opacity(0.08), in: RoundedRectangle(cornerRadius: 4))
                                     .frame(minWidth: 80, alignment: .leading)
                                 Text(item.label)
                                     .foregroundStyle(.primary.opacity(0.85))
@@ -103,10 +113,10 @@ struct HelpOverlay: View {
         }
         .padding(20)
         .frame(width: 420)
-        .background(Color(white: 0.13), in: RoundedRectangle(cornerRadius: 12))
+        .background(cardBackground, in: RoundedRectangle(cornerRadius: 12))
         .overlay(
             RoundedRectangle(cornerRadius: 12)
-                .stroke(.white.opacity(0.08), lineWidth: 1)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.45), radius: 20, y: 6)
     }
