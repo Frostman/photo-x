@@ -2,5 +2,12 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+  <!-- Required for ad-hoc builds: hardened runtime otherwise refuses to load
+       embedded Sparkle.framework because both ad-hoc-signed binaries report
+       "no Team ID" which macOS treats as mismatched team IDs. Once we switch
+       to a real Developer ID and re-sign Sparkle with that identity, this
+       entitlement can be removed. -->
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
 </dict>
 </plist>

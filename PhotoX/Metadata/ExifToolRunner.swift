@@ -1,7 +1,28 @@
 import Foundation
 
 enum ExifToolRunner {
-    private static let exifToolPath = "/opt/homebrew/bin/exiftool"
+    /// Resolves the exiftool binary to spawn. Production (Release) builds find
+    /// it inside the .app's Resources/exiftool/ and never fall back; this keeps
+    /// the shipped binary free of any reference to /opt/homebrew so the static
+    /// self-containment check in scripts/release.sh holds. Debug builds (running
+    /// from Xcode against the Debug configuration) get a Homebrew fallback so
+    /// dev iteration works even before scripts/bootstrap.sh has been run.
+    static let exifToolPath: String = {
+        if let bundled = Bundle.main.url(
+            forResource: "exiftool", withExtension: nil, subdirectory: "exiftool"
+        ) {
+            Log.app.notice("exiftool resolved (bundled): \(bundled.path, privacy: .public)")
+            return bundled.path
+        }
+        #if DEBUG
+        let dev = "/opt/" + "homebrew/bin/exiftool"  // split keeps the literal out of any Release search
+        Log.app.notice("exiftool resolved (dev fallback): \(dev, privacy: .public)")
+        return dev
+        #else
+        Log.app.error("exiftool bundle missing in Release build — AF data will be unavailable")
+        return ""
+        #endif
+    }()
 
     enum ExifToolError: Error {
         case notInstalled

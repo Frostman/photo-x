@@ -12,10 +12,19 @@ settings:
   base:
     SWIFT_VERSION: "5.10"
     MACOSX_DEPLOYMENT_TARGET: "26.0"
+    # Apple-Silicon only: macOS 26 won't run on Intel anyway, and the vendored
+    # LibRaw .a is built arm64 by scripts/bootstrap.sh.
+    ARCHS: arm64
+    ONLY_ACTIVE_ARCH: NO
     ENABLE_USER_SCRIPT_SANDBOXING: NO
     DEAD_CODE_STRIPPING: YES
     SWIFT_TREAT_WARNINGS_AS_ERRORS: NO
     GCC_TREAT_WARNINGS_AS_ERRORS: NO
+
+packages:
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    from: "2.6.0"
 
 targets:
   PhotoX:
@@ -25,32 +34,66 @@ targets:
       - path: PhotoX
         excludes:
           - "**/.DS_Store"
+      - path: Resources/exiftool
+        type: folder
+        buildPhase: resources
+        optional: true
+    dependencies:
+      - package: Sparkle
+    info:
+      # xcodegen generates Info.plist from this. Necessary because Xcode's
+      # GENERATE_INFOPLIST_FILE only honors an allowlist of Apple-known keys
+      # and silently drops custom ones (SUFeedURL, SUPublicEDKey, GitDescribe).
+      # MARKETING_VERSION + CURRENT_PROJECT_VERSION become CFBundleShortVersionString
+      # / CFBundleVersion via xcodebuild overrides at archive time.
+      path: PhotoX/Info.plist
+      properties:
+        CFBundleName: $(PRODUCT_NAME)
+        CFBundleDisplayName: PhotoX
+        CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundlePackageType: $(PRODUCT_BUNDLE_PACKAGE_TYPE)
+        CFBundleExecutable: $(EXECUTABLE_NAME)
+        CFBundleInfoDictionaryVersion: "6.0"
+        LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
+        LSApplicationCategoryType: public.app-category.photography
+        NSPrincipalClass: NSApplication
+        NSHumanReadableCopyright: ""
+        # Sparkle update channel
+        SUFeedURL: https://frostman.github.io/photo-x/appcast.xml
+        SUPublicEDKey: "MWNF/JmW7AQ0wjmzYowNL1NNcybTAAfRnTQO3nsjbHs="
+        SUEnableAutomaticChecks: true
+        SUScheduledCheckInterval: 86400
+        # Human-readable git-derived version. Default value used for ad-hoc
+        # dev builds; scripts/release.sh overrides via xcodebuild GIT_DESCRIBE=…
+        GitDescribe: $(GIT_DESCRIBE)
     settings:
       base:
+        # MARKETING_VERSION and CURRENT_PROJECT_VERSION are PLACEHOLDERS.
+        # Real values come from scripts/release.sh which derives them from git
+        # (commit count + short sha) and passes them as xcodebuild overrides.
+        # Do not edit these by hand.
         PRODUCT_BUNDLE_IDENTIFIER: dev.frostman.PhotoX
         PRODUCT_NAME: PhotoX
-        INFOPLIST_KEY_NSHumanReadableCopyright: ""
-        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.photography
-        INFOPLIST_KEY_NSMainStoryboardFile: ""
-        INFOPLIST_KEY_NSPrincipalClass: NSApplication
         ENABLE_HARDENED_RUNTIME: YES
         CODE_SIGN_ENTITLEMENTS: PhotoX/PhotoX.entitlements
         CODE_SIGN_STYLE: Automatic
-        GENERATE_INFOPLIST_FILE: YES
-        MARKETING_VERSION: "0.1.0"
-        CURRENT_PROJECT_VERSION: "1"
+        MARKETING_VERSION: "0.0.0"
+        CURRENT_PROJECT_VERSION: "0"
+        # Default GitDescribe for ad-hoc dev builds; release.sh overrides.
+        GIT_DESCRIBE: "0.0.0-uninitialized"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         # Obj-C++ bridge for LibRaw
         SWIFT_OBJC_BRIDGING_HEADER: PhotoX/PhotoX-Bridging-Header.h
         CLANG_ENABLE_OBJC_ARC: YES
         CLANG_CXX_LANGUAGE_STANDARD: "gnu++17"
-        # LibRaw via Homebrew (dev dependency: brew install libraw)
+        # Static LibRaw (built into ThirdParty/libraw by scripts/bootstrap.sh)
         HEADER_SEARCH_PATHS:
-          - /opt/homebrew/include
-        LIBRARY_SEARCH_PATHS:
-          - /opt/homebrew/lib
+          - $(PROJECT_DIR)/ThirdParty/libraw/include
         OTHER_LDFLAGS:
-          - -lraw_r
+          - $(PROJECT_DIR)/ThirdParty/libraw/lib/libraw_r.a
+          - -lz
 
   PhotoXTests:
     type: bundle.unit-test

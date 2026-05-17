@@ -6,6 +6,7 @@ struct PhotoXApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var viewerState = ViewerState()
     @State private var recents = RecentShoots.shared
+    @State private var updater = UpdaterController()
     @AppStorage(SettingsKey.appearance) private var appearanceRaw = SettingsKey.Defaults.appearance
 
     private var appearance: AppearanceMode {
@@ -21,6 +22,9 @@ struct PhotoXApp: App {
         .windowResizability(.contentMinSize)
         .windowToolbarStyle(.unifiedCompact(showsTitle: false))
         .commands {
+            CommandGroup(after: .appInfo) {
+                CheckForUpdatesView(controller: updater)
+            }
             CommandGroup(replacing: .newItem) {
                 Button("Open Folder…") {
                     Task { await openWithPanel() }
