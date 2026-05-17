@@ -87,7 +87,7 @@ struct PhotoXApp: App {
     }
 
     private func menuLabel(for path: String) -> String {
-        URL(fileURLWithPath: path).lastPathComponent
+        (path as NSString).abbreviatingWithTildeInPath
     }
 }
 
