@@ -123,6 +123,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         true
     }
 
+    /// Disable title-bar double-click action (minimize / zoom). NSWindow reads
+    /// `AppleActionOnDoubleClick` from our app's NSUserDefaults; setting it
+    /// to "None" here overrides the system-wide preference for PhotoX only.
+    /// Must run before any window is created → applicationWillFinishLaunching.
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        UserDefaults.standard.set("None", forKey: "AppleActionOnDoubleClick")
+    }
+
     /// Maximize the main window to the screen's visible frame on first launch.
     /// SwiftUI's WindowGroup picks a default size that's smaller than the
     /// screen; for a culling viewer, the larger the canvas the better.
