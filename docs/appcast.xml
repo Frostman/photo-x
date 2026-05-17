@@ -2,7 +2,7 @@
 <rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
   <channel>
     <title>PhotoX</title>
-    <link>https://Frostman.github.io/photo-x/appcast.xml</link>
+    <link>https://raw.githubusercontent.com/Frostman/photo-x/master/docs/appcast.xml</link>
     <description>Updates for PhotoX, a culling viewer for Sony A1 II shoots.</description>
     <language>en</language>
     <!-- scripts/release.sh splices new <item> entries here, just before </channel>. -->

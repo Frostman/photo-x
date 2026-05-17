@@ -219,4 +219,4 @@ gh release create "$TAG" \
 echo "[release] DONE"
 echo "[release] Tag:     $TAG"
 echo "[release] Release: https://github.com/Frostman/photo-x/releases/tag/$TAG"
-echo "[release] Appcast: https://Frostman.github.io/photo-x/appcast.xml (live within ~1 min)"
+echo "[release] Appcast: https://raw.githubusercontent.com/Frostman/photo-x/master/docs/appcast.xml (live within ~5 min of push)"

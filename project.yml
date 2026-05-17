@@ -61,7 +61,7 @@ targets:
         NSPrincipalClass: NSApplication
         NSHumanReadableCopyright: ""
         # Sparkle update channel
-        SUFeedURL: https://Frostman.github.io/photo-x/appcast.xml
+        SUFeedURL: https://raw.githubusercontent.com/Frostman/photo-x/master/docs/appcast.xml
         SUPublicEDKey: "MWNF/JmW7AQ0wjmzYowNL1NNcybTAAfRnTQO3nsjbHs="
         SUEnableAutomaticChecks: true
         SUScheduledCheckInterval: 86400
