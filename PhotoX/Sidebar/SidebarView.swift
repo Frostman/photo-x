@@ -6,37 +6,44 @@ struct SidebarView: View {
     static let width: CGFloat = 280
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                // Always render the Decisions section so its space is reserved
-                // and the rest of the sidebar doesn't reflow as you navigate
-                // through rated / unrated photos.
-                section(title: "Decisions") {
-                    DecisionsPanelView(xmp: state.currentXMP)
-                }
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    section(title: "Decisions") {
+                        DecisionsPanelView(xmp: state.currentXMP)
+                    }
 
-                section(title: "Histogram") {
-                    HistogramView(histogram: state.currentHistogram)
-                        .frame(height: 140)
-                }
+                    section(title: "Histogram") {
+                        HistogramView(histogram: state.currentHistogram)
+                            .frame(height: 140)
+                    }
 
-                if let exif = state.currentExif {
-                    section(title: "EXIF") {
-                        ExifPanelView(summary: exif)
+                    if let exif = state.currentExif {
+                        section(title: "EXIF") {
+                            ExifPanelView(summary: exif)
+                        }
+                    }
+
+                    if !state.currentAFSettings.isEmpty {
+                        section(title: "Autofocus") {
+                            AFSettingsPanelView(settings: state.currentAFSettings)
+                        }
                     }
                 }
+                .padding(12)
+            }
 
-                if !state.currentAFSettings.isEmpty {
-                    section(title: "Autofocus") {
-                        AFSettingsPanelView(settings: state.currentAFSettings)
-                    }
-                }
-
-                section(title: "Perf") {
-                    PerfPanelView(stats: state.perfStats)
-                }
+            // Pinned footer: always visible regardless of scroll position.
+            VStack(alignment: .leading, spacing: 8) {
+                Divider()
+                Text("Perf")
+                    .font(.caption.smallCaps())
+                    .foregroundStyle(.secondary)
+                PerfPanelView(stats: state.perfStats)
             }
             .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(white: 0.07))
         }
         .frame(width: Self.width)
         .background(Color(white: 0.10))
