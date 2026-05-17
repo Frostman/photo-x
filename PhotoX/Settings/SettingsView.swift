@@ -47,6 +47,26 @@ enum AppearanceMode: String, CaseIterable, Identifiable {
         case .dark:   return .dark
         }
     }
+
+    /// SF Symbol used in the toolbar cycle button. The half-filled circle is
+    /// Apple's canonical "Auto / System" indicator (used in iOS Settings →
+    /// Display & Brightness).
+    var toolbarSymbol: String {
+        switch self {
+        case .system: return "circle.lefthalf.filled"
+        case .light:  return "sun.max"
+        case .dark:   return "moon"
+        }
+    }
+
+    /// Next mode in the System → Light → Dark → System cycle.
+    var next: AppearanceMode {
+        switch self {
+        case .system: return .light
+        case .light:  return .dark
+        case .dark:   return .system
+        }
+    }
 }
 
 struct SettingsView: View {

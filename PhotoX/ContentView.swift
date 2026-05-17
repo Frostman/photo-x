@@ -6,6 +6,11 @@ struct ContentView: View {
     @FocusState private var canvasFocused: Bool
     @State private var showHelp: Bool = false
     @State private var copiedFlash: Bool = false
+    @AppStorage(SettingsKey.appearance) private var appearanceRaw = SettingsKey.Defaults.appearance
+
+    private var appearance: AppearanceMode {
+        AppearanceMode(rawValue: appearanceRaw) ?? .system
+    }
 
     var body: some View {
         ZStack {
@@ -144,6 +149,17 @@ struct ContentView: View {
                 .controlSize(.small)
                 .padding(.horizontal, 5)
                 .help("Open folder of ARW + HIF pairs (⌘O)")
+            }
+
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    appearanceRaw = appearance.next.rawValue
+                } label: {
+                    Label(appearance.displayName, systemImage: appearance.toolbarSymbol)
+                }
+                .controlSize(.small)
+                .padding(.horizontal, 5)
+                .help("Theme: \(appearance.displayName) — click to cycle System → Light → Dark")
             }
 
             ToolbarItem(placement: .primaryAction) {
