@@ -77,14 +77,16 @@ struct ContentView: View {
         .onKeyPress(keys: ["5"]) { _ in state.toggleRating(5); return .handled }
         .onKeyPress(keys: ["0"]) { _ in state.setRating(nil); return .handled }
         .onKeyPress(keys: ["r", "R"]) { _ in state.toggleReject(); return .handled }
-        .onKeyPress(.leftArrow) {
+        .onKeyPress(.leftArrow) { press in
             PerfTracker.begin("← key")
-            state.previousPair()
+            let step = press.modifiers.contains(.option) ? 10 : 1
+            state.navigate(to: state.currentIndex - step)
             return .handled
         }
-        .onKeyPress(.rightArrow) {
+        .onKeyPress(.rightArrow) { press in
             PerfTracker.begin("→ key")
-            state.nextPair()
+            let step = press.modifiers.contains(.option) ? 10 : 1
+            state.navigate(to: state.currentIndex + step)
             return .handled
         }
         .onKeyPress(.home) {

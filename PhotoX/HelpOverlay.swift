@@ -21,6 +21,7 @@ struct HelpOverlay: View {
         ]),
         ("Navigation", [
             .init(keys: "← / →", label: "Previous / next pair in the shoot"),
+            .init(keys: "⌥ ← / →", label: "Skip 10 pairs"),
             .init(keys: "Home / End", label: "Jump to first / last pair"),
         ]),
         ("View", [
