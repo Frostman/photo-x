@@ -120,6 +120,17 @@ struct ContentView: View {
             handleDrop(urls)
         }
         .toolbar {
+            ToolbarItem(placement: .principal) {
+                if let url = state.shoot?.folderURL {
+                    Text((url.path as NSString).abbreviatingWithTildeInPath)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .help(url.path)
+                }
+            }
+
             ToolbarItem(placement: .primaryAction) {
                 Button {
                     openWithPanel()

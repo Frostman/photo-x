@@ -18,7 +18,7 @@ struct PhotoXApp: App {
                 .task { await bootstrap() }
         }
         .windowResizability(.contentMinSize)
-        .windowToolbarStyle(.unifiedCompact(showsTitle: true))
+        .windowToolbarStyle(.unifiedCompact(showsTitle: false))
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("Open Folder…") {
