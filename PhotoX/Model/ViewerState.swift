@@ -79,6 +79,13 @@ final class ViewerState {
     var currentXMP: XMPSidecar = .empty
     private var xmpGeneration: Int = 0
 
+    /// Bumped on every shoot teardown (closeShoot, loadShoot). Any background
+    /// task that might write into per-shoot state (thumbnails, pairXMPs,
+    /// pairAFData) captures this at spawn time and checks it before applying
+    /// its result. This drops stale writes from tasks that finish after the
+    /// user closed the shoot or switched folders.
+    private var shootGeneration: Int = 0
+
     var perfStats: PerfStats = PerfStats()
 
     struct PerfStats: Hashable, Sendable {
@@ -245,27 +252,46 @@ final class ViewerState {
     /// Loads a shoot and focuses on a specific pair within it. Replaces the
     /// previous single-pair flow.
     func loadShoot(_ shoot: Shoot, focus: PhotoPair) async {
-        pipeline.cache.clear()
+        resetForShootSwitch()
         self.shoot = shoot
         self.currentIndex = shoot.index(of: focus) ?? 0
-        self.thumbnails = [:]
-        self.pairXMPs = [:]
         RecentShoots.shared.add(shoot.folderURL.path)
         await applyCurrentPair(resetViewport: true)
         kickOffShootMetadata()
     }
 
-    /// Drop the current shoot and return to the empty starter state. Cancels
-    /// any in-flight background work and clears all per-shoot caches so the
-    /// next loadShoot() starts from a clean slate.
+    /// Drop the current shoot and return to the empty starter state.
     func closeShoot() {
+        resetForShootSwitch()
+        shoot = nil
+    }
+
+    /// Shared teardown for closeShoot + loadShoot. Cancels all trackable
+    /// in-flight tasks, clears every per-shoot cache, resets all view state
+    /// to identity, and bumps every generation counter so any task that
+    /// completes after this call drops its result (see shootGeneration).
+    private func resetForShootSwitch() {
+        // 1) Invalidate any in-flight task that captured an older generation.
+        shootGeneration &+= 1
+        xmpGeneration &+= 1
+        exifGeneration &+= 1
+        afGeneration &+= 1
+        histogramGeneration &+= 1
+
+        // 2) Cancel the trackable long-running tasks.
         shootMetadataTask?.cancel()
         shootMetadataTask = nil
         afInflight.values.forEach { $0.cancel() }
         afInflight.removeAll()
-        pipeline.cache.clear()
 
-        shoot = nil
+        // 3) Clear all caches.
+        pipeline.cache.clear()
+        thumbnails.removeAll()
+        thumbnailRequestedFor.removeAll()
+        pairXMPs.removeAll()
+        pairAFData.removeAll()
+
+        // 4) Reset per-pair UI state.
         currentIndex = 0
         currentImage = nil
         currentXMP = .empty
@@ -281,11 +307,6 @@ final class ViewerState {
         currentPixelZoom = 1.0
         displayedVariant = .heif
         requestedVariant = .heif
-
-        thumbnails.removeAll()
-        thumbnailRequestedFor.removeAll()
-        pairXMPs.removeAll()
-        pairAFData.removeAll()
     }
 
     func toggleFilmstrip() {
@@ -300,6 +321,7 @@ final class ViewerState {
         guard let shoot else { return }
         shootMetadataTask?.cancel()
         let pairs = shoot.pairs
+        let gen = shootGeneration
         shootMetadataTask = Task(priority: .utility) { [weak self] in
             var batch: [(String, XMPSidecar)] = []
             var lastFlush = CFAbsoluteTimeGetCurrent()
@@ -318,16 +340,18 @@ final class ViewerState {
                     let snapshot = batch
                     batch.removeAll(keepingCapacity: true)
                     lastFlush = now
-                    await self?.flushXMPBatch(snapshot)
+                    await self?.flushXMPBatch(snapshot, generation: gen)
                 }
             }
             if !batch.isEmpty {
-                await self?.flushXMPBatch(batch)
+                await self?.flushXMPBatch(batch, generation: gen)
             }
         }
     }
 
-    private func flushXMPBatch(_ items: [(String, XMPSidecar)]) {
+    private func flushXMPBatch(_ items: [(String, XMPSidecar)], generation: Int) {
+        // Drop a flush that lands after the shoot was closed/switched.
+        guard shootGeneration == generation else { return }
         for (stem, xmp) in items {
             // Don't overwrite an optimistic user update. If the user has
             // already set a rating on this pair, our in-memory value is the
@@ -347,11 +371,12 @@ final class ViewerState {
               !thumbnailRequestedFor.contains(pair.stem) else { return }
         thumbnailRequestedFor.insert(pair.stem)
         let heifURL = pair.heifURL
+        let gen = shootGeneration
         Task { [weak self] in
             let thumb = await Task.detached(priority: .utility) {
                 ThumbnailLoader.load(from: heifURL)
             }.value
-            guard let self else { return }
+            guard let self, self.shootGeneration == gen else { return }
             if let thumb {
                 self.thumbnails[pair.stem] = thumb
             }
@@ -684,6 +709,7 @@ final class ViewerState {
         }
         let url = pair.rawURL
         let stem = pair.stem
+        let gen = shootGeneration
         let task = Task<ExifToolRunner.AFData, Never>(priority: .utility) {
             await Task.detached(priority: .utility) {
                 ExifToolRunner.readAF(from: url)
@@ -692,6 +718,9 @@ final class ViewerState {
         afInflight[stem] = task
         defer { afInflight[stem] = nil }
         let data = await task.value
+        // If the shoot was closed/switched while we were waiting on exiftool,
+        // don't pollute the (now-cleared) cache for the next shoot.
+        guard shootGeneration == gen else { return data }
         pairAFData[stem] = data
         return data
     }
