@@ -1,11 +1,14 @@
 import SwiftUI
 
 struct DecisionsPanelView: View {
-    let xmp: XMPSidecar
+    @Bindable var state: ViewerState
+
+    private var xmp: XMPSidecar { state.currentXMP }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             ratingRow
+            rejectRow
             labelRow
         }
     }
@@ -17,16 +20,46 @@ struct DecisionsPanelView: View {
                 .font(.caption.smallCaps())
                 .foregroundStyle(.secondary)
                 .frame(width: 70, alignment: .leading)
-            if xmp.isReject {
-                HStack(spacing: 4) {
-                    Image(systemName: "xmark.circle.fill")
-                    Text("Rejected")
+            HStack(spacing: 2) {
+                ForEach(1...5, id: \.self) { value in
+                    Button {
+                        state.toggleRating(value)
+                    } label: {
+                        Image(systemName: value <= (xmp.starCount ?? 0) ? "star.fill" : "star")
+                            .font(.caption)
+                            .foregroundStyle(value <= (xmp.starCount ?? 0)
+                                             ? Color.yellow
+                                             : Color.secondary.opacity(0.4))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Set rating to \(value)")
                 }
-                .font(.caption)
-                .foregroundStyle(.red)
-            } else {
-                StarsView(count: xmp.starCount ?? 0)
             }
+        }
+    }
+
+    @ViewBuilder
+    private var rejectRow: some View {
+        HStack(spacing: 6) {
+            Text("Status")
+                .font(.caption.smallCaps())
+                .foregroundStyle(.secondary)
+                .frame(width: 70, alignment: .leading)
+            Button {
+                state.toggleReject()
+            } label: {
+                Label(xmp.isReject ? "Rejected" : "Reject",
+                      systemImage: xmp.isReject ? "xmark.circle.fill" : "xmark.circle")
+                    .font(.caption)
+                    .foregroundStyle(xmp.isReject ? Color.red : Color.secondary.opacity(0.7))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 2)
+                    .background(
+                        Capsule().fill(xmp.isReject ? Color.red.opacity(0.18) : Color.white.opacity(0.06))
+                    )
+            }
+            .buttonStyle(.plain)
+            .help("Toggle reject (xmp:Rating = -1)")
         }
     }
 

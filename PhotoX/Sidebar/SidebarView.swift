@@ -10,7 +10,7 @@ struct SidebarView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     section(title: "Decisions") {
-                        DecisionsPanelView(xmp: state.currentXMP)
+                        DecisionsPanelView(state: state)
                     }
 
                     section(title: "Histogram") {
