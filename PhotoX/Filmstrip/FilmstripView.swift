@@ -60,9 +60,13 @@ struct FilmstripThumbnailView: View {
             .overlay(alignment: .topTrailing) { namePill.padding(3) }
             .overlay(alignment: .bottomTrailing) { scorePill.padding(3) }
             .overlay(
+                // Accent (system selection blue) for the selected thumbnail —
+                // Color.primary blended into thumbnail content was almost
+                // invisible on light theme. Idle thumbnails keep primary @ 12%
+                // for a subtle grid line that still adapts to scheme.
                 RoundedRectangle(cornerRadius: 3)
-                    .stroke(isSelected ? Color.primary : Color.primary.opacity(0.12),
-                            lineWidth: isSelected ? 2 : 1)
+                    .stroke(isSelected ? Color.green : Color.primary.opacity(0.12),
+                            lineWidth: isSelected ? 3 : 1)
             )
             .contentShape(Rectangle())
             .onTapGesture(perform: onTap)

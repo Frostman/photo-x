@@ -172,7 +172,12 @@ struct ContentView: View {
 
     private var canvas: some View {
         ZStack {
-            Color(white: 0.07).ignoresSafeArea()
+            // Dark canvas backdrop is intentional behind a photo (industry
+            // convention — neutralises perceived white balance) but on light
+            // theme it makes the empty/error/loading states a solid black
+            // rectangle with no chrome. Use the dark backdrop only when an
+            // image is actively on screen.
+            canvasBackdrop.ignoresSafeArea()
 
             if let image = state.currentImage {
                 ImageCanvasView(
@@ -215,6 +220,13 @@ struct ContentView: View {
             helpHint
             ratingBadge
         }
+    }
+
+    private var canvasBackdrop: Color {
+        if state.currentImage != nil {
+            return Color(white: 0.07)
+        }
+        return Color(nsColor: .windowBackgroundColor)
     }
 
     @ViewBuilder

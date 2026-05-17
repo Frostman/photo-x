@@ -55,7 +55,10 @@ struct DecisionsPanelView: View {
                     .padding(.horizontal, 8)
                     .padding(.vertical, 2)
                     .background(
-                        Capsule().fill(xmp.isReject ? Color.red.opacity(0.18) : Color.white.opacity(0.06))
+                        // Color.primary adapts to scheme: black @ 6% reads on
+                        // light backgrounds, white @ 6% reads on dark.
+                        // (Color.white was invisible against a light sidebar.)
+                        Capsule().fill(xmp.isReject ? Color.red.opacity(0.18) : Color.primary.opacity(0.06))
                     )
             }
             .buttonStyle(.plain)
