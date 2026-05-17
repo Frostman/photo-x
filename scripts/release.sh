@@ -211,13 +211,20 @@ git add docs/appcast.xml
 git -c commit.gpgsign=false commit -m "Release $DESCRIBE"
 git push
 
-# Release notes from commits since the previous v0.*.0 tag (skip the one we
-# just may have created via git push if a CI added it).
-PREV_TAG=$(git tag --list 'v0.*' --sort=-v:refname | grep -v "^$TAG$" | head -1)
-if [[ -n "$PREV_TAG" ]]; then
+# Release notes from commits since the previous v0.*.0 tag. We use `gh
+# release list` rather than `git tag` because tags are created on GitHub
+# (by `gh release create`) and never fetched back locally.
+# `|| true` guards against pipefail when there are no prior releases.
+PREV_TAG=$(gh release list --limit 5 --json tagName --jq '.[].tagName' 2>/dev/null \
+  | grep -v "^$TAG$" \
+  | head -1 || true)
+if [[ -n "$PREV_TAG" ]] && git rev-parse --verify "$PREV_TAG" >/dev/null 2>&1; then
   NOTES=$(git log --pretty='format:- %s' "$PREV_TAG..HEAD" | head -50)
 else
-  NOTES="Initial release."
+  NOTES="See appcast.xml for the EdDSA-signed download.
+
+Diff vs previous release: https://github.com/Frostman/photo-x/compare/$PREV_TAG...$TAG"
+  [[ -z "$PREV_TAG" ]] && NOTES="Initial release."
 fi
 
 echo "[release] gh release create $TAG"
