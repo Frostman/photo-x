@@ -126,6 +126,7 @@ struct ContentView: View {
                 } label: {
                     Label("Open Folder", systemImage: "folder")
                 }
+                .controlSize(.small)
                 .help("Open folder of ARW + HIF pairs (⌘O)")
             }
 
@@ -134,6 +135,7 @@ struct ContentView: View {
                     Label("Filmstrip", systemImage: "rectangle.split.3x1")
                 }
                 .toggleStyle(.button)
+                .controlSize(.small)
                 .help("Toggle filmstrip (T)")
                 .disabled(state.shoot == nil)
             }
@@ -143,6 +145,7 @@ struct ContentView: View {
                     Label("Sidebar", systemImage: "sidebar.right")
                 }
                 .toggleStyle(.button)
+                .controlSize(.small)
                 .help("Toggle sidebar (B)")
                 .disabled(state.shoot == nil)
             }
