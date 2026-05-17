@@ -5,6 +5,17 @@
     <link>https://raw.githubusercontent.com/Frostman/photo-x/master/docs/appcast.xml</link>
     <description>Updates for PhotoX, a culling viewer for Sony A1 II shoots.</description>
     <language>en</language>
+    <item>
+      <title>v0.82.0-3abd2add9</title>
+      <pubDate>Sun, 17 May 2026 14:05:30 -0700</pubDate>
+      <sparkle:version>82</sparkle:version>
+      <sparkle:shortVersionString>0.82.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <enclosure
+        url="https://github.com/Frostman/photo-x/releases/download/v0.82.0/PhotoX-v0.82.0-3abd2add9.dmg"
+        type="application/octet-stream"
+        sparkle:edSignature="mQAuaPun60onv6Mfvu/FJ1dtPBdlIdtd1QcR8/aBOgVd/D36YiqkYL34NTYNtjCqDlOBuawzXcfSmWJA/x1FBA==" length="10782888" />
+    </item>
     <!-- scripts/release.sh splices new <item> entries here, just before </channel>. -->
   </channel>
 </rss>
