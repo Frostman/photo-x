@@ -55,19 +55,27 @@ struct FilmstripThumbnailView: View {
     private static let thumbAspectFallbackWidth: CGFloat = 126 // 3:2
 
     var body: some View {
-        ZStack(alignment: .bottomTrailing) {
-            thumbnailImage
-            scorePill
-                .padding(3)
-        }
-        .overlay(
-            RoundedRectangle(cornerRadius: 3)
-                .stroke(isSelected ? Color.white : Color.white.opacity(0.08), lineWidth: isSelected ? 2 : 1)
-        )
-        .contentShape(Rectangle())
-        .onTapGesture(perform: onTap)
-        .onAppear(perform: onAppear)
-        .help(pair.stem)
+        thumbnailImage
+            .overlay(alignment: .topTrailing) { namePill.padding(3) }
+            .overlay(alignment: .bottomTrailing) { scorePill.padding(3) }
+            .overlay(
+                RoundedRectangle(cornerRadius: 3)
+                    .stroke(isSelected ? Color.white : Color.white.opacity(0.08), lineWidth: isSelected ? 2 : 1)
+            )
+            .contentShape(Rectangle())
+            .onTapGesture(perform: onTap)
+            .onAppear(perform: onAppear)
+            .help(pair.stem)
+    }
+
+    @ViewBuilder
+    private var namePill: some View {
+        Text(pair.stem)
+            .font(.caption2.monospaced())
+            .foregroundStyle(.white.opacity(0.85))
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .background(.black.opacity(0.7), in: Capsule())
     }
 
     @ViewBuilder
