@@ -8,8 +8,6 @@ struct PerfPanelView: View {
             row("Image", imageDescription)
             row("AF", afDescription)
             row("XMP", stats.xmpMS.map { format($0) })
-            row("Pixels", dimensionsDescription)
-            row("Color", stats.imageColorSpace)
         }
     }
 
@@ -21,11 +19,6 @@ struct PerfPanelView: View {
     private var afDescription: String? {
         guard let ms = stats.afMS else { return nil }
         return "\(format(ms)) \(stats.afCached ? "(cache)" : "(exiftool)")"
-    }
-
-    private var dimensionsDescription: String? {
-        guard let w = stats.imagePixelWidth, let h = stats.imagePixelHeight else { return nil }
-        return "\(w) × \(h)"
     }
 
     private func format(_ ms: Double) -> String {

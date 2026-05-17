@@ -47,14 +47,9 @@ final class ViewerState {
     struct PerfStats: Hashable, Sendable {
         var imageMS: Double?
         var imageCached: Bool = false
-        var imagePixelWidth: Int?
-        var imagePixelHeight: Int?
-        var imageColorSpace: String?
         var afMS: Double?
         var afCached: Bool = false
         var xmpMS: Double?
-        var thumbnailCount: Int = 0   // for current shoot
-        var thumbnailLoadMS: Double?
     }
 
     var currentPairFiles: PairFiles = .none
@@ -440,9 +435,6 @@ final class ViewerState {
             self.currentImage = decoded
             self.perfStats.imageMS = imageWallMS
             self.perfStats.imageCached = wasCached
-            self.perfStats.imagePixelWidth = Int(decoded.pixelSize.width)
-            self.perfStats.imagePixelHeight = Int(decoded.pixelSize.height)
-            self.perfStats.imageColorSpace = decoded.colorSpaceName
             PerfTracker.mark("currentImage set")
             self.displayedVariant = variant
             kickOffHistogramCompute(for: decoded)
