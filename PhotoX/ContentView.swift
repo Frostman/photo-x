@@ -154,14 +154,42 @@ struct ContentView: View {
                 }
                 .padding()
             } else {
-                Text("Drop an ARW + HIF pair, or press ⌘O")
-                    .foregroundStyle(.secondary)
+                emptyState
             }
 
             statusOverlay
             decodingPill
             helpHint
             ratingBadge
+        }
+    }
+
+    @ViewBuilder
+    private var emptyState: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "photo.stack")
+                .font(.system(size: 56))
+                .foregroundStyle(.secondary.opacity(0.4))
+            Text("No folder open")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+            Text("Drop a folder of ARW + HIF pairs onto the window, or pick one.")
+                .font(.callout)
+                .foregroundStyle(.secondary.opacity(0.7))
+            Button {
+                openWithPanel()
+            } label: {
+                Label("Open Folder…", systemImage: "folder")
+            }
+            .controlSize(.large)
+            .keyboardShortcut("o", modifiers: .command)
+        }
+    }
+
+    private func openWithPanel() {
+        Task {
+            guard let (shoot, focus) = OpenPanelCoordinator.runShootPicker() else { return }
+            await state.loadShoot(shoot, focus: focus)
         }
     }
 

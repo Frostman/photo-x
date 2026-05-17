@@ -8,21 +8,21 @@ enum SettingsKey {
     static let sidebarVisible    = "settings.sidebarVisibleByDefault"
     static let filmstripVisible  = "settings.filmstripVisibleByDefault"
     static let autoSwapToRAW     = "settings.autoSwapToRAW"
-    static let sampleDirectory   = "settings.sampleDirectory"
+    static let defaultFolderPath = "settings.sampleDirectory"  // legacy key kept for backward compat
 
     enum Defaults {
         static let sidebarVisible = true
         static let filmstripVisible = true
         static let autoSwapToRAW = false
-        static let sampleDirectory = "/Users/frostman/workspace/personal/photo-x/sample"
+        static let defaultFolderPath = ""  // empty = no auto-load on launch
     }
 }
 
 struct SettingsView: View {
-    @AppStorage(SettingsKey.sidebarVisible)   private var sidebarVisible   = SettingsKey.Defaults.sidebarVisible
-    @AppStorage(SettingsKey.filmstripVisible) private var filmstripVisible = SettingsKey.Defaults.filmstripVisible
-    @AppStorage(SettingsKey.autoSwapToRAW)    private var autoSwapToRAW    = SettingsKey.Defaults.autoSwapToRAW
-    @AppStorage(SettingsKey.sampleDirectory)  private var sampleDirectory  = SettingsKey.Defaults.sampleDirectory
+    @AppStorage(SettingsKey.sidebarVisible)    private var sidebarVisible    = SettingsKey.Defaults.sidebarVisible
+    @AppStorage(SettingsKey.filmstripVisible)  private var filmstripVisible  = SettingsKey.Defaults.filmstripVisible
+    @AppStorage(SettingsKey.autoSwapToRAW)     private var autoSwapToRAW     = SettingsKey.Defaults.autoSwapToRAW
+    @AppStorage(SettingsKey.defaultFolderPath) private var defaultFolderPath = SettingsKey.Defaults.defaultFolderPath
 
     var body: some View {
         Form {
@@ -36,30 +36,32 @@ struct SettingsView: View {
                     .help("One-way swap on the upward crossing only. Manual Z still toggles either direction.")
             }
 
-            Section("Sample folder") {
+            Section("Default folder") {
                 HStack {
-                    TextField("Path", text: $sampleDirectory)
+                    TextField("Path (empty = none)", text: $defaultFolderPath)
                         .textFieldStyle(.roundedBorder)
-                    Button("Choose…") { pickSampleDirectory() }
+                    Button("Choose…") { pickFolder() }
+                    Button("Reset") { defaultFolderPath = "" }
+                        .disabled(defaultFolderPath.isEmpty)
                 }
-                Text("Loaded automatically on launch. Changes apply at next launch.")
+                Text("Loaded automatically on launch. If empty or missing, the window opens blank and you can pick a folder with ⌘O.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
-        .frame(width: 520, height: 360)
+        .frame(width: 560, height: 360)
         .navigationTitle("PhotoX Settings")
     }
 
-    private func pickSampleDirectory() {
+    private func pickFolder() {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
         panel.prompt = "Choose"
         if panel.runModal() == .OK, let url = panel.url {
-            sampleDirectory = url.path
+            defaultFolderPath = url.path
         }
     }
 }

@@ -35,10 +35,11 @@ struct PhotoXApp: App {
     }
 
     private func bootstrap() async {
+        // If the user has configured a default folder and it exists with
+        // pairs, auto-load it. Otherwise just leave the window in its empty
+        // state — no error, no nag.
         if let (shoot, focus) = SamplePathProvider.resolveShoot() {
             await viewerState.loadShoot(shoot, focus: focus)
-        } else {
-            viewerState.errorMessage = "No ARW + HIF pair found in \(SamplePathProvider.sampleDirectory().path). Drop a folder or pair on the window or use ⌘O."
         }
     }
 
