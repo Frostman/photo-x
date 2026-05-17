@@ -190,14 +190,16 @@ struct ContentView: View {
                 HStack {
                     Spacer()
                     HStack(spacing: 8) {
+                        if let label = state.currentXMP.label, !label.isEmpty {
+                            Circle()
+                                .fill(LabelChip.color(for: label))
+                                .frame(width: 10, height: 10)
+                        }
                         if state.currentXMP.isReject {
                             Image(systemName: "xmark.circle.fill")
                                 .foregroundStyle(.red)
                         } else if let stars = state.currentXMP.starCount {
                             StarsView(count: stars)
-                        }
-                        if let label = state.currentXMP.label, !label.isEmpty {
-                            LabelChip(label: label)
                         }
                     }
                     .padding(.horizontal, 10)

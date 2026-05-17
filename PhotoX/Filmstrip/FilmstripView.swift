@@ -101,6 +101,11 @@ struct FilmstripThumbnailView: View {
     @ViewBuilder
     private var scorePill: some View {
         HStack(spacing: 3) {
+            if let label = xmp.label, !label.isEmpty {
+                Circle()
+                    .fill(color(for: label))
+                    .frame(width: 6, height: 6)
+            }
             if xmp.isReject {
                 Image(systemName: "xmark.circle.fill")
                     .font(.caption2)
@@ -109,11 +114,6 @@ struct FilmstripThumbnailView: View {
                 Text("★\(stars)")
                     .font(.caption2.monospacedDigit().bold())
                     .foregroundStyle(.yellow)
-            }
-            if let label = xmp.label, !label.isEmpty {
-                Circle()
-                    .fill(color(for: label))
-                    .frame(width: 6, height: 6)
             }
         }
         .padding(.horizontal, 4)
