@@ -98,6 +98,7 @@ final class ViewerState {
         self.currentIndex = shoot.index(of: focus) ?? 0
         self.thumbnails = [:]
         self.pairXMPs = [:]
+        RecentShoots.shared.add(shoot.folderURL.path)
         await applyCurrentPair(resetViewport: true)
         kickOffShootMetadata()
     }
