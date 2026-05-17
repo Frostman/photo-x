@@ -34,4 +34,11 @@ final class RecentShoots {
         paths = []
         defaults.removeObject(forKey: key)
     }
+
+    func remove(_ path: String) {
+        let next = paths.filter { $0 != path }
+        guard next.count != paths.count else { return }
+        paths = next
+        defaults.set(next, forKey: key)
+    }
 }

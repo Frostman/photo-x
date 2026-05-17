@@ -8,6 +8,7 @@ struct ContentView: View {
     @State private var copiedFlash: Bool = false
     @AppStorage(SettingsKey.appearance) private var appearanceRaw = SettingsKey.Defaults.appearance
     @State private var recents = RecentShoots.shared
+    @State private var favorites = FavoriteShoots.shared
     @Environment(\.openSettings) private var openSettings
 
     private var appearance: AppearanceMode {
@@ -320,38 +321,110 @@ struct ContentView: View {
             .controlSize(.large)
             .keyboardShortcut("o", modifiers: .command)
 
-            if !recents.paths.isEmpty {
+            if !favorites.paths.isEmpty {
+                favoritesSection
+            }
+            if !visibleRecents.isEmpty {
                 recentsSection
             }
         }
     }
 
+    /// Recent paths minus anything already in Favorites, capped at 10.
+    /// Favoriting a recent moves it into the Favorites section instead of
+    /// duplicating across both lists.
+    private var visibleRecents: [String] {
+        recents.paths
+            .filter { !favorites.contains($0) }
+            .prefix(10)
+            .map { $0 }
+    }
+
+    private var favoritesSection: some View {
+        section(title: "Favorites") {
+            ForEach(favorites.paths, id: \.self) { path in
+                pathRow(path) {
+                    rowButton(systemImage: "xmark", tint: .secondary,
+                              help: "Remove from favorites") {
+                        favorites.remove(path)
+                    }
+                }
+            }
+        }
+    }
+
     private var recentsSection: some View {
+        section(title: "Recent") {
+            ForEach(visibleRecents, id: \.self) { path in
+                pathRow(path) {
+                    rowButton(systemImage: "star", tint: .secondary,
+                              help: "Add to favorites") {
+                        favorites.add(path)
+                    }
+                    rowButton(systemImage: "xmark", tint: .secondary,
+                              help: "Remove from recent") {
+                        recents.remove(path)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Section wrapper: smallCaps header + rows in a left-aligned 520pt column.
+    @ViewBuilder
+    private func section<Content: View>(
+        title: String, @ViewBuilder rows: () -> Content
+    ) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Recent")
+            Text(title)
                 .font(.caption.smallCaps())
                 .foregroundStyle(.secondary)
                 .padding(.bottom, 2)
-            ForEach(recents.paths.prefix(5), id: \.self) { path in
-                Button {
-                    openPath(path)
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "folder")
-                            .foregroundStyle(.secondary)
-                        Text((path as NSString).abbreviatingWithTildeInPath)
-                            .font(.callout.monospaced())
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                }
-                .buttonStyle(.plain)
-                .help(path)
-            }
+            rows()
         }
         .padding(.top, 6)
         .frame(maxWidth: 520, alignment: .leading)
+    }
+
+    /// Path row: clickable folder + path on the left, caller-supplied
+    /// trailing buttons (favorite / remove) on the right.
+    @ViewBuilder
+    private func pathRow<Trailing: View>(
+        _ path: String, @ViewBuilder trailing: () -> Trailing
+    ) -> some View {
+        HStack(spacing: 6) {
+            Button {
+                openPath(path)
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "folder")
+                        .foregroundStyle(.secondary)
+                    Text((path as NSString).abbreviatingWithTildeInPath)
+                        .font(.callout.monospaced())
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+            .buttonStyle(.plain)
+            .help(path)
+            Spacer()
+            trailing()
+        }
+    }
+
+    private func rowButton(
+        systemImage: String, tint: Color, help: String, action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.callout)
+                .foregroundStyle(tint)
+                .frame(width: 20, height: 20)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(help)
     }
 
     private func openWithPanel() {
