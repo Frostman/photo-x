@@ -45,9 +45,9 @@ struct SidebarView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(width: Self.width)
-        .background(Color(white: 0.10))
+        .background(Color(nsColor: .windowBackgroundColor))
         .overlay(alignment: .leading) {
-            Rectangle().fill(.black.opacity(0.6)).frame(width: 1)
+            Rectangle().fill(Color(nsColor: .separatorColor)).frame(width: 1)
         }
     }
 

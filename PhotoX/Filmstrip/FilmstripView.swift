@@ -27,9 +27,9 @@ struct FilmstripView: View {
                 .padding(.vertical, 6)
             }
             .frame(height: Self.height)
-            .background(Color.black.opacity(0.78))
+            .background(Color(nsColor: .windowBackgroundColor))
             .overlay(alignment: .top) {
-                Rectangle().fill(.black.opacity(0.6)).frame(height: 1)
+                Rectangle().fill(Color(nsColor: .separatorColor)).frame(height: 1)
             }
             .onAppear {
                 proxy.scrollTo(state.currentIndex, anchor: .center)
@@ -60,7 +60,8 @@ struct FilmstripThumbnailView: View {
             .overlay(alignment: .bottomTrailing) { scorePill.padding(3) }
             .overlay(
                 RoundedRectangle(cornerRadius: 3)
-                    .stroke(isSelected ? Color.white : Color.white.opacity(0.08), lineWidth: isSelected ? 2 : 1)
+                    .stroke(isSelected ? Color.primary : Color.primary.opacity(0.12),
+                            lineWidth: isSelected ? 2 : 1)
             )
             .contentShape(Rectangle())
             .onTapGesture(perform: onTap)
