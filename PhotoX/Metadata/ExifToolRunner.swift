@@ -38,16 +38,72 @@ enum ExifToolRunner {
                 "-Sony:Face4Position", "-Sony:Face5Position", "-Sony:Face6Position",
                 "-Sony:FacesDetected",
                 "-Composite:FocusDistance", "-Composite:FocusDistance2",
+                "-Orientation#",  // numeric (1-8) so we can transform AF rects
                 url.path
             ])
 
             var data = AFData()
             data.settings = parseSettings(from: json)
-            data.regions = parseRegions(from: json)
+            let rawRegions = parseRegions(from: json)
+            let orientation = parseOrientation(from: json)
+            let rawSize = parseRawImageSize(from: json)
+            data.regions = rawRegions.map { region in
+                AFRegion(
+                    kind: region.kind,
+                    rect: transform(region.rect, orientation: orientation, rawSize: rawSize),
+                    label: region.label
+                )
+            }
             return data
         } catch {
             Log.app.error("ExifToolRunner: \(String(describing: error), privacy: .public)")
             return AFData()
+        }
+    }
+
+    /// Read EXIF Orientation (1-8). With -Orientation# the value comes back
+    /// numeric. Keys can be group-prefixed (e.g. "IFD0:Orientation").
+    private static func parseOrientation(from dict: [String: Any]) -> Int {
+        for key in dict.keys where key.hasSuffix("Orientation") {
+            if let i = int(dict, key) { return i }
+        }
+        return 1
+    }
+
+    /// Sony:FocusLocation embeds the raw sensor W×H as the first two ints.
+    private static func parseRawImageSize(from dict: [String: Any]) -> CGSize {
+        guard let str = string(dict, "Sony:FocusLocation") else { return .zero }
+        let parts = str.split(separator: " ").compactMap { Int($0) }
+        guard parts.count >= 2 else { return .zero }
+        return CGSize(width: parts[0], height: parts[1])
+    }
+
+    /// Apply an EXIF Orientation (1-8) to a rect in raw sensor space, returning
+    /// the equivalent rect in display orientation. Width and height swap on
+    /// 90°/270° rotations.
+    private static func transform(_ rect: CGRect, orientation: Int, rawSize: CGSize) -> CGRect {
+        guard rawSize.width > 0, rawSize.height > 0 else { return rect }
+        let W = rawSize.width
+        let H = rawSize.height
+        switch orientation {
+        case 1: // Up — no change
+            return rect
+        case 2: // Mirror horizontal
+            return CGRect(x: W - rect.maxX, y: rect.minY, width: rect.width, height: rect.height)
+        case 3: // Rotate 180
+            return CGRect(x: W - rect.maxX, y: H - rect.maxY, width: rect.width, height: rect.height)
+        case 4: // Mirror vertical
+            return CGRect(x: rect.minX, y: H - rect.maxY, width: rect.width, height: rect.height)
+        case 5: // Mirror horizontal + rotate 270 CW (transpose)
+            return CGRect(x: rect.minY, y: rect.minX, width: rect.height, height: rect.width)
+        case 6: // Rotate 90 CW: (x,y,w,h) → (H-y-h, x, h, w)
+            return CGRect(x: H - rect.maxY, y: rect.minX, width: rect.height, height: rect.width)
+        case 7: // Mirror horizontal + rotate 90 CW
+            return CGRect(x: H - rect.maxY, y: W - rect.maxX, width: rect.height, height: rect.width)
+        case 8: // Rotate 270 CW (= 90 CCW): (x,y,w,h) → (y, W-x-w, h, w)
+            return CGRect(x: rect.minY, y: W - rect.maxX, width: rect.height, height: rect.width)
+        default:
+            return rect
         }
     }
 
