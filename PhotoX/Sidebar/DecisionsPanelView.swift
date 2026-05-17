@@ -23,7 +23,7 @@ struct DecisionsPanelView: View {
             HStack(spacing: 2) {
                 ForEach(1...5, id: \.self) { value in
                     Button {
-                        state.toggleRating(value)
+                        state.toggleRating(value, source: .sidebar)
                     } label: {
                         Image(systemName: value <= (xmp.starCount ?? 0) ? "star.fill" : "star")
                             .font(.caption)
@@ -46,7 +46,7 @@ struct DecisionsPanelView: View {
                 .foregroundStyle(.secondary)
                 .frame(width: 70, alignment: .leading)
             Button {
-                state.toggleReject()
+                state.toggleReject(source: .sidebar)
             } label: {
                 Label(xmp.isReject ? "Rejected" : "Reject",
                       systemImage: xmp.isReject ? "xmark.circle.fill" : "xmark.circle")
@@ -73,7 +73,7 @@ struct DecisionsPanelView: View {
             HStack(spacing: 6) {
                 ForEach(DecisionsPanelView.labelOrder, id: \.self) { name in
                     Button {
-                        state.toggleLabel(name)
+                        state.toggleLabel(name, source: .sidebar)
                     } label: {
                         Circle()
                             .fill(LabelChip.color(for: name))

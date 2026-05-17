@@ -1,6 +1,14 @@
 import Observation
 import SwiftUI
 
+/// Where a rating/label/reject action originated from. Each source has its
+/// own auto-advance setting so power-users can opt into shortcut-only
+/// auto-advance while keeping sidebar clicks deliberate (or vice-versa).
+enum RatingInputSource {
+    case keyboard
+    case sidebar
+}
+
 @MainActor
 @Observable
 final class ViewerState {
@@ -123,8 +131,11 @@ final class ViewerState {
 
     /// Read live from UserDefaults so changes in Settings take effect on the
     /// next rating action — no app restart required.
-    private var autoAdvanceAfterRating: Bool {
-        UserDefaults.standard.bool(forKey: SettingsKey.autoAdvance)
+    private func autoAdvanceAfterRating(source: RatingInputSource) -> Bool {
+        switch source {
+        case .keyboard: return UserDefaults.standard.bool(forKey: SettingsKey.autoAdvance)
+        case .sidebar:  return UserDefaults.standard.bool(forKey: SettingsKey.autoAdvanceSidebar)
+        }
     }
 
     init() {
@@ -308,7 +319,7 @@ final class ViewerState {
 
     /// Sets the star rating (1...5), clears it (nil), or marks rejected (-1).
     /// Updates UI optimistically; rolls back if the XMP write fails.
-    func setRating(_ rating: Int?) {
+    func setRating(_ rating: Int?, source: RatingInputSource = .keyboard) {
         guard let pair else { return }
         let previous = currentXMP
         var updated = currentXMP
@@ -320,7 +331,7 @@ final class ViewerState {
 
         // Auto-advance only on SET (non-nil) — clearing is usually a "fix
         // this mistake" action, not a decision worth moving past.
-        if rating != nil, autoAdvanceAfterRating {
+        if rating != nil, autoAdvanceAfterRating(source: source) {
             nextPair()
         }
 
@@ -345,19 +356,19 @@ final class ViewerState {
 
     /// R toggles rating between -1 (reject) and nil (clear). Anything else
     /// (existing star rating) is converted to rejected.
-    func toggleReject() {
+    func toggleReject(source: RatingInputSource = .keyboard) {
         let next: Int? = (currentXMP.rating == -1) ? nil : -1
-        setRating(next)
+        setRating(next, source: source)
     }
 
     /// Pressing the same star key again clears the rating. From any other
     /// state (different stars or reject), sets to the requested value.
-    func toggleRating(_ rating: Int) {
-        setRating(currentXMP.rating == rating ? nil : rating)
+    func toggleRating(_ rating: Int, source: RatingInputSource = .keyboard) {
+        setRating(currentXMP.rating == rating ? nil : rating, source: source)
     }
 
     /// Sets the XMP color label, or clears it (nil). Optimistic with rollback.
-    func setLabel(_ label: String?) {
+    func setLabel(_ label: String?, source: RatingInputSource = .keyboard) {
         guard let pair else { return }
         let previous = currentXMP
         var updated = currentXMP
@@ -367,7 +378,7 @@ final class ViewerState {
         currentPairFiles.xmp = true
         let capturedPair = pair
 
-        if label != nil, autoAdvanceAfterRating {
+        if label != nil, autoAdvanceAfterRating(source: source) {
             nextPair()
         }
 
@@ -389,8 +400,8 @@ final class ViewerState {
     }
 
     /// Click same color again clears.
-    func toggleLabel(_ label: String) {
-        setLabel(currentXMP.label == label ? nil : label)
+    func toggleLabel(_ label: String, source: RatingInputSource = .keyboard) {
+        setLabel(currentXMP.label == label ? nil : label, source: source)
     }
 
     func cycleDecoder() {
