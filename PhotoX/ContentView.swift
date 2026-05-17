@@ -139,7 +139,7 @@ struct ContentView: View {
                     Label("Open Folder", systemImage: "folder")
                 }
                 .controlSize(.small)
-                .padding(.horizontal, 10)
+                .padding(.horizontal, 5)
                 .help("Open folder of ARW + HIF pairs (⌘O)")
             }
 
@@ -149,7 +149,7 @@ struct ContentView: View {
                 }
                 .toggleStyle(.button)
                 .controlSize(.small)
-                .padding(.horizontal, 10)
+                .padding(.horizontal, 5)
                 .help("Toggle filmstrip (T)")
                 .disabled(state.shoot == nil)
             }
@@ -160,7 +160,7 @@ struct ContentView: View {
                 }
                 .toggleStyle(.button)
                 .controlSize(.small)
-                .padding(.horizontal, 10)
+                .padding(.horizontal, 5)
                 .help("Toggle sidebar (B)")
                 .disabled(state.shoot == nil)
             }
