@@ -103,8 +103,9 @@ final class ImageCanvasNSView: NSView {
 
     /// Called by SwiftUI when the external viewport changes. No-op if it matches our internal.
     func setViewportFromExternal(_ newViewport: CanvasViewport) {
-        guard viewport != newViewport else { return }
-        viewport = newViewport
+        let clamped = clampToImageBounds(newViewport)
+        guard viewport != clamped else { return }
+        viewport = clamped
         renderer?.setViewport(viewport)
         scheduleDraw()
     }
@@ -126,9 +127,17 @@ final class ImageCanvasNSView: NSView {
     }
 
     private func applyViewportFromGesture(_ newViewport: CanvasViewport) {
-        viewport = newViewport
+        viewport = clampToImageBounds(newViewport)
         renderer?.setViewport(viewport)
         scheduleDraw()
+    }
+
+    /// Wrap CanvasViewport.clampedOffset with the NSView's current image and
+    /// drawable sizes so callers don't have to fish them out.
+    private func clampToImageBounds(_ vp: CanvasViewport) -> CanvasViewport {
+        guard imagePixelSize.width > 0, metalLayer.drawableSize.width > 0 else { return vp }
+        return vp.clampedOffset(imagePixelSize: imagePixelSize,
+                                viewPixelSize: metalLayer.drawableSize)
     }
 
     private var lastEmittedPixelZoom: CGFloat = -1

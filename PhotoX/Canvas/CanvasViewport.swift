@@ -41,6 +41,23 @@ struct CanvasViewport: Hashable, Sendable {
         CanvasViewport(scale: scale, offset: CGPoint(x: offset.x + delta.x, y: offset.y + delta.y))
     }
 
+    /// Clamp `offset` so the image always fully covers (or is centered within)
+    /// the viewport: no empty space appears on any side, and the user can't
+    /// drag the image off the visible area. When the image is smaller than
+    /// the viewport on an axis (only happens at scale == 1.0 / fit), the
+    /// offset on that axis is forced to 0 so the image stays centered.
+    func clampedOffset(imagePixelSize: CGSize, viewPixelSize: CGSize) -> CanvasViewport {
+        let fit = Self.fitScale(imagePixelSize: imagePixelSize, viewPixelSize: viewPixelSize)
+        let effScale = fit * scale
+        let imgW = imagePixelSize.width * effScale
+        let imgH = imagePixelSize.height * effScale
+        let maxX = max(0, (imgW - viewPixelSize.width) / 2)
+        let maxY = max(0, (imgH - viewPixelSize.height) / 2)
+        let cx = min(max(offset.x, -maxX), maxX)
+        let cy = min(max(offset.y, -maxY), maxY)
+        return CanvasViewport(scale: scale, offset: CGPoint(x: cx, y: cy))
+    }
+
     /// Viewport that puts one image pixel onto one device pixel, centered.
     static func oneToOne(imagePixelSize: CGSize, viewPixelSize: CGSize) -> CanvasViewport {
         let fit = fitScale(imagePixelSize: imagePixelSize, viewPixelSize: viewPixelSize)
