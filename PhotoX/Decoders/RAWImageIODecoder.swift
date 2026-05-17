@@ -30,9 +30,13 @@ struct RAWImageIODecoder: ImageDecoder {
             kCGImagePropertyRawDictionary: rawDict
         ]
 
-        guard let cgImage = CGImageSourceCreateImageAtIndex(source, 0, imageOptions as CFDictionary) else {
+        guard let rawCGImage = CGImageSourceCreateImageAtIndex(source, 0, imageOptions as CFDictionary) else {
             throw DecodeError.imageCreationFailed(url)
         }
+
+        // Apply EXIF Orientation (see HEIFDecoder for context).
+        let orientation = OrientationApplier.readOrientation(from: source)
+        let cgImage = OrientationApplier.apply(orientation: orientation, to: rawCGImage)
 
         let decodeMS = (CFAbsoluteTimeGetCurrent() - start) * 1000.0
         let colorSpaceName = cgImage.colorSpace?.name as String? ?? "unknown"

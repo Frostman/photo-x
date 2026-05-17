@@ -29,9 +29,15 @@ struct HEIFDecoder: ImageDecoder {
             kCGImageSourceShouldCacheImmediately: true,
             kCGImageSourceShouldAllowFloat: true
         ]
-        guard let cgImage = CGImageSourceCreateImageAtIndex(source, 0, imageOptions as CFDictionary) else {
+        guard let rawCGImage = CGImageSourceCreateImageAtIndex(source, 0, imageOptions as CFDictionary) else {
             throw DecodeError.imageCreationFailed(url)
         }
+
+        // Apply EXIF Orientation so portrait shots render upright. The raw
+        // CGImage from ImageIO has the sensor-orientation pixel layout; the
+        // Orientation tag tells us how to display it.
+        let orientation = OrientationApplier.readOrientation(from: source)
+        let cgImage = OrientationApplier.apply(orientation: orientation, to: rawCGImage)
 
         let decodeMS = (CFAbsoluteTimeGetCurrent() - start) * 1000.0
         let colorSpaceName = cgImage.colorSpace?.name as String? ?? "unknown"
