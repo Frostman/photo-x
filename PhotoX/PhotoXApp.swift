@@ -5,10 +5,16 @@ import AppKit
 struct PhotoXApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var viewerState = ViewerState()
+    @AppStorage(SettingsKey.appearance) private var appearanceRaw = SettingsKey.Defaults.appearance
+
+    private var appearance: AppearanceMode {
+        AppearanceMode(rawValue: appearanceRaw) ?? .system
+    }
 
     var body: some Scene {
         WindowGroup {
             ContentView(state: viewerState)
+                .preferredColorScheme(appearance.colorScheme)
                 .task { await bootstrap() }
         }
         .windowResizability(.contentMinSize)
@@ -31,6 +37,7 @@ struct PhotoXApp: App {
         // "Settings…" to the app menu.
         Settings {
             SettingsView()
+                .preferredColorScheme(appearance.colorScheme)
         }
     }
 

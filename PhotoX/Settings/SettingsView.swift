@@ -5,6 +5,7 @@ import SwiftUI
 /// in SettingsView and the lookup-at-init in ViewerState / SamplePathProvider
 /// agree on names.
 enum SettingsKey {
+    static let appearance        = "settings.appearance"
     static let sidebarVisible    = "settings.sidebarVisibleByDefault"
     static let filmstripVisible  = "settings.filmstripVisibleByDefault"
     static let autoSwapToRAW     = "settings.autoSwapToRAW"
@@ -12,6 +13,7 @@ enum SettingsKey {
     static let defaultFolderPath = "settings.defaultFolderPath"
 
     enum Defaults {
+        static let appearance = AppearanceMode.system.rawValue
         static let sidebarVisible = true
         static let filmstripVisible = true
         static let autoSwapToRAW = false
@@ -20,7 +22,31 @@ enum SettingsKey {
     }
 }
 
+enum AppearanceMode: String, CaseIterable, Identifiable {
+    case system, light, dark
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .system: return "System"
+        case .light:  return "Light"
+        case .dark:   return "Dark"
+        }
+    }
+
+    /// nil means "follow the system" — SwiftUI inherits the OS appearance.
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .system: return nil
+        case .light:  return .light
+        case .dark:   return .dark
+        }
+    }
+}
+
 struct SettingsView: View {
+    @AppStorage(SettingsKey.appearance)        private var appearanceRaw     = SettingsKey.Defaults.appearance
     @AppStorage(SettingsKey.sidebarVisible)    private var sidebarVisible    = SettingsKey.Defaults.sidebarVisible
     @AppStorage(SettingsKey.filmstripVisible)  private var filmstripVisible  = SettingsKey.Defaults.filmstripVisible
     @AppStorage(SettingsKey.autoSwapToRAW)     private var autoSwapToRAW     = SettingsKey.Defaults.autoSwapToRAW
@@ -29,6 +55,16 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
+            Section("Appearance") {
+                Picker("Theme", selection: $appearanceRaw) {
+                    ForEach(AppearanceMode.allCases) { mode in
+                        Text(mode.displayName).tag(mode.rawValue)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .help("System follows the macOS appearance. Light / Dark force one.")
+            }
+
             Section("Layout") {
                 Toggle("Show sidebar by default", isOn: $sidebarVisible)
                 Toggle("Show filmstrip by default", isOn: $filmstripVisible)
@@ -58,7 +94,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 620, height: 500)
+        .frame(width: 620, height: 580)
         .navigationTitle("PhotoX Settings")
     }
 
