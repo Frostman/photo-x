@@ -84,7 +84,7 @@ enum ExifToolRunner {
 
     /// Read EXIF Orientation (1-8). With -Orientation# the value comes back
     /// numeric. Keys can be group-prefixed (e.g. "IFD0:Orientation").
-    private static func parseOrientation(from dict: [String: Any]) -> Int {
+    static func parseOrientation(from dict: [String: Any]) -> Int {
         for key in dict.keys where key.hasSuffix("Orientation") {
             if let i = int(dict, key) { return i }
         }
@@ -92,7 +92,7 @@ enum ExifToolRunner {
     }
 
     /// Sony:FocusLocation embeds the raw sensor W×H as the first two ints.
-    private static func parseRawImageSize(from dict: [String: Any]) -> CGSize {
+    static func parseRawImageSize(from dict: [String: Any]) -> CGSize {
         guard let str = string(dict, "Sony:FocusLocation") else { return .zero }
         let parts = str.split(separator: " ").compactMap { Int($0) }
         guard parts.count >= 2 else { return .zero }
@@ -102,7 +102,7 @@ enum ExifToolRunner {
     /// Apply an EXIF Orientation (1-8) to a rect in raw sensor space, returning
     /// the equivalent rect in display orientation. Width and height swap on
     /// 90°/270° rotations.
-    private static func transform(_ rect: CGRect, orientation: Int, rawSize: CGSize) -> CGRect {
+    static func transform(_ rect: CGRect, orientation: Int, rawSize: CGSize) -> CGRect {
         guard rawSize.width > 0, rawSize.height > 0 else { return rect }
         let W = rawSize.width
         let H = rawSize.height
@@ -128,7 +128,7 @@ enum ExifToolRunner {
         }
     }
 
-    private static func runJSON(arguments: [String]) throws -> [String: Any] {
+    static func runJSON(arguments: [String]) throws -> [String: Any] {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: exifToolPath)
         process.arguments = arguments
@@ -158,7 +158,7 @@ enum ExifToolRunner {
 
     // MARK: - Settings
 
-    private static func parseSettings(from dict: [String: Any]) -> AFSettings {
+    static func parseSettings(from dict: [String: Any]) -> AFSettings {
         var s = AFSettings()
         s.focusMode = string(dict, "Sony:FocusMode")
         s.afAreaMode = [string(dict, "Sony:AFAreaModeSetting"),
@@ -179,7 +179,7 @@ enum ExifToolRunner {
         return s
     }
 
-    private static func prettyDistance(_ raw: String) -> String {
+    static func prettyDistance(_ raw: String) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespaces)
         if trimmed.lowercased() == "inf" || trimmed.lowercased() == "infinity" {
             return "∞"
@@ -189,7 +189,7 @@ enum ExifToolRunner {
 
     // MARK: - Regions
 
-    private static func parseRegions(from dict: [String: Any]) -> [AFRegion] {
+    static func parseRegions(from dict: [String: Any]) -> [AFRegion] {
         var regions: [AFRegion] = []
         regions.append(contentsOf: parsePrimaryFocus(dict))
         regions.append(contentsOf: parseFocalPlanePoints(dict))
@@ -197,7 +197,7 @@ enum ExifToolRunner {
         return regions
     }
 
-    private static func parsePrimaryFocus(_ dict: [String: Any]) -> [AFRegion] {
+    static func parsePrimaryFocus(_ dict: [String: Any]) -> [AFRegion] {
         guard let str = string(dict, "Sony:FocusLocation") else { return [] }
         let parts = str.split(separator: " ").compactMap { Int($0) }
         guard parts.count == 4 else { return [] }
@@ -225,7 +225,7 @@ enum ExifToolRunner {
     /// 8640×5760 = exact center). May need adjustment for other bodies.
     private static let sonyAFGridSize = (w: CGFloat(640), h: CGFloat(480))
 
-    private static func parseFocalPlanePoints(_ dict: [String: Any]) -> [AFRegion] {
+    static func parseFocalPlanePoints(_ dict: [String: Any]) -> [AFRegion] {
         // The image-pixel dimensions live in FocusLocation as the first two ints.
         guard let locStr = string(dict, "Sony:FocusLocation") else { return [] }
         let locParts = locStr.split(separator: " ").compactMap { Int($0) }
@@ -261,7 +261,7 @@ enum ExifToolRunner {
     /// the common "FaceNPosition" string format is "y x width height" in some
     /// scaled coordinate system. Untested on the current sample (no face data).
     /// If face data is malformed, we just skip rather than throw.
-    private static func parseFaces(_ dict: [String: Any]) -> [AFRegion] {
+    static func parseFaces(_ dict: [String: Any]) -> [AFRegion] {
         guard let locStr = string(dict, "Sony:FocusLocation") else { return [] }
         let locParts = locStr.split(separator: " ").compactMap { Int($0) }
         guard locParts.count >= 2 else { return [] }
@@ -290,14 +290,14 @@ enum ExifToolRunner {
 
     // MARK: - Dict helpers
 
-    private static func string(_ dict: [String: Any], _ key: String) -> String? {
+    static func string(_ dict: [String: Any], _ key: String) -> String? {
         guard let v = dict[key] else { return nil }
         if let s = v as? String { return s.isEmpty ? nil : s }
         if let n = v as? NSNumber { return n.stringValue }
         return nil
     }
 
-    private static func int(_ dict: [String: Any], _ key: String) -> Int? {
+    static func int(_ dict: [String: Any], _ key: String) -> Int? {
         if let i = dict[key] as? Int { return i }
         if let n = dict[key] as? NSNumber { return n.intValue }
         if let s = dict[key] as? String, let i = Int(s) { return i }

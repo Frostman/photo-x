@@ -10,11 +10,16 @@ final class RecentShoots {
 
     private let key = "recentShoots.paths"
     private let cap = 10
+    private let defaults: UserDefaults
 
     private(set) var paths: [String] = []
 
-    private init() {
-        self.paths = UserDefaults.standard.stringArray(forKey: key) ?? []
+    /// `defaults` is injectable so tests can use a per-suite UserDefaults and
+    /// avoid clobbering the user's real recents list. Production uses
+    /// `.standard` via the shared instance.
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        self.paths = defaults.stringArray(forKey: key) ?? []
     }
 
     func add(_ path: String) {
@@ -22,11 +27,11 @@ final class RecentShoots {
         updated.insert(path, at: 0)
         if updated.count > cap { updated = Array(updated.prefix(cap)) }
         paths = updated
-        UserDefaults.standard.set(updated, forKey: key)
+        defaults.set(updated, forKey: key)
     }
 
     func clear() {
         paths = []
-        UserDefaults.standard.removeObject(forKey: key)
+        defaults.removeObject(forKey: key)
     }
 }
