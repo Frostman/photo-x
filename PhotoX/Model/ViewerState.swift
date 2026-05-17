@@ -63,6 +63,45 @@ final class ViewerState {
 
     // Filmstrip
     var filmstripVisible: Bool
+
+    // Filters (session-only — not persisted)
+    var hideRejected: Bool = false
+    var hideRated: Bool = false
+    var hideUnrated: Bool = false
+
+    enum RatingCategory: Sendable, Hashable {
+        case rejected, rated, unrated
+    }
+
+    func ratingCategory(for stem: String) -> RatingCategory {
+        let xmp = pairXMPs[stem] ?? .empty
+        if xmp.isReject { return .rejected }
+        if let stars = xmp.starCount, stars > 0 { return .rated }
+        return .unrated
+    }
+
+    func isVisible(_ pair: PhotoPair) -> Bool {
+        switch ratingCategory(for: pair.stem) {
+        case .rejected: return !hideRejected
+        case .rated:    return !hideRated
+        case .unrated:  return !hideUnrated
+        }
+    }
+
+    /// Counts across the entire shoot. O(N) per call; ok for filmstrip-scale
+    /// shoots, may want memoising if we ever go past tens of thousands.
+    var shootStats: (rated: Int, rejected: Int, unrated: Int, total: Int) {
+        guard let shoot else { return (0, 0, 0, 0) }
+        var rated = 0, rejected = 0, unrated = 0
+        for pair in shoot.pairs {
+            switch ratingCategory(for: pair.stem) {
+            case .rated:    rated += 1
+            case .rejected: rejected += 1
+            case .unrated:  unrated += 1
+            }
+        }
+        return (rated, rejected, unrated, shoot.pairs.count)
+    }
     var thumbnails: [String: CGImage] = [:]
     var pairXMPs: [String: XMPSidecar] = [:]
     private var shootMetadataTask: Task<Void, Never>?
@@ -183,12 +222,54 @@ final class ViewerState {
         Task { await applyCurrentPair(resetViewport: false) }
     }
 
-    func nextPair() { navigate(to: currentIndex + 1) }
-    func previousPair() { navigate(to: currentIndex - 1) }
-    func firstPair() { navigate(to: 0) }
+    func nextPair() {
+        if let idx = nextVisibleIndex(from: currentIndex, direction: 1) {
+            navigate(to: idx)
+        }
+    }
+    func previousPair() {
+        if let idx = nextVisibleIndex(from: currentIndex, direction: -1) {
+            navigate(to: idx)
+        }
+    }
+    func firstPair() {
+        guard let shoot, !shoot.isEmpty else { return }
+        // First visible from the front. If currentIndex is already 0 and visible,
+        // nextVisibleIndex(from: -1, direction: +1) starts at 0.
+        if let idx = nextVisibleIndex(from: -1, direction: 1) {
+            navigate(to: idx)
+        }
+    }
     func lastPair() {
         guard let shoot, !shoot.isEmpty else { return }
-        navigate(to: shoot.pairs.count - 1)
+        if let idx = nextVisibleIndex(from: shoot.pairs.count, direction: -1) {
+            navigate(to: idx)
+        }
+    }
+
+    /// Walk from `from` in `direction` (±1), skipping pairs filtered out by
+    /// the current hide-* toggles. Returns nil if no visible pair lies in
+    /// that direction.
+    private func nextVisibleIndex(from: Int, direction: Int) -> Int? {
+        guard let shoot else { return nil }
+        var i = from + direction
+        while shoot.pairs.indices.contains(i) {
+            if isVisible(shoot.pairs[i]) { return i }
+            i += direction
+        }
+        return nil
+    }
+
+    /// Walk `steps` visible pairs (sign = direction). Used by ⌥+arrow.
+    func navigate(by steps: Int) {
+        guard steps != 0 else { return }
+        let direction = steps > 0 ? 1 : -1
+        var idx = currentIndex
+        for _ in 0..<abs(steps) {
+            guard let next = nextVisibleIndex(from: idx, direction: direction) else { break }
+            idx = next
+        }
+        navigate(to: idx)
     }
 
     func toggleRequestedVariant() {

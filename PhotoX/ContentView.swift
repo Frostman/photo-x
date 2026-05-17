@@ -13,10 +13,13 @@ struct ContentView: View {
                 VStack(spacing: 0) {
                     canvas
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    // Sidebar/filmstrip are gated on having a shoot loaded —
-                    // when the window is in the empty state, there's nothing
-                    // for them to show, so we collapse to the full canvas.
-                    // Once a folder is loaded they follow the user's defaults.
+                    // Sidebar/filmstrip/statusbar are gated on having a shoot
+                    // loaded — when the window is in the empty state, there's
+                    // nothing for them to show, so we collapse to the full
+                    // canvas. Once a folder is loaded they follow defaults.
+                    if state.shoot != nil {
+                        StatusBarView(state: state)
+                    }
                     if state.filmstripVisible && state.shoot != nil {
                         FilmstripView(state: state)
                             .transition(.move(edge: .bottom))
@@ -90,13 +93,13 @@ struct ContentView: View {
         .onKeyPress(.leftArrow, phases: [.down, .repeat]) { press in
             PerfTracker.begin("← key")
             let step = press.modifiers.contains(.option) ? 10 : 1
-            state.navigate(to: state.currentIndex - step)
+            state.navigate(by: -step)
             return .handled
         }
         .onKeyPress(.rightArrow, phases: [.down, .repeat]) { press in
             PerfTracker.begin("→ key")
             let step = press.modifiers.contains(.option) ? 10 : 1
-            state.navigate(to: state.currentIndex + step)
+            state.navigate(by: step)
             return .handled
         }
         .onKeyPress(.home) {
