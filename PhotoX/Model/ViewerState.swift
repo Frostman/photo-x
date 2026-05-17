@@ -138,6 +138,44 @@ final class ViewerState {
         overlays.afPoints.toggle()
     }
 
+    /// Sets the star rating (1...5), clears it (nil), or marks rejected (-1).
+    /// Updates UI optimistically; rolls back if the XMP write fails.
+    func setRating(_ rating: Int?) {
+        guard let pair else { return }
+        let previous = currentXMP
+        var updated = currentXMP
+        updated.rating = rating
+        currentXMP = updated
+        pairXMPs[pair.stem] = updated
+        currentPairFiles.xmp = true
+        let capturedPair = pair
+
+        Task {
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    try XMPSidecarWriter.updateRating(rating, for: capturedPair)
+                }.value
+                Log.app.notice("XMP write OK: \(capturedPair.stem, privacy: .public) rating=\(rating.map(String.init) ?? "nil", privacy: .public)")
+            } catch {
+                // Rollback. Only touch currentXMP if the user hasn't navigated
+                // away — otherwise we'd clobber unrelated state.
+                if self.pair?.id == capturedPair.id {
+                    self.currentXMP = previous
+                }
+                self.pairXMPs[capturedPair.stem] = previous
+                self.errorMessage = "Failed to write XMP for \(capturedPair.stem): \(String(describing: error))"
+                Log.app.error("XMP write FAILED: \(capturedPair.stem, privacy: .public) — \(String(describing: error), privacy: .public)")
+            }
+        }
+    }
+
+    /// R toggles rating between -1 (reject) and nil (clear). Anything else
+    /// (existing star rating) is converted to rejected.
+    func toggleReject() {
+        let next: Int? = (currentXMP.rating == -1) ? nil : -1
+        setRating(next)
+    }
+
     func cycleDecoder() {
         guard pair != nil else { return }
         decoder = (decoder == .imageIO) ? .libRaw : .imageIO
