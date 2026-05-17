@@ -43,7 +43,6 @@ struct SidebarView: View {
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(white: 0.07))
         }
         .frame(width: Self.width)
         .background(Color(white: 0.10))
