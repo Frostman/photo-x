@@ -22,6 +22,12 @@ struct PhotoXApp: App {
         .windowResizability(.contentMinSize)
         .windowToolbarStyle(.unifiedCompact(showsTitle: false))
         .commands {
+            // Custom About panel: shows the full git-derived version including
+            // sha. macOS's default About panel would just show CFBundleShortVersionString
+            // ("0.86.0"), losing the commit identifier.
+            CommandGroup(replacing: .appInfo) {
+                Button("About PhotoX") { showAboutPanel() }
+            }
             CommandGroup(after: .appInfo) {
                 CheckForUpdatesView(controller: updater)
             }
@@ -93,10 +99,34 @@ struct PhotoXApp: App {
     private func menuLabel(for path: String) -> String {
         (path as NSString).abbreviatingWithTildeInPath
     }
+
+    private func showAboutPanel() {
+        let git = (Bundle.main.object(forInfoDictionaryKey: "GitDescribe") as? String) ?? ""
+        var options: [NSApplication.AboutPanelOptionKey: Any] = [:]
+        if !git.isEmpty {
+            // Replaces "Version X.Y.Z" / "X.Y.Z (build)" with the full
+            // git-derived identifier so the running build is unambiguous.
+            options[.applicationVersion] = git
+            options[.version] = ""
+        }
+        NSApplication.shared.orderFrontStandardAboutPanel(options: options)
+        NSApplication.shared.activate(ignoringOtherApps: true)
+    }
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
+    }
+
+    /// Maximize the main window to the screen's visible frame on first launch.
+    /// SwiftUI's WindowGroup picks a default size that's smaller than the
+    /// screen; for a culling viewer, the larger the canvas the better.
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        DispatchQueue.main.async {
+            guard let window = NSApplication.shared.windows.first(where: { $0.canBecomeMain }),
+                  let screen = window.screen ?? NSScreen.main else { return }
+            window.setFrame(screen.visibleFrame, display: true)
+        }
     }
 }

@@ -64,7 +64,7 @@ targets:
         SUFeedURL: https://raw.githubusercontent.com/Frostman/photo-x/master/docs/appcast.xml
         SUPublicEDKey: "MWNF/JmW7AQ0wjmzYowNL1NNcybTAAfRnTQO3nsjbHs="
         SUEnableAutomaticChecks: true
-        SUScheduledCheckInterval: 86400
+        SUScheduledCheckInterval: 900   # 15 minutes
         # Human-readable git-derived version. Default value used for ad-hoc
         # dev builds; scripts/release.sh overrides via xcodebuild GIT_DESCRIBE=…
         GitDescribe: $(GIT_DESCRIBE)

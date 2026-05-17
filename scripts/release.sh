@@ -153,11 +153,19 @@ codesign --force --sign - --options runtime --timestamp=none \
   --entitlements PhotoX/PhotoX.entitlements "$APP"
 
 # ── 6. DMG ──────────────────────────────────────────────────────────────────
+# Stage the .app alongside an /Applications symlink so the mounted DMG shows
+# both side-by-side and the user can drag PhotoX → Applications inside the
+# DMG window (standard macOS install affordance).
 DMG_NAME="PhotoX-${DESCRIBE}.dmg"
 DMG="build/$DMG_NAME"
-rm -f "$DMG"
+STAGE="build/dmg-stage"
+rm -rf "$STAGE" "$DMG"
+mkdir -p "$STAGE"
+cp -R "$APP" "$STAGE/"
+ln -s /Applications "$STAGE/Applications"
 echo "[release] dmg → $DMG"
-hdiutil create -volname "PhotoX" -srcfolder "$APP" -ov -format UDZO "$DMG" >/dev/null
+hdiutil create -volname "PhotoX" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
+rm -rf "$STAGE"
 SIZE=$(stat -f%z "$DMG")
 
 # ── 7. Sparkle EdDSA sign ───────────────────────────────────────────────────

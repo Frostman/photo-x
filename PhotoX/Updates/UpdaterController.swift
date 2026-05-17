@@ -27,6 +27,10 @@ final class UpdaterController {
             let value = change.newValue ?? false
             Task { @MainActor in self?.canCheckForUpdates = value }
         }
+        // Always poll on launch. SUScheduledCheckInterval (15 min) handles the
+        // recurring cadence; this guarantees an immediate check even if the
+        // last one happened seconds ago in a prior launch.
+        controller.updater.checkForUpdatesInBackground()
     }
 
     func checkForUpdates() {

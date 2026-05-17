@@ -6,8 +6,10 @@ struct CheckForUpdatesView: View {
     let controller: UpdaterController
 
     var body: some View {
-        Button("Check for Updates…") {
+        Button {
             controller.checkForUpdates()
+        } label: {
+            Label("Check for Updates…", systemImage: "arrow.clockwise.circle")
         }
         .disabled(!controller.canCheckForUpdates)
     }
