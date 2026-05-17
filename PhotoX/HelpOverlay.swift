@@ -11,7 +11,7 @@ struct HelpOverlay: View {
 
     private let sections: [(title: String, items: [Shortcut])] = [
         ("Scoring", [
-            .init(keys: "1 – 5", label: "Set star rating (writes to xmp:Rating in the .xmp sidecar)"),
+            .init(keys: "1 – 5", label: "Set star rating; same key again clears it (writes to xmp:Rating in the .xmp sidecar)"),
             .init(keys: "0", label: "Clear rating"),
             .init(keys: "R", label: "Reject (xmp:Rating = -1); R again un-rejects"),
         ]),

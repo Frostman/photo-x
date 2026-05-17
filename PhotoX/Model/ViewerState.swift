@@ -176,6 +176,12 @@ final class ViewerState {
         setRating(next)
     }
 
+    /// Pressing the same star key again clears the rating. From any other
+    /// state (different stars or reject), sets to the requested value.
+    func toggleRating(_ rating: Int) {
+        setRating(currentXMP.rating == rating ? nil : rating)
+    }
+
     func cycleDecoder() {
         guard pair != nil else { return }
         decoder = (decoder == .imageIO) ? .libRaw : .imageIO

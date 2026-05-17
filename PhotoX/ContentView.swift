@@ -69,12 +69,12 @@ struct ContentView: View {
             }
             return .handled
         }
-        // Scoring: 1-5 stars, 0 clears, R toggles reject
-        .onKeyPress(keys: ["1"]) { _ in state.setRating(1); return .handled }
-        .onKeyPress(keys: ["2"]) { _ in state.setRating(2); return .handled }
-        .onKeyPress(keys: ["3"]) { _ in state.setRating(3); return .handled }
-        .onKeyPress(keys: ["4"]) { _ in state.setRating(4); return .handled }
-        .onKeyPress(keys: ["5"]) { _ in state.setRating(5); return .handled }
+        // Scoring: 1-5 toggle stars, 0 clears, R toggles reject
+        .onKeyPress(keys: ["1"]) { _ in state.toggleRating(1); return .handled }
+        .onKeyPress(keys: ["2"]) { _ in state.toggleRating(2); return .handled }
+        .onKeyPress(keys: ["3"]) { _ in state.toggleRating(3); return .handled }
+        .onKeyPress(keys: ["4"]) { _ in state.toggleRating(4); return .handled }
+        .onKeyPress(keys: ["5"]) { _ in state.toggleRating(5); return .handled }
         .onKeyPress(keys: ["0"]) { _ in state.setRating(nil); return .handled }
         .onKeyPress(keys: ["r", "R"]) { _ in state.toggleReject(); return .handled }
         .onKeyPress(.leftArrow) {
