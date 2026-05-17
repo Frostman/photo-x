@@ -2,7 +2,6 @@ import SwiftUI
 
 struct DecisionsPanelView: View {
     @Bindable var state: ViewerState
-    @AppStorage(SettingsKey.autoAdvance) private var autoAdvance = SettingsKey.Defaults.autoAdvance
 
     private var xmp: XMPSidecar { state.currentXMP }
 
@@ -11,8 +10,6 @@ struct DecisionsPanelView: View {
             ratingRow
             rejectRow
             labelRow
-            Divider().padding(.vertical, 2)
-            autoAdvanceRow
         }
     }
 
@@ -95,21 +92,6 @@ struct DecisionsPanelView: View {
     }
 
     static let labelOrder = ["Red", "Yellow", "Green", "Blue", "Purple"]
-
-    @ViewBuilder
-    private var autoAdvanceRow: some View {
-        HStack(spacing: 6) {
-            Text("Auto-advance")
-                .font(.caption.smallCaps())
-                .foregroundStyle(.secondary)
-            Spacer()
-            Toggle("", isOn: $autoAdvance)
-                .toggleStyle(.switch)
-                .controlSize(.mini)
-                .labelsHidden()
-                .help("Jump to next pair after setting a rating, label, or reject")
-        }
-    }
 }
 
 struct StarsView: View {
