@@ -64,10 +64,11 @@ final class ViewerState {
     // Filmstrip
     var filmstripVisible: Bool
 
-    // Filters (session-only — not persisted)
-    var hideRejected: Bool = false
-    var hideRated: Bool = false
-    var hideUnrated: Bool = false
+    // Filters (session-only — not persisted). On = category is included
+    // in the filmstrip + navigation.
+    var showRejected: Bool = true
+    var showRated: Bool = true
+    var showUnrated: Bool = true
 
     enum RatingCategory: Sendable, Hashable {
         case rejected, rated, unrated
@@ -82,9 +83,9 @@ final class ViewerState {
 
     func isVisible(_ pair: PhotoPair) -> Bool {
         switch ratingCategory(for: pair.stem) {
-        case .rejected: return !hideRejected
-        case .rated:    return !hideRated
-        case .unrated:  return !hideUnrated
+        case .rejected: return showRejected
+        case .rated:    return showRated
+        case .unrated:  return showUnrated
         }
     }
 
@@ -103,14 +104,14 @@ final class ViewerState {
         return (rated, rejected, unrated, shoot.pairs.count)
     }
 
-    /// How many pairs the user is currently looking at (= total minus the
-    /// hidden categories). Derived from shootStats + hide-* toggles.
+    /// How many pairs the user is currently looking at (= sum of enabled
+    /// categories). Derived from shootStats + show-* toggles.
     var shownCount: Int {
         let s = shootStats
         var n = 0
-        if !hideRated    { n += s.rated }
-        if !hideRejected { n += s.rejected }
-        if !hideUnrated  { n += s.unrated }
+        if showRated    { n += s.rated }
+        if showRejected { n += s.rejected }
+        if showUnrated  { n += s.unrated }
         return n
     }
     var thumbnails: [String: CGImage] = [:]

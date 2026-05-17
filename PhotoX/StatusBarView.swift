@@ -51,24 +51,21 @@ struct StatusBarView: View {
     }
 
     private var toggles: some View {
-        HStack(spacing: 6) {
-            Text("Hide:")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Toggle(isOn: $state.hideRated) {
+        HStack(spacing: 4) {
+            Toggle(isOn: $state.showRated) {
                 Image(systemName: "star.fill")
             }
-            .help("Hide rated frames from filmstrip and navigation")
+            .help("Show / hide rated frames")
 
-            Toggle(isOn: $state.hideRejected) {
+            Toggle(isOn: $state.showRejected) {
                 Image(systemName: "xmark.circle.fill")
             }
-            .help("Hide rejected frames")
+            .help("Show / hide rejected frames")
 
-            Toggle(isOn: $state.hideUnrated) {
+            Toggle(isOn: $state.showUnrated) {
                 Image(systemName: "circle")
             }
-            .help("Hide unrated frames")
+            .help("Show / hide unrated frames")
         }
         .toggleStyle(.button)
         .controlSize(.small)
