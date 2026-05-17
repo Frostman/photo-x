@@ -179,7 +179,7 @@ SNIPPET="    <item>
       <sparkle:shortVersionString>$MARKETING</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
       <enclosure
-        url=\"https://github.com/frostman/photo-x/releases/download/$TAG/$DMG_NAME\"
+        url=\"https://github.com/Frostman/photo-x/releases/download/$TAG/$DMG_NAME\"
         type=\"application/octet-stream\"
         $SIG_BLOB />
     </item>"
@@ -218,5 +218,5 @@ gh release create "$TAG" \
 
 echo "[release] DONE"
 echo "[release] Tag:     $TAG"
-echo "[release] Release: https://github.com/frostman/photo-x/releases/tag/$TAG"
-echo "[release] Appcast: https://frostman.github.io/photo-x/appcast.xml (live within ~1 min)"
+echo "[release] Release: https://github.com/Frostman/photo-x/releases/tag/$TAG"
+echo "[release] Appcast: https://Frostman.github.io/photo-x/appcast.xml (live within ~1 min)"
