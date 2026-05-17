@@ -6,7 +6,9 @@ struct CanvasViewport: Hashable, Sendable {
     var offset: CGPoint = .zero // device-pixel pan offset; +x right, +y up
 
     static let identity = CanvasViewport()
-    static let minScale: CGFloat = 0.05
+    /// Floor at fit — the user can never zoom OUT below the fit-to-window size.
+    /// Pinching out at fit is a no-op.
+    static let minScale: CGFloat = 1.0
     static let maxScale: CGFloat = 64
 
     /// Scale that fits `imagePixelSize` inside `viewPixelSize` letterboxed.
