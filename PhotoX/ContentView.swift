@@ -127,6 +127,7 @@ struct ContentView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
+                        .padding(.horizontal, 28)
                         .help(url.path)
                 }
             }
