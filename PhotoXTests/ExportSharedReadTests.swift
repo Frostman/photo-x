@@ -167,6 +167,57 @@ final class ExportSharedReadTests: XCTestCase {
                       "no errors expected — source must not have been read at all; got: \(s2.errors)")
     }
 
+    func test_modeB_perFileReadDecision_skipUntouchedReadOnlyChanged() async throws {
+        // Two pairs (A, B) into two destinations. After a clean first run,
+        // chmod every source to 0o000 EXCEPT A.ARW. Then delete A.ARW
+        // from destB1 ONLY. On the second run:
+        //   - A.ARW: dB1 needs write (deleted there), dB2 still has match.
+        //     => writePlan non-empty → ONE read of A.ARW (succeeds).
+        //   - A.HIF / A.xmp / B.*: every destination has a match
+        //     => writePlan empty → NO read.
+        // If the short-circuit regresses, those unreadable files will be
+        // read and produce errors visible in the summaries.
+        let pA = try makePair("A", body: "alpha")
+        let pB = try makePair("B", body: "beta")
+        let dB1 = dest(at: destB1)
+        let dB2 = dest(at: destB2)
+        runner.startAll(pairs: [pA, pB], pairXMPs: [:],
+                        projectName: "P", destinations: [dB1, dB2],
+                        sharedRead: true, notifications: .silent)
+        await runner.waitForCompletion()
+
+        try FileManager.default.removeItem(at: destB1.appendingPathComponent("P/A.ARW"))
+
+        let fm = FileManager.default
+        let unreadable = [pA.heifURL,
+                          sourceDir.appendingPathComponent("A.xmp"),
+                          pB.rawURL, pB.heifURL,
+                          sourceDir.appendingPathComponent("B.xmp")]
+        for u in unreadable {
+            try fm.setAttributes([.posixPermissions: 0o000], ofItemAtPath: u.path)
+        }
+        defer {
+            for u in unreadable {
+                try? fm.setAttributes([.posixPermissions: 0o644], ofItemAtPath: u.path)
+            }
+        }
+
+        runner.startAll(pairs: [pA, pB], pairXMPs: [:],
+                        projectName: "P", destinations: [dB1, dB2],
+                        sharedRead: true, notifications: .silent)
+        await runner.waitForCompletion()
+
+        guard case .done(let s1) = runner.perDestination[dB1.id],
+              case .done(let s2) = runner.perDestination[dB2.id]
+        else { return XCTFail("expected both .done") }
+        XCTAssertEqual(s1.copied, 1, "only A.ARW should re-copy on dB1")
+        XCTAssertEqual(s1.skipped, 5, "everything else should skip without a read")
+        XCTAssertTrue(s1.errors.isEmpty, "skipped files must not be read: \(s1.errors)")
+        XCTAssertEqual(s2.copied, 0)
+        XCTAssertEqual(s2.skipped, 6)
+        XCTAssertTrue(s2.errors.isEmpty, "skipped files must not be read: \(s2.errors)")
+    }
+
     func test_modeB_preservesSourceMtime_atEveryDestination() async throws {
         let p = try makePair("X", body: "hello")
         let pastMtime = Date(timeIntervalSinceReferenceDate: 2_000_000)
