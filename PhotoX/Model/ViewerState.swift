@@ -221,7 +221,12 @@ final class ViewerState {
     }
     var thumbnails: [String: CGImage] = [:]
     var pairXMPs: [String: XMPSidecar] = [:]
+    /// Sony `SequenceNumber` per pair stem. Populated by the eager burst
+    /// loader; filter-independent (every loaded pair has its raw number).
+    /// Drives `burstIDByStem` for the filmstrip bracket overlay.
+    var pairSequenceNumber: [String: Int] = [:]
     private var shootMetadataTask: Task<Void, Never>?
+    private var burstMetadataTask: Task<Void, Never>?
     private var thumbnailRequestedFor: Set<String> = []
 
     let pipeline: DecodePipeline = DecodePipeline()
@@ -281,6 +286,8 @@ final class ViewerState {
         // 2) Cancel the trackable long-running tasks.
         shootMetadataTask?.cancel()
         shootMetadataTask = nil
+        burstMetadataTask?.cancel()
+        burstMetadataTask = nil
         afInflight.values.forEach { $0.cancel() }
         afInflight.removeAll()
 
@@ -290,6 +297,7 @@ final class ViewerState {
         thumbnailRequestedFor.removeAll()
         pairXMPs.removeAll()
         pairAFData.removeAll()
+        pairSequenceNumber.removeAll()
 
         // 4) Reset per-pair UI state.
         currentIndex = 0
@@ -318,6 +326,11 @@ final class ViewerState {
     /// SwiftUI doesn't re-render a 5000-item ForEach on every single update.
     /// Thumbnails are loaded LAZILY — see requestThumbnail(for:).
     private func kickOffShootMetadata() {
+        kickOffXMPMetadata()
+        kickOffBurstMetadata()
+    }
+
+    private func kickOffXMPMetadata() {
         guard let shoot else { return }
         shootMetadataTask?.cancel()
         let pairs = shoot.pairs
@@ -360,6 +373,121 @@ final class ViewerState {
             if pairXMPs[stem] == nil {
                 pairXMPs[stem] = xmp
             }
+        }
+    }
+
+    /// Eagerly read `Sony:SequenceNumber` for every ARW in the shoot, batched
+    /// 100 URLs per exiftool spawn. Flushed back to `pairSequenceNumber`
+    /// between batches so the filmstrip's bracket overlay starts appearing
+    /// as the user scrolls (rather than only when the whole shoot is done).
+    private static let burstChunkSize = 100
+
+    private func kickOffBurstMetadata() {
+        guard let shoot else { return }
+        burstMetadataTask?.cancel()
+        // Build per-pair (stem, url) pairs once on the main actor so the
+        // detached task doesn't need to touch any actor-isolated state.
+        let chunks: [[(stem: String, url: URL)]] = stride(
+            from: 0, to: shoot.pairs.count, by: Self.burstChunkSize
+        ).map { start in
+            let end = min(start + Self.burstChunkSize, shoot.pairs.count)
+            return shoot.pairs[start..<end].map { (stem: $0.stem, url: $0.rawURL) }
+        }
+        let gen = shootGeneration
+        burstMetadataTask = Task(priority: .utility) { [weak self] in
+            for chunk in chunks {
+                if Task.isCancelled { return }
+                let bySource = await Task.detached(priority: .utility) {
+                    ExifToolBurstLoader.read(chunk.map(\.url))
+                }.value
+                // Re-key by stem; exiftool returns paths as-given.
+                var byStem: [String: Int] = [:]
+                for entry in chunk {
+                    if let n = bySource[entry.url.path] { byStem[entry.stem] = n }
+                }
+                await self?.flushBurstBatch(byStem, generation: gen)
+            }
+        }
+    }
+
+    private func flushBurstBatch(_ items: [String: Int], generation: Int) {
+        guard shootGeneration == generation else { return }
+        for (stem, n) in items {
+            pairSequenceNumber[stem] = n
+        }
+    }
+
+    // MARK: - Burst detection (filmstrip bracket overlay)
+
+    /// Burst id per pair stem. Walks the FULL name-sorted pair list; pairs
+    /// whose `Sony:SequenceNumber` is one greater than the previous pair's
+    /// share an id. Frames without a sequence number break any in-progress
+    /// run. Computed against the whole shoot — never the filtered/sorted
+    /// view — so filter toggles can't break up a burst's grouping.
+    var burstIDByStem: [String: Int] {
+        guard let shoot else { return [:] }
+        var ids: [String: Int] = [:]
+        var nextID = 0
+        var prevSeq: Int? = nil
+        for pair in shoot.pairs {
+            guard let seq = pairSequenceNumber[pair.stem] else {
+                prevSeq = nil
+                continue
+            }
+            if let prev = prevSeq, seq == prev + 1 {
+                ids[pair.stem] = nextID
+            } else {
+                nextID += 1
+                ids[pair.stem] = nextID
+            }
+            prevSeq = seq
+        }
+        return ids
+    }
+
+    /// Total membership per burst id across the FULL shoot. Used to drop
+    /// singleton bursts (size 1) regardless of the current filter.
+    var burstSizesByID: [Int: Int] {
+        var sizes: [Int: Int] = [:]
+        for id in burstIDByStem.values { sizes[id, default: 0] += 1 }
+        return sizes
+    }
+
+    /// Where this pair sits in its burst, expressed as a top-edge bracket
+    /// segment for the filmstrip. The shape depends on whether the
+    /// immediate visible neighbours share its burst id — so a burst stays
+    /// visually grouped even when filters hide some of its frames.
+    enum BurstSegment: Sendable, Hashable {
+        case none      // no bracket here
+        case start     // left cap + bar to the right edge
+        case middle    // bar across the full width
+        case end       // bar from the left edge + right cap
+    }
+
+    /// Pure helper. `visible` is the filmstrip's display-order list (after
+    /// sort + filter). Returns `.none` unless sort == .name AND the pair
+    /// belongs to a multi-frame burst AND at least one VISIBLE neighbour
+    /// shares its burst id. Cheap enough to call once per visible
+    /// thumbnail per body re-eval.
+    func burstSegment(at index: Int, visible: [PhotoPair]) -> BurstSegment {
+        guard sortMode == .name else { return .none }
+        guard visible.indices.contains(index) else { return .none }
+        let ids = burstIDByStem
+        let sizes = burstSizesByID
+        guard let myID = ids[visible[index].stem],
+              (sizes[myID] ?? 0) >= 2 else { return .none }
+
+        func sharesBurst(_ otherIdx: Int) -> Bool {
+            guard visible.indices.contains(otherIdx) else { return false }
+            return ids[visible[otherIdx].stem] == myID
+        }
+        let leftMatches  = sharesBurst(index - 1)
+        let rightMatches = sharesBurst(index + 1)
+        switch (leftMatches, rightMatches) {
+        case (false, false): return .none      // lone visible burst member
+        case (false, true):  return .start
+        case (true,  true):  return .middle
+        case (true,  false): return .end
         }
     }
 

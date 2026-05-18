@@ -10,17 +10,30 @@ struct FilmstripView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 6) {
                     if state.shoot != nil {
-                        let visible = state.sortedPairs.enumerated().filter { state.isVisible($1) }
-                        ForEach(visible, id: \.element.id) { idx, pair in
+                        // Two parallel arrays: `visible` for display + bracket
+                        // adjacency, `visibleSortedIndices` to map each thumb
+                        // back to its position in state.sortedPairs (which is
+                        // what state.currentIndex and navigate(to:) use).
+                        let enumeratedVisible = state.sortedPairs.enumerated()
+                            .filter { state.isVisible($1) }
+                        let visible = enumeratedVisible.map(\.element)
+                        let visibleSortedIndices = enumeratedVisible.map(\.offset)
+                        let useBrackets = state.sortMode == .name
+                        ForEach(visible.indices, id: \.self) { vIdx in
+                            let pair = visible[vIdx]
+                            let sortedIdx = visibleSortedIndices[vIdx]
                             FilmstripThumbnailView(
                                 pair: pair,
-                                isSelected: idx == state.currentIndex,
+                                isSelected: sortedIdx == state.currentIndex,
                                 thumbnail: state.thumbnails[pair.stem],
                                 xmp: state.pairXMPs[pair.stem] ?? .empty,
-                                onTap: { state.navigate(to: idx) },
+                                burstSegment: useBrackets
+                                    ? state.burstSegment(at: vIdx, visible: visible)
+                                    : .none,
+                                onTap: { state.navigate(to: sortedIdx) },
                                 onAppear: { state.requestThumbnail(for: pair) }
                             )
-                            .id(idx)
+                            .id(sortedIdx)
                         }
                     }
                 }
@@ -49,6 +62,7 @@ struct FilmstripThumbnailView: View {
     let isSelected: Bool
     let thumbnail: CGImage?
     let xmp: XMPSidecar
+    let burstSegment: ViewerState.BurstSegment
     let onTap: () -> Void
     let onAppear: () -> Void
 
@@ -68,10 +82,78 @@ struct FilmstripThumbnailView: View {
                     .stroke(isSelected ? Color.green : Color.primary.opacity(0.12),
                             lineWidth: isSelected ? 3 : 1)
             )
+            .overlay(alignment: .top) { burstOverlay }
             .contentShape(Rectangle())
             .onTapGesture(perform: onTap)
             .onAppear(perform: onAppear)
             .help(pair.stem)
+    }
+
+    /// One slice of the top-edge bracket that joins a horizontal run of
+    /// burst-shot frames in the filmstrip. Drawn ABOVE the thumbnail (in
+    /// the gap between the filmstrip's top separator and the image) so it
+    /// doesn't compete with image content. .start = right-half bar + a
+    /// downward cap from the bar's left edge; .end mirrors that; .middle
+    /// is a full-width bar; .none renders nothing. Bar widths line up so
+    /// adjacent thumbnails' segments read as one continuous ⌐——¬ bracket.
+    ///
+    /// Layout math: 84-pt thumb sits in a 108-pt filmstrip with 6-pt
+    /// vertical padding, leaving 6 pt above the image. We use 4 pt for
+    /// the bar + 2 pt for the cap drop = 6 pt total, then offset the
+    /// whole overlay up by that amount so the cap's bottom touches the
+    /// thumbnail's top edge. Filmstrip height stays unchanged.
+    @ViewBuilder
+    private var burstOverlay: some View {
+        let barHeight: CGFloat = 4
+        let capDrop: CGFloat = 2
+        let totalHeight = barHeight + capDrop
+        // Half of the LazyHStack's 6-pt inter-thumb spacing. Each segment
+        // bleeds this much past its participating edge so adjacent
+        // thumbnails' bars meet at the midpoint of the gap.
+        let bleed: CGFloat = 3
+        switch burstSegment {
+        case .none:
+            EmptyView()
+        case .start:
+            HStack(spacing: 0) {
+                Spacer().frame(maxWidth: .infinity)
+                VStack(alignment: .leading, spacing: 0) {
+                    Rectangle()
+                        .fill(Color.accentColor)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: barHeight)
+                        .padding(.trailing, -bleed)   // bridge gap to next thumb
+                    Rectangle()
+                        .fill(Color.accentColor)
+                        .frame(width: barHeight, height: capDrop)
+                }
+            }
+            .offset(y: -totalHeight)
+        case .middle:
+            Rectangle()
+                .fill(Color.accentColor)
+                .frame(maxWidth: .infinity)
+                .frame(height: barHeight)
+                .padding(.horizontal, -bleed)         // bridge gaps on both sides
+                // Align the middle bar with start/end bars (which sit above
+                // their caps), not flush against the thumbnail.
+                .offset(y: -totalHeight)
+        case .end:
+            HStack(spacing: 0) {
+                VStack(alignment: .trailing, spacing: 0) {
+                    Rectangle()
+                        .fill(Color.accentColor)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: barHeight)
+                        .padding(.leading, -bleed)    // bridge gap to previous thumb
+                    Rectangle()
+                        .fill(Color.accentColor)
+                        .frame(width: barHeight, height: capDrop)
+                }
+                Spacer().frame(maxWidth: .infinity)
+            }
+            .offset(y: -totalHeight)
+        }
     }
 
     @ViewBuilder
