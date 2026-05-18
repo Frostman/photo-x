@@ -168,6 +168,18 @@ struct ContentView: View {
             handleDrop(urls)
         }
         .toolbar {
+            #if DEBUG
+            ToolbarItem(placement: .navigation) {
+                Text("DEV")
+                    .font(.caption2.bold().monospaced())
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.red, in: Capsule())
+                    .help("Debug build — separate bundle ID (dev.frostman.PhotoX.debug), Sparkle disabled, settings shared with production via AppDefaults")
+            }
+            #endif
+
             ToolbarItem(placement: .principal) {
                 // Always populate the principal slot — when it returns
                 // EmptyView, SwiftUI collapses the toolbar's three-region
