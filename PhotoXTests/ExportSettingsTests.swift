@@ -25,8 +25,17 @@ final class ExportSettingsTests: XCTestCase {
         let s = ExportSettings(defaults: defaults)
         XCTAssertEqual(s.projectName, "")
         XCTAssertTrue(s.destinations.isEmpty)
-        XCTAssertFalse(s.readOnceWriteMany)
+        XCTAssertTrue(s.readOnceWriteMany,
+                      "read-once / write-many is the default on")
         XCTAssertFalse(s.isValidForExport)
+    }
+
+    func test_readOnceWriteMany_explicitFalse_persistsAndIsRead() {
+        let s = ExportSettings(defaults: defaults)
+        s.readOnceWriteMany = false
+        let s2 = ExportSettings(defaults: defaults)
+        XCTAssertFalse(s2.readOnceWriteMany,
+                       "explicit false must override the default")
     }
 
     func test_destinationDefaults_areReasonable() {

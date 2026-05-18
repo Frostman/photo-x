@@ -68,6 +68,34 @@ final class ExportRunner {
     /// Per-destination state map. UUIDs come from `ExportSettings.Destination.id`.
     private(set) var perDestination: [UUID: DestinationState] = [:]
 
+    /// Aggregate progress across the CURRENT batch (one Run / one Export-all
+    /// invocation). Includes already-finished destinations + the running
+    /// one + the queued ones — so the toolbar pill shows true batch-wide
+    /// %/ETA rather than just the in-flight destination's slice.
+    /// Set when the batch starts; cleared when it finishes.
+    private(set) var batchProgress: BatchProgress?
+
+    struct BatchProgress: Sendable, Hashable {
+        var filesDone: Int        // copied + skipped across all dests
+        var filesTotal: Int
+        var bytesCopied: Int64
+        var bytesTotal: Int64
+        var startedAt: Date
+
+        var percent: Double {
+            guard bytesTotal > 0 else { return 0 }
+            return min(1.0, Double(bytesCopied) / Double(bytesTotal))
+        }
+
+        var eta: TimeInterval? {
+            let elapsed = Date().timeIntervalSince(startedAt)
+            guard elapsed > 0.5, bytesCopied > 0 else { return nil }
+            let rate = Double(bytesCopied) / elapsed
+            let remaining = Double(max(0, bytesTotal - bytesCopied))
+            return remaining / max(1, rate)
+        }
+    }
+
     var isRunning: Bool {
         perDestination.values.contains { state in
             if case .running = state { return true }
@@ -143,13 +171,27 @@ final class ExportRunner {
         notifications: ExportNotificationsAdapter = .live
     ) {
         guard !destinations.isEmpty else { return }
-        // Mark all queued upfront so the UI shows the line-up immediately.
         for dest in destinations {
             perDestination[dest.id] = .queued
             cancellationTokens[dest.id] = CancellationToken()
         }
         let task = Task { [weak self] in
             guard let self else { return }
+            // Compute batch totals off-main (planning stats every source file).
+            let plans: [ExportPlanner.Plan] = await Task.detached(priority: .userInitiated) {
+                destinations.map { dest in
+                    ExportPlanner.plan(pairs: pairs, pairXMPs: pairXMPs,
+                                       projectName: projectName, destination: dest)
+                }
+            }.value
+            let totalFiles = plans.reduce(0) { $0 + $1.fileOperations.count }
+            let totalBytes = plans.reduce(Int64(0)) { $0 + $1.totalBytes }
+            self.batchProgress = BatchProgress(
+                filesDone: 0, filesTotal: totalFiles,
+                bytesCopied: 0, bytesTotal: totalBytes,
+                startedAt: Date()
+            )
+
             let summaries: [(ExportSettings.Destination, Summary)]
             if sharedRead {
                 summaries = await self.runAllSharedRead(
@@ -164,15 +206,13 @@ final class ExportRunner {
                 )
             }
             if sharedRead {
-                // Mode B emits per-destination notifications at the end of
-                // the run as a single batch (after orphan removal completes),
-                // skipping the last one — same contract as Mode A.
                 for (idx, (dest, summary)) in summaries.enumerated() {
                     if idx == summaries.count - 1 { continue }
                     notifications.postDestinationComplete(dest, summary)
                 }
             }
             notifications.postAllComplete(summaries)
+            self.batchProgress = nil
         }
         runningTasks[Self.batchSentinelID] = task
     }
@@ -216,11 +256,23 @@ final class ExportRunner {
         cancellationTokens[destinationID] = CancellationToken()
         let task = Task { [weak self] in
             guard let self else { return }
+            // Per-row Run is a "batch" of one as far as the toolbar pill is
+            // concerned. Plan upfront so batchProgress has accurate totals.
+            let plan: ExportPlanner.Plan = await Task.detached(priority: .userInitiated) {
+                ExportPlanner.plan(pairs: pairs, pairXMPs: pairXMPs,
+                                   projectName: projectName, destination: destination)
+            }.value
+            self.batchProgress = BatchProgress(
+                filesDone: 0, filesTotal: plan.fileOperations.count,
+                bytesCopied: 0, bytesTotal: plan.totalBytes,
+                startedAt: Date()
+            )
             let summary = await self.runSingle(
                 destination: destination, pairs: pairs, pairXMPs: pairXMPs,
                 projectName: projectName
             )
             notifications.postDestinationComplete(destination, summary)
+            self.batchProgress = nil
         }
         runningTasks[destinationID] = task
     }
@@ -323,9 +375,11 @@ final class ExportRunner {
             switch outcome {
             case .skipped:
                 progress.skipped += 1
+                bumpBatch(filesDelta: 1, bytesDelta: 0)
             case .copied(let bytes):
                 progress.copied += 1
                 progress.bytesCopied += bytes
+                bumpBatch(filesDelta: 1, bytesDelta: bytes)
             case .errored(let msg):
                 errors.append(.init(file: op.sourceURL.lastPathComponent, message: msg))
             }
@@ -524,6 +578,7 @@ final class ExportRunner {
                         state.progress.currentFilename = result.sourceFilename
                         states[destID] = state
                         perDestination[destID] = .running(state.progress)
+                        bumpBatch(filesDelta: 1, bytesDelta: 0)
                     }
                 case .copied(let destID, let bytes):
                     if var state = states[destID] {
@@ -532,6 +587,7 @@ final class ExportRunner {
                         state.progress.currentFilename = result.sourceFilename
                         states[destID] = state
                         perDestination[destID] = .running(state.progress)
+                        bumpBatch(filesDelta: 1, bytesDelta: bytes)
                     }
                 case .errored(let destID, let msg):
                     if var state = states[destID] {
@@ -585,6 +641,14 @@ final class ExportRunner {
         case skipped
         case copied(bytes: Int64)
         case errored(String)
+    }
+
+    /// Increment the running batchProgress (no-op if none is active).
+    private func bumpBatch(filesDelta: Int, bytesDelta: Int64) {
+        guard var batch = batchProgress else { return }
+        batch.filesDone += filesDelta
+        batch.bytesCopied += bytesDelta
+        batchProgress = batch
     }
 
     /// Atomic copy. Writes the source to a sibling `.tmp` file in the

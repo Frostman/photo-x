@@ -71,7 +71,10 @@ final class ExportSettings {
     /// "Export all" reads each source file once and writes to every wanting
     /// destination in one pass. Helps on slow source media (SD card readers).
     /// Per-destination Run buttons always use the simple loop regardless.
-    var readOnceWriteMany: Bool = false {
+    /// Default: ON. Most exports benefit; the trade-off (slightly higher
+    /// peak memory while a single source file is in flight) is irrelevant
+    /// for typical RAW sizes.
+    var readOnceWriteMany: Bool = true {
         didSet { defaults.set(readOnceWriteMany, forKey: Self.readOnceKey) }
     }
 
@@ -89,7 +92,12 @@ final class ExportSettings {
            let decoded = try? JSONDecoder().decode([Destination].self, from: data) {
             self.destinations = decoded
         }
-        self.readOnceWriteMany = defaults.bool(forKey: Self.readOnceKey)
+        // bool(forKey:) returns false for missing keys, which would override
+        // the `true` default for users who've never touched the toggle.
+        // Use object(forKey:) so a missing key keeps the default.
+        if let stored = defaults.object(forKey: Self.readOnceKey) as? Bool {
+            self.readOnceWriteMany = stored
+        }
     }
 
     // MARK: - Project name

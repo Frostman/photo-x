@@ -18,8 +18,8 @@ struct ExportToolbarPill: View {
         Button {
             showSheet = true
         } label: {
-            if let overall = runner.overallProgress {
-                runningLabel(overall)
+            if let batch = runner.batchProgress {
+                runningLabel(batch)
             } else {
                 idleLabel
             }
@@ -35,7 +35,7 @@ struct ExportToolbarPill: View {
         Label("Export", systemImage: "arrow.up.doc")
     }
 
-    private func runningLabel(_ p: ExportRunner.Progress) -> some View {
+    private func runningLabel(_ p: ExportRunner.BatchProgress) -> some View {
         HStack(spacing: 6) {
             ProgressView(value: p.percent)
                 .progressViewStyle(.circular)

@@ -72,22 +72,22 @@ struct ExportSheet: View {
 
     private var footer: some View {
         HStack(spacing: 12) {
-            if runner.isRunning, let overall = runner.overallProgress {
+            if let batch = runner.batchProgress {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 8) {
-                        ProgressView(value: overall.percent)
+                        ProgressView(value: batch.percent)
                             .progressViewStyle(.linear)
                             .frame(maxWidth: 320)
-                        Text("\(Int(overall.percent * 100))%")
+                        Text("\(Int(batch.percent * 100))%")
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary)
-                        if let eta = overall.eta {
+                        if let eta = batch.eta {
                             Text("ETA \(formattedDuration(eta))")
                                 .font(.caption.monospacedDigit())
                                 .foregroundStyle(.secondary)
                         }
                     }
-                    Text("\(overall.copied + overall.skipped) / \(overall.total) files")
+                    Text("\(batch.filesDone) / \(batch.filesTotal) files across all destinations")
                         .font(.caption2.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
