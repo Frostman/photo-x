@@ -35,14 +35,34 @@ struct ExportToolbarPill: View {
         Label("Export", systemImage: "arrow.up.doc")
     }
 
-    private func runningLabel(_ p: ExportRunner.BatchProgress) -> some View {
-        HStack(spacing: 6) {
-            ProgressView(value: p.percent)
+    private func runningLabel(_ batch: ExportRunner.BatchProgress) -> some View {
+        // Mode A (sequential): percent + ETA describe the CURRENT
+        //   destination so the user sees movement within each dest; the
+        //   N/M label conveys which dest we're on. The batch-wide total
+        //   is shown in the sheet's footer.
+        // Mode B (shared-read): all destinations interleave per source
+        //   file, so the aggregate batch percent + ETA are the right
+        //   numbers to surface; no N/M makes sense.
+        let (pct, eta): (Double, TimeInterval?) = {
+            if batch.currentDestinationIndex != nil,
+               let current = runner.overallProgress {
+                return (current.percent, current.eta)
+            }
+            return (batch.percent, batch.eta)
+        }()
+
+        return HStack(spacing: 6) {
+            ProgressView(value: pct)
                 .progressViewStyle(.circular)
                 .controlSize(.mini)
-            Text("Export \(Int(p.percent * 100))%")
-                .font(.caption.monospacedDigit().bold())
-            if let eta = p.eta {
+            if let idx = batch.currentDestinationIndex, batch.destinationCount > 1 {
+                Text("Export \(idx)/\(batch.destinationCount) · \(Int(pct * 100))%")
+                    .font(.caption.monospacedDigit().bold())
+            } else {
+                Text("Export \(Int(pct * 100))%")
+                    .font(.caption.monospacedDigit().bold())
+            }
+            if let eta {
                 Text("· \(formattedDuration(eta))")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)

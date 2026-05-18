@@ -82,6 +82,14 @@ final class ExportRunner {
         var bytesTotal: Int64
         var startedAt: Date
 
+        /// Number of destinations in this batch (1 for per-row Run).
+        var destinationCount: Int = 1
+        /// 1-based index of the destination currently being processed.
+        /// Only meaningful for the sequential (Mode A) path; nil for the
+        /// shared-read (Mode B) path because all destinations advance in
+        /// lockstep there.
+        var currentDestinationIndex: Int?
+
         var percent: Double {
             guard bytesTotal > 0 else { return 0 }
             return min(1.0, Double(bytesCopied) / Double(bytesTotal))
@@ -189,7 +197,11 @@ final class ExportRunner {
             self.batchProgress = BatchProgress(
                 filesDone: 0, filesTotal: totalFiles,
                 bytesCopied: 0, bytesTotal: totalBytes,
-                startedAt: Date()
+                startedAt: Date(),
+                destinationCount: destinations.count,
+                // Mode A starts on destination 1; Mode B leaves this nil
+                // because all destinations interleave per source file.
+                currentDestinationIndex: sharedRead ? nil : 1
             )
 
             let summaries: [(ExportSettings.Destination, Summary)]
@@ -229,6 +241,11 @@ final class ExportRunner {
             if cancellationTokens[dest.id]?.isCancelled == true {
                 perDestination[dest.id] = .cancelled(.empty)
                 continue
+            }
+            // Reflect "destination N of M" in the toolbar pill.
+            if var batch = batchProgress {
+                batch.currentDestinationIndex = idx + 1
+                batchProgress = batch
             }
             let isLast = (idx == destinations.count - 1)
             let summary = await self.runSingle(
