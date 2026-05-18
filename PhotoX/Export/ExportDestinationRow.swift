@@ -216,32 +216,76 @@ struct ExportDestinationRow: View {
                     .foregroundStyle(.secondary)
             }
         case .done(let s):
+            // .done only fires when no errors occurred (any error promotes
+            // to .failed in the runner). Green ✓.
             HStack(spacing: 6) {
                 Label(
                     "Done · \(s.copied) copied · \(s.skipped) skipped"
-                    + (s.deleted > 0 ? " · \(s.deleted) deleted" : "")
-                    + (s.errors.isEmpty ? "" : " · \(s.errors.count) errors"),
+                    + (s.deleted > 0 ? " · \(s.deleted) deleted" : ""),
                     systemImage: "checkmark.circle.fill"
                 )
                 .font(.caption)
-                .foregroundStyle(s.errors.isEmpty ? Color.green : Color.orange)
+                .foregroundStyle(.green)
                 agoLabel(now: now)
             }
         case .cancelled(let s):
-            HStack(spacing: 6) {
-                Label(
-                    "Cancelled · \(s.copied) copied · \(s.skipped) skipped",
-                    systemImage: "stop.circle"
-                )
-                .font(.caption).foregroundStyle(.secondary)
-                agoLabel(now: now)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Label(
+                        "Cancelled · \(s.copied) copied · \(s.skipped) skipped",
+                        systemImage: "stop.circle"
+                    )
+                    .font(.caption).foregroundStyle(.orange)
+                    agoLabel(now: now)
+                }
+                errorList(s.errors)
             }
-        case .failed(let message, _):
-            HStack(spacing: 6) {
-                Label("Failed: \(message)", systemImage: "exclamationmark.triangle.fill")
+        case .failed(let message, let summary):
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Label(
+                        "Failed · \(message)" + summaryTail(summary),
+                        systemImage: "exclamationmark.triangle.fill"
+                    )
                     .font(.caption).foregroundStyle(.red)
-                agoLabel(now: now)
+                    agoLabel(now: now)
+                }
+                errorList(summary?.errors ?? [])
             }
+        }
+    }
+
+    /// "· N copied · M skipped" suffix when a partial summary is available
+    /// (e.g. the run made it past the first few files before erroring out).
+    private func summaryTail(_ summary: ExportRunner.Summary?) -> String {
+        guard let s = summary else { return "" }
+        return " · \(s.copied) copied · \(s.skipped) skipped"
+    }
+
+    /// Inline list of the first few file:message errors. Truncated at 3
+    /// rows with a "+ N more" footer to keep the row compact; hover the
+    /// last row to see the full tooltip.
+    @ViewBuilder
+    private func errorList(_ errors: [ExportRunner.Summary.ErrorEntry]) -> some View {
+        if !errors.isEmpty {
+            VStack(alignment: .leading, spacing: 1) {
+                ForEach(Array(errors.prefix(3).enumerated()), id: \.offset) { _, err in
+                    Text("\(err.file): \(err.message)")
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(Color.red.opacity(0.85))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .help("\(err.file): \(err.message)")
+                }
+                if errors.count > 3 {
+                    Text("…and \(errors.count - 3) more")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .help(errors.dropFirst(3).map { "\($0.file): \($0.message)" }
+                              .joined(separator: "\n"))
+                }
+            }
+            .padding(.leading, 18)   // align under the icon-bearing label above
         }
     }
 

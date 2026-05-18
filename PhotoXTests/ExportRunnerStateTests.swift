@@ -135,6 +135,85 @@ final class ExportRunnerStateTests: XCTestCase {
         XCTAssertNil(runner.overallProgress)
     }
 
+    func test_sleepAssertion_isHeldDuringRun_andReleasedAfter() async throws {
+        let p = try makePair("X")
+        let d = dest(at: destDirA)
+
+        XCTAssertFalse(runner.isPreventingSleep, "no assertion before start")
+
+        // The runner acquires the assertion synchronously in startOne so
+        // the moment this returns, isPreventingSleep must be true — no
+        // polling, no race.
+        runner.startOne(d.id, pairs: [p], pairXMPs: [:],
+                        projectName: "P", destination: d, notifications: .silent)
+        XCTAssertTrue(runner.isPreventingSleep,
+                      "assertion must be held the moment startOne returns")
+
+        await runner.waitForCompletion()
+        XCTAssertFalse(runner.isPreventingSleep,
+                       "assertion must be released after the batch finishes")
+    }
+
+    func test_sleepAssertion_isHeldAcrossMultipleDestinations() async throws {
+        let p = try makePair("X")
+        let d1 = dest(at: destDirA)
+        let d2 = dest(at: destDirB)
+        runner.startAll(pairs: [p], pairXMPs: [:],
+                        projectName: "P", destinations: [d1, d2],
+                        sharedRead: false, notifications: .silent)
+        XCTAssertTrue(runner.isPreventingSleep,
+                      "startAll must acquire the assertion synchronously too")
+        await runner.waitForCompletion()
+        XCTAssertFalse(runner.isPreventingSleep)
+    }
+
+    func test_sleepAssertion_isReleasedAfterCancelAll() async throws {
+        // Regression for "make sure to clean all sleep prevention on cancel
+        // or folder close". Folder-close routes through cancelAll() before
+        // closing the shoot (see ContentView.closeShootGuarded), so the
+        // cancelAll path is the canonical "release everything" guarantee.
+        let p = try makePair("X")
+        let d1 = dest(at: destDirA)
+        let d2 = dest(at: destDirB)
+        runner.startAll(pairs: [p], pairXMPs: [:],
+                        projectName: "P", destinations: [d1, d2],
+                        sharedRead: false, notifications: .silent)
+        XCTAssertTrue(runner.isPreventingSleep)
+        runner.cancelAll()
+        await runner.waitForCompletion()
+        XCTAssertFalse(runner.isPreventingSleep,
+                       "assertion must be released even when the batch was cancelled")
+    }
+
+    func test_sleepAssertion_isReleasedAfterCancelOne() async throws {
+        let p = try makePair("X")
+        let d = dest(at: destDirA)
+        runner.startOne(d.id, pairs: [p], pairXMPs: [:],
+                        projectName: "P", destination: d, notifications: .silent)
+        XCTAssertTrue(runner.isPreventingSleep)
+        runner.cancel(d.id)
+        await runner.waitForCompletion()
+        XCTAssertFalse(runner.isPreventingSleep,
+                       "cancel(_:) for the only running destination releases the assertion")
+    }
+
+    func test_sleepAssertion_isReleasedAfterMkdirFailure() async throws {
+        // Force the runner into the .failed code path by pointing at a
+        // destination path that can't possibly be created (a file, not a
+        // directory). The early-exit must still release the assertion.
+        let p = try makePair("X")
+        let bogus = sourceDir.appendingPathComponent("not-a-directory.txt")
+        try Data("blocked".utf8).write(to: bogus)   // path now refers to a file
+        let d = dest(at: bogus.appendingPathComponent("sub"))
+
+        runner.startOne(d.id, pairs: [p], pairXMPs: [:],
+                        projectName: "P", destination: d, notifications: .silent)
+        XCTAssertTrue(runner.isPreventingSleep)
+        await runner.waitForCompletion()
+        XCTAssertFalse(runner.isPreventingSleep,
+                       "assertion must be released even when the run failed at mkdir")
+    }
+
     func test_summary_recordsCopiedAndSkippedOnRerun() async throws {
         let p = try makePair("X")
         let d = dest(at: destDirA)

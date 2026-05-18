@@ -51,9 +51,11 @@ struct ExportToolbarPill: View {
     }
 
     private func finishedLabel(outcome: ExportRunner.BatchOutcome, ago: String) -> some View {
+        // Three-tone status: green = clean run, orange = user-cancelled
+        // (intentional, possibly partial), red = genuine failure.
         let (word, color): (String, Color) = switch outcome {
         case .done:      ("done",      .green)
-        case .cancelled: ("cancelled", .red)
+        case .cancelled: ("cancelled", .orange)
         case .failed:    ("failed",    .red)
         }
         return HStack(spacing: 4) {

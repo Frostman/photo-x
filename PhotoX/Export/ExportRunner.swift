@@ -163,6 +163,17 @@ final class ExportRunner {
     /// or trigger cancellation cleanly from tests.
     private var runningTasks: [UUID: Task<Void, Never>] = [:]
 
+    /// Foundation activity token that suppresses idle-system-sleep while a
+    /// batch is in flight. Acquired in startAll/startOne, released when the
+    /// batch finishes (clean exit, cancellation, or failure). On crash /
+    /// kill -9 / force-quit, powerd drops the underlying IOPMAssertion
+    /// automatically when our PID exits — no dangling state possible.
+    private var sleepAssertion: NSObjectProtocol?
+
+    /// Exposed for tests + diagnostics. True while we're actively asking
+    /// macOS to suppress idle sleep on behalf of an export.
+    var isPreventingSleep: Bool { sleepAssertion != nil }
+
     final class CancellationToken: @unchecked Sendable {
         private var _cancelled = false
         private let lock = NSLock()
@@ -205,6 +216,12 @@ final class ExportRunner {
             cancellationTokens[dest.id] = CancellationToken()
             perDestinationCompletedAt.removeValue(forKey: dest.id)
         }
+        // Acquire the idle-sleep assertion synchronously so any observer
+        // (UI / tests) sees `isPreventingSleep == true` the moment this
+        // method returns. If we deferred this into the Task body, there'd
+        // be a window where the user clicked Export, the run is queued,
+        // but the assertion hasn't been taken yet.
+        beginPreventingSleep(destinationCount: destinations.count)
         let task = Task { [weak self] in
             guard let self else { return }
             // Compute batch totals off-main (planning stats every source file).
@@ -242,6 +259,7 @@ final class ExportRunner {
             // single- and multi-destination runs alike.
             notifications.postAllComplete(summaries)
             self.batchProgress = nil
+            self.endPreventingSleep()
             self.lastBatchOutcome = self.summariseBatchOutcome(for: destinations)
             self.lastBatchCompletedAt = Date()
         }
@@ -289,6 +307,7 @@ final class ExportRunner {
         perDestinationCompletedAt.removeValue(forKey: destinationID)
         perDestination[destinationID] = .queued
         cancellationTokens[destinationID] = CancellationToken()
+        beginPreventingSleep(destinationCount: 1)
         let task = Task { [weak self] in
             guard let self else { return }
             // Per-row Run is a "batch" of one as far as the toolbar pill is
@@ -310,6 +329,7 @@ final class ExportRunner {
             // as Export-all (just a batch of one).
             notifications.postAllComplete([(destination, summary)])
             self.batchProgress = nil
+            self.endPreventingSleep()
             self.lastBatchOutcome = self.summariseBatchOutcome(for: [destination])
             self.lastBatchCompletedAt = Date()
         }
@@ -335,10 +355,17 @@ final class ExportRunner {
         return .done
     }
 
+    /// Flip every per-destination cancellation token. The runner's per-file
+    /// loop checks the token between files and bails. The sleep assertion
+    /// is released by the spawned Task once it winds down — typically within
+    /// a fraction of a second, but at most one full file-copy duration
+    /// (we let any in-flight copyItem finish so we don't leave a partial
+    /// file at the destination from a half-completed write).
     func cancelAll() {
         for token in cancellationTokens.values { token.cancel() }
     }
 
+    /// Same semantics as cancelAll() but scoped to a single destination.
     func cancel(_ destinationID: UUID) {
         cancellationTokens[destinationID]?.cancel()
     }
@@ -469,8 +496,13 @@ final class ExportRunner {
         )
         if token.isCancelled {
             perDestination[dest.id] = .cancelled(summary)
-        } else if !errors.isEmpty && progress.copied == 0 {
-            perDestination[dest.id] = .failed("All copies failed", summary)
+        } else if !errors.isEmpty {
+            // Any per-file error promotes the whole destination to .failed
+            // so the pill + row colour the run red rather than green. Some
+            // files may have copied successfully; their counts stay in the
+            // summary for the user to see what got through.
+            let detail = errors.count == 1 ? "1 file failed" : "\(errors.count) files failed"
+            perDestination[dest.id] = .failed(detail, summary)
         } else {
             perDestination[dest.id] = .done(summary)
         }
@@ -696,8 +728,10 @@ final class ExportRunner {
             )
             if state.token.isCancelled {
                 perDestination[dest.id] = .cancelled(summary)
-            } else if !state.errors.isEmpty && state.progress.copied == 0 {
-                perDestination[dest.id] = .failed("All copies failed", summary)
+            } else if !state.errors.isEmpty {
+                let detail = state.errors.count == 1
+                    ? "1 file failed" : "\(state.errors.count) files failed"
+                perDestination[dest.id] = .failed(detail, summary)
             } else {
                 perDestination[dest.id] = .done(summary)
             }
@@ -712,6 +746,29 @@ final class ExportRunner {
         case skipped
         case copied(bytes: Int64)
         case errored(String)
+    }
+
+    /// Acquire macOS's idle-sleep suppression for the duration of a batch.
+    /// Idempotent — repeated calls (e.g. nested startOne while startAll is
+    /// active) are a no-op. The reason string surfaces in
+    /// `pmset -g assertions` so the user can audit who's keeping the
+    /// machine awake.
+    private func beginPreventingSleep(destinationCount: Int) {
+        guard sleepAssertion == nil else { return }
+        let suffix = destinationCount == 1 ? "" : "s"
+        sleepAssertion = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiated, .idleSystemSleepDisabled, .suddenTerminationDisabled],
+            reason: "PhotoX is exporting to \(destinationCount) destination\(suffix)"
+        )
+    }
+
+    /// Release the idle-sleep suppression. Idempotent — safe to call when
+    /// no assertion is held. `powerd` would clean up at process exit
+    /// anyway; this is just the polite path.
+    private func endPreventingSleep() {
+        guard let token = sleepAssertion else { return }
+        ProcessInfo.processInfo.endActivity(token)
+        sleepAssertion = nil
     }
 
     /// Increment the running batchProgress (no-op if none is active).
