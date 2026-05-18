@@ -121,6 +121,52 @@ final class ExportSharedReadTests: XCTestCase {
         XCTAssertEqual(s2.skipped, 3)
     }
 
+    func test_modeB_doesNotReadSource_whenAllDestinationsWouldSkip() async throws {
+        // First run: copy a pair into both destinations normally.
+        let p = try makePair("X", body: "hello")
+        let dB1 = dest(at: destB1)
+        let dB2 = dest(at: destB2)
+        runner.startAll(pairs: [p], pairXMPs: [:],
+                        projectName: "P", destinations: [dB1, dB2],
+                        sharedRead: true, notifications: .silent)
+        await runner.waitForCompletion()
+
+        // Make every source file UNREADABLE (chmod 0) so any attempted
+        // read would error. The skip-first logic must short-circuit
+        // before issuing Data(contentsOf:), or the test fails.
+        let sourceFiles = [p.rawURL, p.heifURL,
+                           sourceDir.appendingPathComponent("X.xmp")]
+        let fm = FileManager.default
+        for u in sourceFiles {
+            try fm.setAttributes([.posixPermissions: 0o000], ofItemAtPath: u.path)
+        }
+        defer {
+            // Restore permissions so the tmp dir can be cleaned in tearDown.
+            for u in sourceFiles {
+                try? fm.setAttributes([.posixPermissions: 0o644], ofItemAtPath: u.path)
+            }
+        }
+
+        // Re-run — every destination already has matching files; planner
+        // should decide .skip everywhere and never attempt to read.
+        runner.startAll(pairs: [p], pairXMPs: [:],
+                        projectName: "P", destinations: [dB1, dB2],
+                        sharedRead: true, notifications: .silent)
+        await runner.waitForCompletion()
+
+        guard case .done(let s1) = runner.perDestination[dB1.id],
+              case .done(let s2) = runner.perDestination[dB2.id]
+        else { return XCTFail("expected both to be .done") }
+        XCTAssertEqual(s1.copied, 0)
+        XCTAssertEqual(s1.skipped, 3, "all three files must skip without a read")
+        XCTAssertTrue(s1.errors.isEmpty,
+                      "no errors expected — source must not have been read at all; got: \(s1.errors)")
+        XCTAssertEqual(s2.copied, 0)
+        XCTAssertEqual(s2.skipped, 3)
+        XCTAssertTrue(s2.errors.isEmpty,
+                      "no errors expected — source must not have been read at all; got: \(s2.errors)")
+    }
+
     func test_modeB_orphanPhase_runsPerDestinationStill() async throws {
         let pA = try makePair("A", body: "a")
         let pB = try makePair("B", body: "b")
