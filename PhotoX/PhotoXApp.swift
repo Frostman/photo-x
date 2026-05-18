@@ -141,4 +141,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.setFrame(screen.visibleFrame, display: true)
         }
     }
+
+    /// Block quit while an export is in progress. The destructive button
+    /// styling + non-default position prevents accidental dismissal —
+    /// quitting always cancels in-flight copies and leaves partial files at
+    /// destinations, so we make the user confirm explicitly.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard ExportRunner.shared.isRunning else { return .terminateNow }
+        let alert = NSAlert()
+        alert.messageText = "Export in progress"
+        alert.informativeText = "An export to one or more destinations is still running. Quitting now will cancel it and leave partially-copied files at the destinations."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Stay")              // first = default = ⏎
+        let cancelBtn = alert.addButton(withTitle: "Cancel exports and quit")
+        cancelBtn.hasDestructiveAction = true
+        let response = alert.runModal()
+        if response == .alertSecondButtonReturn {
+            ExportRunner.shared.cancelAll()
+            return .terminateNow
+        }
+        return .terminateCancel
+    }
 }

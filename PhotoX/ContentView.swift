@@ -1,6 +1,21 @@
 import AppKit
 import SwiftUI
 
+extension View {
+    /// Conditionally apply a chain of modifiers. The transform is only
+    /// invoked when `condition` is true; when false, the original view is
+    /// returned unchanged. Used to detach the .onKeyPress chain entirely
+    /// while a modal sheet is up — otherwise shortcuts intercept input
+    /// before sheet controls see it, regardless of focus state.
+    @ViewBuilder
+    func conditional<V: View>(
+        _ condition: Bool,
+        transform: (Self) -> V
+    ) -> some View {
+        if condition { transform(self) } else { self }
+    }
+}
+
 struct ContentView: View {
     @Bindable var state: ViewerState
     @FocusState private var canvasFocused: Bool
@@ -11,6 +26,8 @@ struct ContentView: View {
     @State private var favorites = FavoriteShoots.shared
     @State private var folderStats = FolderStats()
     @State private var favoriteDropTarget: String? = nil
+    @State private var showExportSheet: Bool = false
+    @State private var exportRunner = ExportRunner.shared
     @Environment(\.openSettings) private var openSettings
 
     private var appearance: AppearanceMode {
@@ -46,88 +63,106 @@ struct ContentView: View {
             }
         }
         .frame(minWidth: 900, minHeight: 600)
-        .focusable()
+        .sheet(isPresented: $showExportSheet) {
+            ExportSheet(state: state, isPresented: $showExportSheet)
+        }
+        // When the export sheet is up, make ContentView completely
+        // non-focusable so all key events are routed exclusively to the
+        // sheet's controls. Just toggling canvasFocused to false isn't
+        // enough — SwiftUI still keeps a focusable ContentView in the
+        // responder chain, and its .onKeyPress modifiers intercept shortcut
+        // keys before the TextField sees them.
+        .focusable(!showExportSheet)
         .focusEffectDisabled()
         .focused($canvasFocused)
         .onAppear { canvasFocused = true }
-        .onKeyPress(keys: ["z", "Z"]) { _ in
-            state.toggleRequestedVariant()
-            return .handled
+        .onChange(of: showExportSheet) { _, isShowing in
+            canvasFocused = !isShowing
         }
-        .onKeyPress(keys: ["x", "X"]) { _ in
-            state.setViewportToFit()
-            return .handled
-        }
-        .onKeyPress(keys: ["d", "D"]) { _ in
-            state.cycleDecoder()
-            return .handled
-        }
-        .onKeyPress(keys: ["c", "C"]) { _ in
-            state.toggleClipping()
-            return .handled
-        }
-        .onKeyPress(keys: ["f", "F"]) { _ in
-            state.togglePeaking()
-            return .handled
-        }
-        .onKeyPress(keys: ["a", "A"]) { _ in
-            state.toggleAFOverlay()
-            return .handled
-        }
-        .onKeyPress(keys: ["b", "B"]) { _ in
-            withAnimation(.easeInOut(duration: 0.15)) {
-                state.toggleSidebar()
-            }
-            return .handled
-        }
-        .onKeyPress(keys: ["t", "T"]) { _ in
-            withAnimation(.easeInOut(duration: 0.15)) {
-                state.toggleFilmstrip()
-            }
-            return .handled
-        }
-        // Scoring. SwiftUI's onKeyPress matches against the TYPED character on
-        // macOS, so Shift+1 arrives as "!" (not "1") — we register both forms.
-        .onKeyPress(keys: ["1"]) { _ in state.toggleRating(1); return .handled }
-        .onKeyPress(keys: ["2"]) { _ in state.toggleRating(2); return .handled }
-        .onKeyPress(keys: ["3"]) { _ in state.toggleRating(3); return .handled }
-        .onKeyPress(keys: ["4"]) { _ in state.toggleRating(4); return .handled }
-        .onKeyPress(keys: ["5"]) { _ in state.toggleRating(5); return .handled }
-        .onKeyPress(keys: ["!"]) { _ in state.toggleLabel("Red"); return .handled }
-        .onKeyPress(keys: ["@"]) { _ in state.toggleLabel("Yellow"); return .handled }
-        .onKeyPress(keys: ["#"]) { _ in state.toggleLabel("Green"); return .handled }
-        .onKeyPress(keys: ["$"]) { _ in state.toggleLabel("Blue"); return .handled }
-        .onKeyPress(keys: ["%"]) { _ in state.toggleLabel("Purple"); return .handled }
-        .onKeyPress(keys: ["0"]) { _ in state.setRating(nil); return .handled }
-        .onKeyPress(keys: ["r", "R"]) { _ in state.toggleReject(); return .handled }
-        .onKeyPress(.leftArrow, phases: [.down, .repeat]) { press in
-            PerfTracker.begin("← key")
-            let step = press.modifiers.contains(.option) ? 10 : 1
-            state.navigate(by: -step)
-            return .handled
-        }
-        .onKeyPress(.rightArrow, phases: [.down, .repeat]) { press in
-            PerfTracker.begin("→ key")
-            let step = press.modifiers.contains(.option) ? 10 : 1
-            state.navigate(by: step)
-            return .handled
-        }
-        .onKeyPress(.home) {
-            state.firstPair()
-            return .handled
-        }
-        .onKeyPress(.end) {
-            state.lastPair()
-            return .handled
-        }
-        .onKeyPress(KeyEquivalent("?")) {
-            withAnimation(.easeInOut(duration: 0.12)) { showHelp.toggle() }
-            return .handled
-        }
-        .onKeyPress(.escape) {
-            guard showHelp else { return .ignored }
-            withAnimation(.easeInOut(duration: 0.12)) { showHelp = false }
-            return .handled
+        // Detach the whole shortcut chain while the sheet is up — otherwise
+        // .onKeyPress modifiers intercept everything before sheet controls
+        // (TextField, etc.) get a chance.
+        .conditional(!showExportSheet) { view in
+            view
+                .onKeyPress(keys: ["z", "Z"]) { _ in
+                    state.toggleRequestedVariant()
+                    return .handled
+                }
+                .onKeyPress(keys: ["x", "X"]) { _ in
+                    state.setViewportToFit()
+                    return .handled
+                }
+                .onKeyPress(keys: ["d", "D"]) { _ in
+                    state.cycleDecoder()
+                    return .handled
+                }
+                .onKeyPress(keys: ["c", "C"]) { _ in
+                    state.toggleClipping()
+                    return .handled
+                }
+                .onKeyPress(keys: ["f", "F"]) { _ in
+                    state.togglePeaking()
+                    return .handled
+                }
+                .onKeyPress(keys: ["a", "A"]) { _ in
+                    state.toggleAFOverlay()
+                    return .handled
+                }
+                .onKeyPress(keys: ["b", "B"]) { _ in
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        state.toggleSidebar()
+                    }
+                    return .handled
+                }
+                .onKeyPress(keys: ["t", "T"]) { _ in
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        state.toggleFilmstrip()
+                    }
+                    return .handled
+                }
+                // Scoring. SwiftUI's onKeyPress matches against the TYPED character on
+                // macOS, so Shift+1 arrives as "!" (not "1") — we register both forms.
+                .onKeyPress(keys: ["1"]) { _ in state.toggleRating(1); return .handled }
+                .onKeyPress(keys: ["2"]) { _ in state.toggleRating(2); return .handled }
+                .onKeyPress(keys: ["3"]) { _ in state.toggleRating(3); return .handled }
+                .onKeyPress(keys: ["4"]) { _ in state.toggleRating(4); return .handled }
+                .onKeyPress(keys: ["5"]) { _ in state.toggleRating(5); return .handled }
+                .onKeyPress(keys: ["!"]) { _ in state.toggleLabel("Red"); return .handled }
+                .onKeyPress(keys: ["@"]) { _ in state.toggleLabel("Yellow"); return .handled }
+                .onKeyPress(keys: ["#"]) { _ in state.toggleLabel("Green"); return .handled }
+                .onKeyPress(keys: ["$"]) { _ in state.toggleLabel("Blue"); return .handled }
+                .onKeyPress(keys: ["%"]) { _ in state.toggleLabel("Purple"); return .handled }
+                .onKeyPress(keys: ["0"]) { _ in state.setRating(nil); return .handled }
+                .onKeyPress(keys: ["r", "R"]) { _ in state.toggleReject(); return .handled }
+                .onKeyPress(.leftArrow, phases: [.down, .repeat]) { press in
+                    PerfTracker.begin("← key")
+                    let step = press.modifiers.contains(.option) ? 10 : 1
+                    state.navigate(by: -step)
+                    return .handled
+                }
+                .onKeyPress(.rightArrow, phases: [.down, .repeat]) { press in
+                    PerfTracker.begin("→ key")
+                    let step = press.modifiers.contains(.option) ? 10 : 1
+                    state.navigate(by: step)
+                    return .handled
+                }
+                .onKeyPress(.home) {
+                    state.firstPair()
+                    return .handled
+                }
+                .onKeyPress(.end) {
+                    state.lastPair()
+                    return .handled
+                }
+                .onKeyPress(KeyEquivalent("?")) {
+                    withAnimation(.easeInOut(duration: 0.12)) { showHelp.toggle() }
+                    return .handled
+                }
+                .onKeyPress(.escape) {
+                    guard showHelp else { return .ignored }
+                    withAnimation(.easeInOut(duration: 0.12)) { showHelp = false }
+                    return .handled
+                }
         }
         .dropDestination(for: URL.self) { urls, _ in
             handleDrop(urls)
@@ -161,6 +196,16 @@ struct ContentView: View {
                 .help("Open another folder (⌘O)")
             }
 
+            // Export pill is the leftmost primaryAction so it visually sits
+            // ahead of the rest of the right cluster (Open/Close/theme/…).
+            // Stays visible while an export is running even after the user
+            // closes the shoot.
+            if state.shoot != nil || exportRunner.isRunning {
+                ToolbarItem(placement: .primaryAction) {
+                    ExportToolbarPill(state: state, showSheet: $showExportSheet)
+                }
+            }
+
             ToolbarItem(placement: .primaryAction) {
                 Button {
                     openWithPanel()
@@ -181,7 +226,10 @@ struct ContentView: View {
                     }
                     .controlSize(.small)
                     .padding(.horizontal, 5)
-                    .help("Close the current shoot and return to the starter screen")
+                    .disabled(exportRunner.isRunning)
+                    .help(exportRunner.isRunning
+                          ? "Cannot close while an export is running"
+                          : "Close the current shoot and return to the starter screen")
                 }
             }
 
