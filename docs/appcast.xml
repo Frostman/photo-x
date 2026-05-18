@@ -93,6 +93,17 @@
         type="application/octet-stream"
         sparkle:edSignature="tPApqkxFOndZPJEPERb1hdk9yxBuDQQXT/4jD1TfVsrtOyuw9diehkC53PGs9yM6ypHoVRgYSNg5PC+sN74zAw==" length="10791557" />
     </item>
+    <item>
+      <title>v0.113.0-f5bc21814</title>
+      <pubDate>Sun, 17 May 2026 17:38:03 -0700</pubDate>
+      <sparkle:version>113</sparkle:version>
+      <sparkle:shortVersionString>0.113.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <enclosure
+        url="https://github.com/Frostman/photo-x/releases/download/v0.113.0/PhotoX-v0.113.0-f5bc21814.dmg"
+        type="application/octet-stream"
+        sparkle:edSignature="b03H/HZv77LP6DK2rm4FrKn6Q00MbbEOZ0x2gG3yPGxqUGth57noRjZD9GeNI//ufKj7Zqsk3uabD5v/5/qQDA==" length="10790571" />
+    </item>
     <!-- scripts/release.sh splices new <item> entries here, just before </channel>. -->
   </channel>
 </rss>
