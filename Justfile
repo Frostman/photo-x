@@ -19,6 +19,21 @@ dev:
     echo "==> Regenerate .xcodeproj from project.yml"
     xcodegen
 
+    # Mirror scripts/release.sh's version derivation so dev builds carry a
+    # real, git-derived version (CFBundleShortVersionString, CFBundleVersion,
+    # GIT_DESCRIBE). The -dev suffix makes the About box unambiguous: even a
+    # clean-tree dev artifact reads "v0.X.0-<sha>-dev" so it can never be
+    # mistaken for a release.
+    echo "==> Derive version from git"
+    COMMITS=$(git rev-list --count HEAD)
+    SHA9=$(git rev-parse --short=9 HEAD)
+    DIRTY=""
+    [ -n "$(git status --porcelain)" ] && DIRTY="-dirty"
+    MARKETING="0.${COMMITS}.0"
+    BUILD="${COMMITS}"
+    DESCRIBE="v${MARKETING}-${SHA9}${DIRTY}-dev"
+    echo "    $DESCRIBE"
+
     echo "==> Resolve Debug build path"
     BUILD_DIR="$(xcodebuild -scheme "$SCHEME" -configuration "$CONFIG" -destination "$DEST" \
         -showBuildSettings 2>/dev/null \
@@ -43,7 +58,10 @@ dev:
     rm -rf "$APP_PATH"
 
     echo "==> Build Debug"
-    xcodebuild -scheme "$SCHEME" -configuration "$CONFIG" -destination "$DEST" -quiet build
+    xcodebuild -scheme "$SCHEME" -configuration "$CONFIG" -destination "$DEST" -quiet build \
+        MARKETING_VERSION="$MARKETING" \
+        CURRENT_PROJECT_VERSION="$BUILD" \
+        GIT_DESCRIBE="$DESCRIBE"
 
     if [ ! -x "$EXE_PATH" ]; then
         echo "Error: build did not produce $EXE_PATH" >&2
