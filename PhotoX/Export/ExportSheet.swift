@@ -210,8 +210,12 @@ struct ExportSheet: View {
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
+        // Let the user create a new folder inline (the picker grows a
+        // "New Folder" button in its toolbar). Without this, they'd have
+        // to bounce out to Finder, create the folder, then come back.
+        panel.canCreateDirectories = true
         panel.prompt = "Choose"
-        panel.message = "Select a destination folder for exports"
+        panel.message = "Select or create a destination folder for exports"
         if panel.runModal() == .OK, let url = panel.url {
             settings.add(path: url.path)
         }
