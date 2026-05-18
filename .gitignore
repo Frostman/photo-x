@@ -30,6 +30,7 @@ Package.resolved
 
 # Sample shoot data (kept locally, never committed)
 sample/
+sample*/
 
 # Bootstrap-materialised vendored deps (regenerate via scripts/bootstrap.sh)
 /ThirdParty/
