@@ -43,4 +43,21 @@ final class FavoriteShoots {
     func contains(_ path: String) -> Bool {
         paths.contains(path)
     }
+
+    /// Reorder by moving `path` to land directly before `targetPath`.
+    /// No-op if either path is missing or they're identical. Persists the
+    /// new order to UserDefaults.
+    func move(_ path: String, before targetPath: String) {
+        guard let from = paths.firstIndex(of: path),
+              let to = paths.firstIndex(of: targetPath),
+              from != to else { return }
+        var next = paths
+        let element = next.remove(at: from)
+        // After removal at `from`, indices after `from` shift down by one;
+        // indices before `from` are unchanged.
+        let insertAt = from < to ? to - 1 : to
+        next.insert(element, at: insertAt)
+        paths = next
+        defaults.set(next, forKey: key)
+    }
 }

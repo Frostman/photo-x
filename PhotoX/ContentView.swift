@@ -9,6 +9,7 @@ struct ContentView: View {
     @AppStorage(SettingsKey.appearance) private var appearanceRaw = SettingsKey.Defaults.appearance
     @State private var recents = RecentShoots.shared
     @State private var favorites = FavoriteShoots.shared
+    @State private var favoriteDropTarget: String? = nil
     @Environment(\.openSettings) private var openSettings
 
     private var appearance: AppearanceMode {
@@ -343,29 +344,95 @@ struct ContentView: View {
     private var favoritesSection: some View {
         section(title: "Favorites") {
             ForEach(favorites.paths, id: \.self) { path in
-                pathRow(path) {
-                    rowButton(systemImage: "xmark", tint: .secondary,
-                              help: "Remove from favorites") {
-                        favorites.remove(path)
+                pathRow(
+                    path,
+                    leading: { favoriteDragHandle(for: path) },
+                    trailing: {
+                        rowButton(systemImage: "xmark", tint: .secondary,
+                                  help: "Remove from favorites") {
+                            favorites.remove(path)
+                        }
+                    }
+                )
+                // Insertion indicator is an OVERLAY, not a sibling above the
+                // row, so the row's bounds don't shift when the user hovers a
+                // drop target. A shifting bounds means the cursor can end up
+                // outside the drop destination at the moment of release and
+                // SwiftUI silently ignores the drop until you click again.
+                .overlay(alignment: .top) {
+                    if favoriteDropTarget == path {
+                        Capsule()
+                            .fill(Color.accentColor)
+                            .frame(height: 3)
+                            .padding(.horizontal, -2)
+                            .offset(y: -3)
+                            .transition(.opacity)
                     }
                 }
+                .dropDestination(
+                    for: String.self,
+                    action: { dropped, _ in
+                        guard let source = dropped.first, source != path else { return false }
+                        favorites.move(source, before: path)
+                        favoriteDropTarget = nil
+                        return true
+                    },
+                    isTargeted: { isTargeted in
+                        withAnimation(.easeInOut(duration: 0.12)) {
+                            if isTargeted {
+                                favoriteDropTarget = path
+                            } else if favoriteDropTarget == path {
+                                favoriteDropTarget = nil
+                            }
+                        }
+                    }
+                )
             }
         }
     }
 
+    /// Grip icon. Only this is draggable; the rest of the row stays a normal
+    /// path button so the visual doesn't suggest "drop a file into this folder".
+    private func favoriteDragHandle(for path: String) -> some View {
+        Image(systemName: "line.3.horizontal")
+            .font(.caption.weight(.medium))
+            .foregroundStyle(.secondary)
+            .frame(width: 18, height: 20)
+            .contentShape(Rectangle())
+            .help("Drag to rearrange")
+            .draggable(path) {
+                HStack(spacing: 6) {
+                    Image(systemName: "folder")
+                        .foregroundStyle(.secondary)
+                    Text((path as NSString).abbreviatingWithTildeInPath)
+                        .font(.callout.monospaced())
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
+            }
+    }
+
+
     private var recentsSection: some View {
         section(title: "Recent") {
             ForEach(visibleRecents, id: \.self) { path in
-                pathRow(path) {
-                    rowButton(systemImage: "star", tint: .secondary,
-                              help: "Add to favorites") {
-                        favorites.add(path)
+                pathRow(
+                    path,
+                    // Empty leading slot the same width as the favorites'
+                    // drag handle so folder icons line up across sections.
+                    leading: { Color.clear.frame(width: 18, height: 20) },
+                    trailing: {
+                        rowButton(systemImage: "star", tint: .secondary,
+                                  help: "Add to favorites") {
+                            favorites.add(path)
+                        }
+                        rowButton(systemImage: "xmark", tint: .secondary,
+                                  help: "Remove from recent") {
+                            recents.remove(path)
+                        }
                     }
-                    rowButton(systemImage: "xmark", tint: .secondary,
-                              help: "Remove from recent") {
-                        recents.remove(path)
-                    }
-                }
+                )
             }
         }
     }
@@ -386,13 +453,16 @@ struct ContentView: View {
         .frame(maxWidth: 520, alignment: .leading)
     }
 
-    /// Path row: clickable folder + path on the left, caller-supplied
-    /// trailing buttons (favorite / remove) on the right.
+    /// Path row: optional caller-supplied leading content (drag handle for
+    /// favorites), clickable folder + path in the middle, trailing buttons.
     @ViewBuilder
-    private func pathRow<Trailing: View>(
-        _ path: String, @ViewBuilder trailing: () -> Trailing
+    private func pathRow<Leading: View, Trailing: View>(
+        _ path: String,
+        @ViewBuilder leading: () -> Leading = { EmptyView() },
+        @ViewBuilder trailing: () -> Trailing
     ) -> some View {
         HStack(spacing: 6) {
+            leading()
             Button {
                 openPath(path)
             } label: {
