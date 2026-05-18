@@ -9,6 +9,7 @@ struct ContentView: View {
     @AppStorage(SettingsKey.appearance) private var appearanceRaw = SettingsKey.Defaults.appearance
     @State private var recents = RecentShoots.shared
     @State private var favorites = FavoriteShoots.shared
+    @State private var folderStats = FolderStats()
     @State private var favoriteDropTarget: String? = nil
     @Environment(\.openSettings) private var openSettings
 
@@ -328,6 +329,13 @@ struct ContentView: View {
             if !visibleRecents.isEmpty {
                 recentsSection
             }
+            if !favorites.paths.isEmpty || !visibleRecents.isEmpty {
+                refreshCountsButton
+            }
+        }
+        .onAppear {
+            // Recount every time we return to the starter screen.
+            folderStats.refresh(allStarterPaths)
         }
     }
 
@@ -341,6 +349,23 @@ struct ContentView: View {
             .map { $0 }
     }
 
+    private var allStarterPaths: [String] {
+        favorites.paths + visibleRecents
+    }
+
+    private var refreshCountsButton: some View {
+        Button {
+            folderStats.refresh(allStarterPaths)
+        } label: {
+            Label("Refresh counts", systemImage: "arrow.clockwise")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+        .help("Re-scan each folder and update the pair-count pills")
+        .padding(.top, 4)
+    }
+
     private var favoritesSection: some View {
         section(title: "Favorites") {
             ForEach(favorites.paths, id: \.self) { path in
@@ -348,6 +373,10 @@ struct ContentView: View {
                     path,
                     leading: { favoriteDragHandle(for: path) },
                     trailing: {
+                        pairCountPill(for: path)
+                        // Star slot placeholder so the X column aligns with
+                        // Recent rows (which have a star button in this slot).
+                        Color.clear.frame(width: 20, height: 20)
                         rowButton(systemImage: "xmark", tint: .secondary,
                                   help: "Remove from favorites") {
                             favorites.remove(path)
@@ -423,6 +452,7 @@ struct ContentView: View {
                     // drag handle so folder icons line up across sections.
                     leading: { Color.clear.frame(width: 18, height: 20) },
                     trailing: {
+                        pairCountPill(for: path)
                         rowButton(systemImage: "star", tint: .secondary,
                                   help: "Add to favorites") {
                             favorites.add(path)
@@ -495,6 +525,40 @@ struct ContentView: View {
         }
         .buttonStyle(.plain)
         .help(help)
+    }
+
+    /// "N/M" pill next to each favorite/recent — N pairs with an XMP sidecar,
+    /// M pairs total. Fixed minWidth so the trailing column lines up across
+    /// rows regardless of which state each row is in.
+    @ViewBuilder
+    private func pairCountPill(for path: String) -> some View {
+        let state = folderStats.stats[path] ?? .unknown
+        Group {
+            switch state {
+            case .unknown:
+                Color.clear
+            case .loading:
+                ProgressView()
+                    .controlSize(.mini)
+            case .ok(let count):
+                Text("\(count.withXMP)/\(count.total)")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.primary.opacity(0.06), in: Capsule())
+                    .help("\(count.withXMP) of \(count.total) pairs have an XMP sidecar")
+            case .inaccessible:
+                Text("missing")
+                    .font(.caption2)
+                    .foregroundStyle(Color.red.opacity(0.85))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.red.opacity(0.12), in: Capsule())
+                    .help("Folder is missing or cannot be accessed")
+            }
+        }
+        .frame(minWidth: 60, alignment: .trailing)
     }
 
     private func openWithPanel() {
