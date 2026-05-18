@@ -1,5 +1,13 @@
+import AppKit
 import Foundation
 import UserNotifications
+
+extension Notification.Name {
+    /// Posted by the UNUserNotificationCenter delegate when the user clicks
+    /// an export notification. ContentView listens and opens the Export
+    /// sheet.
+    static let photoxOpenExportSheet = Notification.Name("photox.export.openSheet")
+}
 
 /// Thin wrapper around `UNUserNotificationCenter` for the Export feature.
 /// Authorization is requested lazily on the first attempt to post.
@@ -21,46 +29,56 @@ enum ExportNotifications {
         return granted
     }
 
-    static func postDestinationComplete(
-        dest: ExportSettings.Destination,
-        summary: ExportRunner.Summary
-    ) {
-        let basename = (dest.path as NSString).lastPathComponent
-        let title = "Export to \(basename) complete"
-        let body = summaryLine(summary)
-        post(title: title, body: body, identifier: "photox.export.dest.\(dest.id.uuidString)")
-    }
-
+    /// One summary at the end of every batch — single-destination Run
+    /// included. Per-destination notifications were removed: they were
+    /// noisy and didn't add value once the toolbar pill / sheet show
+    /// progress per row.
     static func postAllComplete(
         summaries: [(ExportSettings.Destination, ExportRunner.Summary)]
     ) {
+        // Don't bother notifying if the user is already looking at PhotoX —
+        // the pill and sheet show completion just as well, and a banner on
+        // top of that is just noise.
+        if NSApplication.shared.isActive { return }
+
         let totalCopied = summaries.reduce(0) { $0 + $1.1.copied }
         let totalSkipped = summaries.reduce(0) { $0 + $1.1.skipped }
         let totalDeleted = summaries.reduce(0) { $0 + $1.1.deleted }
         let errors = summaries.reduce(0) { $0 + $1.1.errors.count }
-        let body = "\(summaries.count) destinations · "
-            + "\(totalCopied) copied · "
-            + "\(totalSkipped) skipped"
-            + (totalDeleted > 0 ? " · \(totalDeleted) deleted" : "")
-            + (errors > 0     ? " · \(errors) errors"        : "")
-        post(title: "All exports finished", body: body,
-             identifier: "photox.export.allcomplete.\(UUID().uuidString)")
-    }
 
-    private static func summaryLine(_ summary: ExportRunner.Summary) -> String {
-        var parts = ["\(summary.copied) copied", "\(summary.skipped) skipped"]
-        if summary.deleted > 0  { parts.append("\(summary.deleted) deleted") }
-        if !summary.errors.isEmpty { parts.append("\(summary.errors.count) errors") }
-        return parts.joined(separator: " · ")
+        let title = summaries.count == 1
+            ? "Export to \((summaries[0].0.path as NSString).lastPathComponent) finished"
+            : "Export to \(summaries.count) destinations finished"
+        let body = "\(totalCopied) copied · \(totalSkipped) skipped"
+            + (totalDeleted > 0 ? " · \(totalDeleted) deleted" : "")
+            + (errors > 0       ? " · \(errors) errors"        : "")
+
+        post(title: title, body: body,
+             identifier: "photox.export.complete.\(UUID().uuidString)")
     }
 
     private static func post(title: String, body: String, identifier: String) {
         Task {
             guard await requestAuthorizationIfNeeded() else { return }
+            // Re-check at submission time — the user may have brought the
+            // app forward between when the export finished and when this
+            // task runs.
+            if NSApplication.shared.isActive { return }
+
             let content = UNMutableNotificationContent()
             content.title = title
             content.body = body
             content.sound = .default
+            // Time-sensitive raises the visibility / persistence of the
+            // banner over a default-priority notification. macOS doesn't
+            // expose a literal "duration" knob; the user's notification
+            // style preference (Banners vs Alerts in System Settings)
+            // also affects how long it stays on screen.
+            content.interruptionLevel = .timeSensitive
+            // Category lets the delegate identify our notifications when
+            // routing the click action.
+            content.categoryIdentifier = "photox.export.complete"
+
             let request = UNNotificationRequest(
                 identifier: identifier, content: content, trigger: nil
             )

@@ -230,13 +230,13 @@ final class ViewerState {
     /// next rating action — no app restart required.
     private func autoAdvanceAfterRating(source: RatingInputSource) -> Bool {
         switch source {
-        case .keyboard: return UserDefaults.standard.bool(forKey: SettingsKey.autoAdvance)
-        case .sidebar:  return UserDefaults.standard.bool(forKey: SettingsKey.autoAdvanceSidebar)
+        case .keyboard: return AppDefaults.shared.bool(forKey: SettingsKey.autoAdvance)
+        case .sidebar:  return AppDefaults.shared.bool(forKey: SettingsKey.autoAdvanceSidebar)
         }
     }
 
     init() {
-        let defaults = UserDefaults.standard
+        let defaults = AppDefaults.shared
         self.sidebarVisible = defaults.object(forKey: SettingsKey.sidebarVisible) as? Bool
             ?? SettingsKey.Defaults.sidebarVisible
         self.filmstripVisible = defaults.object(forKey: SettingsKey.filmstripVisible) as? Bool

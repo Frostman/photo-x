@@ -18,7 +18,7 @@ final class FavoriteShoots {
     /// `defaults` is injectable so tests can use a per-suite UserDefaults and
     /// avoid clobbering the user's real favorites. Production uses `.standard`
     /// via the shared instance.
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = AppDefaults.shared) {
         self.defaults = defaults
         self.paths = defaults.stringArray(forKey: key) ?? []
     }

@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UserNotifications
 
 @main
 struct PhotoXApp: App {
@@ -7,7 +8,7 @@ struct PhotoXApp: App {
     @State private var viewerState = ViewerState()
     @State private var recents = RecentShoots.shared
     @State private var updater = UpdaterController()
-    @AppStorage(SettingsKey.appearance) private var appearanceRaw = SettingsKey.Defaults.appearance
+    @AppStorage(SettingsKey.appearance, store: AppDefaults.shared) private var appearanceRaw = SettingsKey.Defaults.appearance
 
     private var appearance: AppearanceMode {
         AppearanceMode(rawValue: appearanceRaw) ?? .system
@@ -118,7 +119,7 @@ struct PhotoXApp: App {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUserNotificationCenterDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
     }
@@ -137,6 +138,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// Also installs us as the window's delegate so windowShouldClose can
     /// intercept red-button / ⌘W close during an export.
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Take ownership of UN delegate so we can suppress notifications
+        // when the app is in the foreground and route clicks back into
+        // the export sheet.
+        UNUserNotificationCenter.current().delegate = self
+
         DispatchQueue.main.async {
             guard let window = NSApplication.shared.windows.first(where: { $0.canBecomeMain })
             else { return }
@@ -148,6 +154,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             // delegate, so this slot is free for us.
             window.delegate = self
         }
+    }
+
+    // MARK: UNUserNotificationCenterDelegate
+
+    /// Foreground-delivery hook. If the user is looking at PhotoX when an
+    /// export finishes, don't pop a banner — the pill + sheet show the
+    /// outcome better than a notification would.
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        if NSApplication.shared.isActive {
+            completionHandler([])
+        } else {
+            completionHandler([.banner, .sound])
+        }
+    }
+
+    /// Click handler. Activate the app and ask ContentView to open the
+    /// Export sheet via a NotificationCenter broadcast.
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        NSApp.activate(ignoringOtherApps: true)
+        NotificationCenter.default.post(name: .photoxOpenExportSheet, object: nil)
+        completionHandler()
     }
 
     /// Refuse to close the window while an export is in flight, unless the

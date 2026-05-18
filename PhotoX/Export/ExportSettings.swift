@@ -85,7 +85,7 @@ final class ExportSettings {
 
     /// `defaults` injectable so tests can use a per-suite UserDefaults and
     /// leave the user's real export settings untouched.
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = AppDefaults.shared) {
         self.defaults = defaults
         self.projectName = defaults.string(forKey: Self.projectNameKey) ?? ""
         if let data = defaults.data(forKey: Self.destinationsKey),

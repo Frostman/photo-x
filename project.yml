@@ -94,6 +94,20 @@ targets:
         OTHER_LDFLAGS:
           - $(PROJECT_DIR)/ThirdParty/libraw/lib/libraw_r.a
           - -lz
+      configs:
+        # Debug builds get a distinct bundle ID so macOS Launch Services
+        # treats the dev build as a separate app from the installed
+        # /Applications/PhotoX.app. Without this, clicking a notification
+        # posted by the dev build routes to the installed Release copy
+        # (same bundle ID → Launch Services picks the registered one).
+        # Side effect: UserDefaults / Recents / Favorites / Export
+        # Settings are also separate between Debug and Release — cleaner
+        # for development, and you don't accidentally pollute your real
+        # data while testing.
+        Debug:
+          PRODUCT_BUNDLE_IDENTIFIER: dev.frostman.PhotoX.debug
+        Release:
+          PRODUCT_BUNDLE_IDENTIFIER: dev.frostman.PhotoX
 
   PhotoXTests:
     type: bundle.unit-test

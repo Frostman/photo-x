@@ -235,16 +235,11 @@ final class ExportRunner {
             } else {
                 summaries = await self.runAllSequential(
                     pairs: pairs, pairXMPs: pairXMPs,
-                    projectName: projectName, destinations: destinations,
-                    notifications: notifications
+                    projectName: projectName, destinations: destinations
                 )
             }
-            if sharedRead {
-                for (idx, (dest, summary)) in summaries.enumerated() {
-                    if idx == summaries.count - 1 { continue }
-                    notifications.postDestinationComplete(dest, summary)
-                }
-            }
+            // One summary notification at the end of the batch — covers
+            // single- and multi-destination runs alike.
             notifications.postAllComplete(summaries)
             self.batchProgress = nil
             self.lastBatchOutcome = self.summariseBatchOutcome(for: destinations)
@@ -257,8 +252,7 @@ final class ExportRunner {
         pairs: [PhotoPair],
         pairXMPs: [String: XMPSidecar],
         projectName: String,
-        destinations: [ExportSettings.Destination],
-        notifications: ExportNotificationsAdapter
+        destinations: [ExportSettings.Destination]
     ) async -> [(ExportSettings.Destination, Summary)] {
         var summaries: [(ExportSettings.Destination, Summary)] = []
         for (idx, dest) in destinations.enumerated() {
@@ -272,15 +266,11 @@ final class ExportRunner {
                 batch.currentDestinationIndex = idx + 1
                 batchProgress = batch
             }
-            let isLast = (idx == destinations.count - 1)
             let summary = await self.runSingle(
                 destination: dest, pairs: pairs, pairXMPs: pairXMPs,
                 projectName: projectName
             )
             summaries.append((dest, summary))
-            if !isLast {
-                notifications.postDestinationComplete(dest, summary)
-            }
         }
         return summaries
     }
@@ -316,7 +306,9 @@ final class ExportRunner {
                 destination: destination, pairs: pairs, pairXMPs: pairXMPs,
                 projectName: projectName
             )
-            notifications.postDestinationComplete(destination, summary)
+            // Single-destination Run uses the same one-summary notification
+            // as Export-all (just a batch of one).
+            notifications.postAllComplete([(destination, summary)])
             self.batchProgress = nil
             self.lastBatchOutcome = self.summariseBatchOutcome(for: [destination])
             self.lastBatchCompletedAt = Date()
@@ -831,17 +823,13 @@ enum FileSystemSnapshot {
 
 /// Tiny seam so tests can substitute a recording adapter for the real
 /// UNUserNotificationCenter calls. Concrete implementation lives in
-/// `ExportNotifications.swift`.
+/// `ExportNotifications.swift`. Only one notification fires per batch —
+/// per-destination notifications were removed (noisy + duplicative
+/// with the per-row progress in the sheet).
 struct ExportNotificationsAdapter: Sendable {
-    var postDestinationComplete: @Sendable (ExportSettings.Destination, ExportRunner.Summary) -> Void
     var postAllComplete: @Sendable ([(ExportSettings.Destination, ExportRunner.Summary)]) -> Void
 
     static let live = ExportNotificationsAdapter(
-        postDestinationComplete: { dest, summary in
-            Task { @MainActor in
-                ExportNotifications.postDestinationComplete(dest: dest, summary: summary)
-            }
-        },
         postAllComplete: { summaries in
             Task { @MainActor in
                 ExportNotifications.postAllComplete(summaries: summaries)
@@ -850,8 +838,5 @@ struct ExportNotificationsAdapter: Sendable {
     )
 
     /// No-op adapter used by tests that don't care about notifications.
-    static let silent = ExportNotificationsAdapter(
-        postDestinationComplete: { _, _ in },
-        postAllComplete: { _ in }
-    )
+    static let silent = ExportNotificationsAdapter(postAllComplete: { _ in })
 }

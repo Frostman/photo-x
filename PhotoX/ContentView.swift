@@ -21,7 +21,7 @@ struct ContentView: View {
     @FocusState private var canvasFocused: Bool
     @State private var showHelp: Bool = false
     @State private var copiedFlash: Bool = false
-    @AppStorage(SettingsKey.appearance) private var appearanceRaw = SettingsKey.Defaults.appearance
+    @AppStorage(SettingsKey.appearance, store: AppDefaults.shared) private var appearanceRaw = SettingsKey.Defaults.appearance
     @State private var recents = RecentShoots.shared
     @State private var favorites = FavoriteShoots.shared
     @State private var folderStats = FolderStats()
@@ -65,6 +65,9 @@ struct ContentView: View {
         .frame(minWidth: 900, minHeight: 600)
         .sheet(isPresented: $showExportSheet) {
             ExportSheet(state: state, isPresented: $showExportSheet)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .photoxOpenExportSheet)) { _ in
+            showExportSheet = true
         }
         // When the export sheet is up, make ContentView completely
         // non-focusable so all key events are routed exclusively to the

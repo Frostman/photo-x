@@ -8,7 +8,7 @@ enum SamplePathProvider {
         if let env = ProcessInfo.processInfo.environment["PHOTOX_SAMPLE_DIR"], !env.isEmpty {
             return URL(fileURLWithPath: (env as NSString).expandingTildeInPath)
         }
-        if let custom = UserDefaults.standard.string(forKey: SettingsKey.defaultFolderPath),
+        if let custom = AppDefaults.shared.string(forKey: SettingsKey.defaultFolderPath),
            !custom.isEmpty {
             return URL(fileURLWithPath: (custom as NSString).expandingTildeInPath)
         }

@@ -70,14 +70,14 @@ enum AppearanceMode: String, CaseIterable, Identifiable {
 }
 
 struct SettingsView: View {
-    @AppStorage(SettingsKey.appearance)        private var appearanceRaw     = SettingsKey.Defaults.appearance
-    @AppStorage(SettingsKey.sidebarVisible)    private var sidebarVisible    = SettingsKey.Defaults.sidebarVisible
-    @AppStorage(SettingsKey.filmstripVisible)  private var filmstripVisible  = SettingsKey.Defaults.filmstripVisible
-    @AppStorage(SettingsKey.autoSwapToRAW)     private var autoSwapToRAW     = SettingsKey.Defaults.autoSwapToRAW
-    @AppStorage(SettingsKey.afOverlayVisible)  private var afOverlayVisible  = SettingsKey.Defaults.afOverlayVisible
-    @AppStorage(SettingsKey.autoAdvance)        private var autoAdvance        = SettingsKey.Defaults.autoAdvance
-    @AppStorage(SettingsKey.autoAdvanceSidebar) private var autoAdvanceSidebar = SettingsKey.Defaults.autoAdvanceSidebar
-    @AppStorage(SettingsKey.defaultFolderPath) private var defaultFolderPath = SettingsKey.Defaults.defaultFolderPath
+    @AppStorage(SettingsKey.appearance,         store: AppDefaults.shared) private var appearanceRaw       = SettingsKey.Defaults.appearance
+    @AppStorage(SettingsKey.sidebarVisible,     store: AppDefaults.shared) private var sidebarVisible      = SettingsKey.Defaults.sidebarVisible
+    @AppStorage(SettingsKey.filmstripVisible,   store: AppDefaults.shared) private var filmstripVisible    = SettingsKey.Defaults.filmstripVisible
+    @AppStorage(SettingsKey.autoSwapToRAW,      store: AppDefaults.shared) private var autoSwapToRAW       = SettingsKey.Defaults.autoSwapToRAW
+    @AppStorage(SettingsKey.afOverlayVisible,   store: AppDefaults.shared) private var afOverlayVisible    = SettingsKey.Defaults.afOverlayVisible
+    @AppStorage(SettingsKey.autoAdvance,        store: AppDefaults.shared) private var autoAdvance         = SettingsKey.Defaults.autoAdvance
+    @AppStorage(SettingsKey.autoAdvanceSidebar, store: AppDefaults.shared) private var autoAdvanceSidebar  = SettingsKey.Defaults.autoAdvanceSidebar
+    @AppStorage(SettingsKey.defaultFolderPath,  store: AppDefaults.shared) private var defaultFolderPath   = SettingsKey.Defaults.defaultFolderPath
 
     var body: some View {
         Form {
