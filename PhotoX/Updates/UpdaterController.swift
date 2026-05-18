@@ -13,8 +13,21 @@ final class UpdaterController {
     private var observation: NSKeyValueObservation?
 
     init() {
+        // Debug builds skip Sparkle entirely. The dev binary has the
+        // .debug bundle ID and its own version sequence — checking the
+        // production appcast would either be a no-op (different bundle
+        // ID = irrelevant) or, worse, prompt to "downgrade" the dev
+        // build to the latest Release. The Check for Updates menu item
+        // stays visible but disabled because canCheckForUpdates remains
+        // false (updater never starts).
+        #if DEBUG
+        let startingUpdater = false
+        #else
+        let startingUpdater = true
+        #endif
+
         let controller = SPUStandardUpdaterController(
-            startingUpdater: true,
+            startingUpdater: startingUpdater,
             updaterDelegate: nil,
             userDriverDelegate: nil
         )
@@ -27,10 +40,13 @@ final class UpdaterController {
             let value = change.newValue ?? false
             Task { @MainActor in self?.canCheckForUpdates = value }
         }
-        // Always poll on launch. SUScheduledCheckInterval (15 min) handles the
-        // recurring cadence; this guarantees an immediate check even if the
-        // last one happened seconds ago in a prior launch.
+
+        #if !DEBUG
+        // Poll on launch. SUScheduledCheckInterval (15 min) handles the
+        // recurring cadence; this guarantees an immediate check even if
+        // the last one happened seconds ago in a prior launch.
         controller.updater.checkForUpdatesInBackground()
+        #endif
     }
 
     func checkForUpdates() {
