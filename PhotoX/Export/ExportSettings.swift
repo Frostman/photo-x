@@ -1,0 +1,150 @@
+import Foundation
+import Observation
+
+/// Persisted configuration for the Export feature. Singleton like
+/// `FavoriteShoots` — JSON-encoded into UserDefaults so we can store the
+/// nested `[Destination]` array (UserDefaults' primitive types alone can't
+/// hold our struct-of-structs).
+///
+/// One project name + one destinations list, global across all shoots.
+@MainActor
+@Observable
+final class ExportSettings {
+    static let shared = ExportSettings()
+
+    /// Policy applied to non-XMP files when the destination already has the
+    /// file. XMPs always carry an additional "never overwrite a newer
+    /// sidecar" rule on top of whichever policy is selected — see
+    /// `OverwriteDecision.decide(…)`.
+    enum OverwritePolicy: String, Codable, CaseIterable, Identifiable, Hashable, Sendable {
+        case skipUnchangedElseOverwrite   // default
+        case skipUnchangedElseNewerOnly
+        case skipIfExists
+        case alwaysOverwrite
+
+        var id: String { rawValue }
+
+        var displayName: String {
+            switch self {
+            case .skipUnchangedElseOverwrite:  return "Skip if same; else overwrite"
+            case .skipUnchangedElseNewerOnly:  return "Skip if same; else newer only"
+            case .skipIfExists:                return "Skip if file exists"
+            case .alwaysOverwrite:             return "Always overwrite"
+            }
+        }
+
+        var helpText: String {
+            switch self {
+            case .skipUnchangedElseOverwrite:
+                return "Skip if size matches and modified time within 1 second; otherwise overwrite."
+            case .skipUnchangedElseNewerOnly:
+                return "Skip if size matches and mtime within 1 second; otherwise only copy if source is newer than destination."
+            case .skipIfExists:
+                return "Never overwrite — skip every file that already exists at the destination."
+            case .alwaysOverwrite:
+                return "Always overwrite the destination file."
+            }
+        }
+    }
+
+    struct Destination: Identifiable, Codable, Hashable, Sendable {
+        var id: UUID = UUID()
+        var path: String
+
+        // Filter — same semantics as ViewerState.show*
+        var showStars: Set<Int> = [1, 2, 3, 4, 5]
+        var showRejected: Bool = true
+        var showUnrated: Bool = true
+
+        // File types
+        var includeARW: Bool = true
+        var includeHIF: Bool = true
+        var includeXMP: Bool = true
+
+        // Behaviour
+        var overwrite: OverwritePolicy = .skipUnchangedElseOverwrite
+        var removeOrphans: Bool = false
+    }
+
+    private(set) var projectName: String = ""
+    private(set) var destinations: [Destination] = []
+    /// "Export all" reads each source file once and writes to every wanting
+    /// destination in one pass. Helps on slow source media (SD card readers).
+    /// Per-destination Run buttons always use the simple loop regardless.
+    var readOnceWriteMany: Bool = false {
+        didSet { defaults.set(readOnceWriteMany, forKey: Self.readOnceKey) }
+    }
+
+    private let defaults: UserDefaults
+    private static let projectNameKey      = "export.projectName"
+    private static let destinationsKey     = "export.destinations"
+    private static let readOnceKey         = "export.readOnceWriteMany"
+
+    /// `defaults` injectable so tests can use a per-suite UserDefaults and
+    /// leave the user's real export settings untouched.
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        self.projectName = defaults.string(forKey: Self.projectNameKey) ?? ""
+        if let data = defaults.data(forKey: Self.destinationsKey),
+           let decoded = try? JSONDecoder().decode([Destination].self, from: data) {
+            self.destinations = decoded
+        }
+        self.readOnceWriteMany = defaults.bool(forKey: Self.readOnceKey)
+    }
+
+    // MARK: - Project name
+
+    /// Whitespace-only project names are rejected for export purposes — the
+    /// sheet's Export / Run buttons stay disabled until a non-empty name is
+    /// set. We still STORE the raw user input (e.g. while they're typing)
+    /// and validate on use.
+    var isValidForExport: Bool {
+        !projectName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    func setProjectName(_ name: String) {
+        projectName = name
+        defaults.set(name, forKey: Self.projectNameKey)
+    }
+
+    // MARK: - Destinations CRUD
+
+    func add(path: String) {
+        let dest = Destination(path: path)
+        destinations.append(dest)
+        persistDestinations()
+    }
+
+    func remove(id: UUID) {
+        let before = destinations.count
+        destinations.removeAll { $0.id == id }
+        guard destinations.count != before else { return }
+        persistDestinations()
+    }
+
+    func update(id: UUID, _ mutate: (inout Destination) -> Void) {
+        guard let idx = destinations.firstIndex(where: { $0.id == id }) else { return }
+        mutate(&destinations[idx])
+        persistDestinations()
+    }
+
+    /// Reorder by moving `id` to land directly before `targetID`. Mirrors
+    /// `FavoriteShoots.move(_:before:)` — same semantics, same persistence.
+    func move(_ id: UUID, before targetID: UUID) {
+        guard let from = destinations.firstIndex(where: { $0.id == id }),
+              let to = destinations.firstIndex(where: { $0.id == targetID }),
+              from != to else { return }
+        var next = destinations
+        let element = next.remove(at: from)
+        let insertAt = from < to ? to - 1 : to
+        next.insert(element, at: insertAt)
+        destinations = next
+        persistDestinations()
+    }
+
+    private func persistDestinations() {
+        if let data = try? JSONEncoder().encode(destinations) {
+            defaults.set(data, forKey: Self.destinationsKey)
+        }
+    }
+}
