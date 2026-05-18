@@ -220,15 +220,14 @@ struct ContentView: View {
             if state.shoot != nil {
                 ToolbarItem(placement: .primaryAction) {
                     Button {
-                        state.closeShoot()
+                        closeShootGuarded()
                     } label: {
                         Label("Close Folder", systemImage: "xmark.circle")
                     }
                     .controlSize(.small)
                     .padding(.horizontal, 5)
-                    .disabled(exportRunner.isRunning)
                     .help(exportRunner.isRunning
-                          ? "Cannot close while an export is running"
+                          ? "Close shoot — will prompt to cancel the running export"
                           : "Close the current shoot and return to the starter screen")
                 }
             }
@@ -616,6 +615,27 @@ struct ContentView: View {
             }
         }
         .frame(minWidth: 60, alignment: .trailing)
+    }
+
+    /// Confirm before closing the shoot if an export is in flight; on
+    /// confirmation, cancel the export then close. Without confirmation the
+    /// user could lose work-in-progress with an accidental click.
+    private func closeShootGuarded() {
+        guard exportRunner.isRunning else {
+            state.closeShoot()
+            return
+        }
+        let alert = NSAlert()
+        alert.messageText = "Export in progress"
+        alert.informativeText = "An export to one or more destinations is still running. Closing this shoot now will cancel it and leave partially-copied files at the destinations."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Stay")              // default = ⏎
+        let destructive = alert.addButton(withTitle: "Cancel exports and close")
+        destructive.hasDestructiveAction = true
+        if alert.runModal() == .alertSecondButtonReturn {
+            exportRunner.cancelAll()
+            state.closeShoot()
+        }
     }
 
     private func openWithPanel() {

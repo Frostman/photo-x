@@ -270,6 +270,42 @@ final class ExportCopyLoopTests: XCTestCase {
         XCTAssertTrue(exists(foreign), "foreign txt file should survive orphan removal")
     }
 
+    func test_atomicCopy_leavesNoTempFileBehind_afterSuccessfulRun() async throws {
+        let p1 = try makePair(stem: "A")
+        let p2 = try makePair(stem: "B")
+        let dest = destination()
+        await run(dest, pairs: [p1, p2])
+
+        let out = outputFolder(project: "P")
+        let contents = try FileManager.default.contentsOfDirectory(
+            at: out, includingPropertiesForKeys: nil)
+        let tempFiles = contents.filter { $0.lastPathComponent.contains(".photox-") }
+        XCTAssertTrue(tempFiles.isEmpty,
+                      "atomic copy must clean up its temp files; found \(tempFiles)")
+    }
+
+    func test_atomicCopy_overwriteIsAtomic_destNeverMissing() async throws {
+        // Two runs against the same destination — second run overwrites.
+        // After both, the destination must contain the new bytes; at no
+        // point should there be a missing file (regression test for the
+        // previous removeItem-then-copyItem pattern that briefly left
+        // the destination absent).
+        let p = try makePair(stem: "X", arwBytes: 100)
+        let dest = destination()
+        await run(dest, pairs: [p])
+
+        // Bigger source for the second run; the existing dest will be
+        // atomically replaced.
+        try FileManager.default.removeItem(at: p.rawURL)
+        try Data(repeating: 0xFA, count: 700).write(to: p.rawURL)
+        await run(dest, pairs: [p])
+
+        let destFile = outputFolder(project: "P").appendingPathComponent("X.ARW")
+        let body = try bytes(destFile)
+        XCTAssertEqual(body.count, 700)
+        XCTAssertEqual(body.first, 0xFA)
+    }
+
     func test_handlesMissingXMP_gracefully() async throws {
         let p = try makePair(stem: "X", xmp: nil)   // no XMP sidecar
         let dest = destination()

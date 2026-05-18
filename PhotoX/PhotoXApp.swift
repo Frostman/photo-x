@@ -118,7 +118,7 @@ struct PhotoXApp: App {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
     }
@@ -134,32 +134,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Maximize the main window to the screen's visible frame on first launch.
     /// SwiftUI's WindowGroup picks a default size that's smaller than the
     /// screen; for a culling viewer, the larger the canvas the better.
+    /// Also installs us as the window's delegate so windowShouldClose can
+    /// intercept red-button / ⌘W close during an export.
     func applicationDidFinishLaunching(_ notification: Notification) {
         DispatchQueue.main.async {
-            guard let window = NSApplication.shared.windows.first(where: { $0.canBecomeMain }),
-                  let screen = window.screen ?? NSScreen.main else { return }
-            window.setFrame(screen.visibleFrame, display: true)
+            guard let window = NSApplication.shared.windows.first(where: { $0.canBecomeMain })
+            else { return }
+            if let screen = window.screen ?? NSScreen.main {
+                window.setFrame(screen.visibleFrame, display: true)
+            }
+            // Become the window delegate so we can refuse to close while an
+            // export is running. SwiftUI's WindowGroup doesn't set its own
+            // delegate, so this slot is free for us.
+            window.delegate = self
         }
     }
 
-    /// Block quit while an export is in progress. The destructive button
-    /// styling + non-default position prevents accidental dismissal —
-    /// quitting always cancels in-flight copies and leaves partial files at
-    /// destinations, so we make the user confirm explicitly.
+    /// Refuse to close the window while an export is in flight, unless the
+    /// user explicitly confirms via the alert. Without this, the red-button
+    /// (or ⌘W) close happens BEFORE applicationShouldTerminate runs — so
+    /// the window vanishes and the user sees the alert against an empty
+    /// app. We intercept here so the window stays put when the user picks
+    /// Stay.
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        guard ExportRunner.shared.isRunning else { return true }
+        let alert = makeExportRunningAlert(verb: "close the window")
+        if alert.runModal() == .alertSecondButtonReturn {
+            ExportRunner.shared.cancelAll()
+            return true
+        }
+        return false
+    }
+
+    /// Block quit while an export is in progress.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard ExportRunner.shared.isRunning else { return .terminateNow }
-        let alert = NSAlert()
-        alert.messageText = "Export in progress"
-        alert.informativeText = "An export to one or more destinations is still running. Quitting now will cancel it and leave partially-copied files at the destinations."
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "Stay")              // first = default = ⏎
-        let cancelBtn = alert.addButton(withTitle: "Cancel exports and quit")
-        cancelBtn.hasDestructiveAction = true
-        let response = alert.runModal()
-        if response == .alertSecondButtonReturn {
+        let alert = makeExportRunningAlert(verb: "quit")
+        if alert.runModal() == .alertSecondButtonReturn {
             ExportRunner.shared.cancelAll()
             return .terminateNow
         }
         return .terminateCancel
+    }
+
+    /// Shared alert for "an export is running, are you sure you want to
+    /// <verb>?" Used by both windowShouldClose and applicationShouldTerminate.
+    private func makeExportRunningAlert(verb: String) -> NSAlert {
+        let alert = NSAlert()
+        alert.messageText = "Export in progress"
+        alert.informativeText = "An export to one or more destinations is still running. \(verb.capitalized(with: nil))ing now will cancel it and leave partially-copied files at the destinations."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Stay")                          // default = ⏎
+        let cancelBtn = alert.addButton(withTitle: "Cancel exports and \(verb)")
+        cancelBtn.hasDestructiveAction = true
+        return alert
     }
 }

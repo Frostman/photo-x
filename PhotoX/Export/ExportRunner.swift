@@ -308,11 +308,11 @@ final class ExportRunner {
                     return .skipped
                 case .write(let removeFirst):
                     do {
-                        if removeFirst {
-                            try FileManager.default.removeItem(at: op.destinationURL)
-                        }
-                        try FileManager.default.copyItem(
-                            at: op.sourceURL, to: op.destinationURL)
+                        try Self.atomicCopy(
+                            from: op.sourceURL,
+                            to: op.destinationURL,
+                            destExists: removeFirst
+                        )
                         return .copied(bytes: srcSnap.size ?? 0)
                     } catch {
                         return .errored(error.localizedDescription)
@@ -499,9 +499,11 @@ final class ExportRunner {
 
                 for w in writePlan {
                     do {
-                        if w.removeFirst {
-                            try FileManager.default.removeItem(at: w.destURL)
-                        }
+                        // .atomic does the temp-file + rename swap itself,
+                        // overwriting an existing dest in a single inode flip.
+                        // We intentionally do NOT removeItem first — that
+                        // would leave a small window where dest is missing.
+                        _ = w.removeFirst   // intentionally unused
                         try data.write(to: w.destURL, options: .atomic)
                         outcomes.append(.copied(destID: w.destID, bytes: w.size))
                     } catch {
@@ -583,6 +585,45 @@ final class ExportRunner {
         case skipped
         case copied(bytes: Int64)
         case errored(String)
+    }
+
+    /// Atomic copy. Writes the source to a sibling `.tmp` file in the
+    /// destination directory and then swaps it in via either
+    /// `FileManager.replaceItemAt` (when dest exists) or `moveItem` (when
+    /// it doesn't). At no point does a partially-written file live at
+    /// `destURL` — the user always sees either the old file or the
+    /// complete new one, never a half-copy.
+    ///
+    /// Cleanup: if the temp copy succeeds but the swap fails, the temp
+    /// file is removed before throwing so we don't leak partial files.
+    /// If the temp copy itself fails (cancel, disk full, read error),
+    /// the temp file may or may not exist depending on how far copyItem
+    /// got; we attempt cleanup defensively.
+    nonisolated static func atomicCopy(
+        from src: URL, to dest: URL, destExists: Bool
+    ) throws {
+        let fm = FileManager.default
+        let tmp = dest
+            .deletingLastPathComponent()
+            .appendingPathComponent(
+                "\(dest.lastPathComponent).photox-\(UUID().uuidString.prefix(8)).tmp"
+            )
+        do {
+            try fm.copyItem(at: src, to: tmp)
+        } catch {
+            try? fm.removeItem(at: tmp)  // copyItem may have left a partial
+            throw error
+        }
+        do {
+            if destExists {
+                _ = try fm.replaceItemAt(dest, withItemAt: tmp)
+            } else {
+                try fm.moveItem(at: tmp, to: dest)
+            }
+        } catch {
+            try? fm.removeItem(at: tmp)
+            throw error
+        }
     }
 
     /// Off-main static version of orphan removal. Returns the count + any
