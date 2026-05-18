@@ -15,31 +15,53 @@ struct ExportToolbarPill: View {
     @State private var runner = ExportRunner.shared
 
     var body: some View {
-        Button {
-            showSheet = true
-        } label: {
-            HStack(spacing: 6) {
-                if let batch = runner.batchProgress {
-                    runningLabel(batch)
-                } else {
-                    idleLabel
+        // Refresh once a minute so the "Nm ago" label keeps ticking even
+        // when nothing else triggers a re-render.
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            Button {
+                showSheet = true
+            } label: {
+                HStack(spacing: 6) {
+                    if let batch = runner.batchProgress {
+                        runningLabel(batch)
+                    } else if let outcome = runner.lastBatchOutcome,
+                              let completedAt = runner.lastBatchCompletedAt {
+                        finishedLabel(outcome: outcome,
+                                      ago: agoString(from: completedAt, now: context.date))
+                    } else {
+                        idleLabel
+                    }
                 }
+                // Explicit padding + background keeps the pill shape consistent
+                // across all three states. macOS's auto button-style logic
+                // collapses small .bordered toolbar items into icon-only chips,
+                // which made the idle Export blend with neighbour buttons.
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(Color.primary.opacity(0.08), in: Capsule())
+                .overlay(
+                    Capsule().stroke(Color.primary.opacity(0.18), lineWidth: 0.5)
+                )
             }
-            // Explicit padding + background keeps the pill shape consistent
-            // whether idle or running. macOS's auto button-style logic
-            // collapses small .bordered toolbar items into icon-only chips,
-            // which made the idle Export blend with neighbour buttons.
-            .padding(.horizontal, 10)
-            .padding(.vertical, 4)
-            .background(Color.primary.opacity(0.08), in: Capsule())
-            .overlay(
-                Capsule().stroke(Color.primary.opacity(0.18), lineWidth: 0.5)
-            )
+            .buttonStyle(.plain)
+            .help(runner.isRunning
+                  ? "Export running — click to reopen the window"
+                  : "Configure and export to destinations")
         }
-        .buttonStyle(.plain)
-        .help(runner.isRunning
-              ? "Export running — click to reopen the window"
-              : "Configure and export to destinations")
+    }
+
+    private func finishedLabel(outcome: ExportRunner.BatchOutcome, ago: String) -> some View {
+        let (word, color): (String, Color) = switch outcome {
+        case .done:      ("done",      .green)
+        case .cancelled: ("cancelled", .red)
+        case .failed:    ("failed",    .red)
+        }
+        return HStack(spacing: 4) {
+            Image(systemName: "arrow.up.doc")
+            Text("Export:").font(.caption.bold())
+            Text(word).font(.caption.bold()).foregroundStyle(color)
+            Text(ago).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+        }
     }
 
     private var idleLabel: some View {

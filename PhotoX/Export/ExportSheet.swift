@@ -163,6 +163,7 @@ struct ExportSheet: View {
                         ExportDestinationRow(
                             destination: dest,
                             runnerState: runner.perDestination[dest.id] ?? .idle,
+                            completedAt: runner.perDestinationCompletedAt[dest.id],
                             canRun: canRun,
                             isAnotherRunning: runner.isRunning,
                             onRunOne: { runExportOne(dest) },
@@ -259,6 +260,17 @@ struct ExportSheet: View {
         goBtn.hasDestructiveAction = true
         return alert.runModal() == .alertSecondButtonReturn
     }
+}
+
+/// Human-friendly "ago" label. Under a minute → "<1m ago"; under an hour
+/// → "Nm ago"; an hour or more → "Nh ago".
+func agoString(from date: Date, now: Date = Date()) -> String {
+    let elapsed = max(0, now.timeIntervalSince(date))
+    let minutes = Int(elapsed / 60)
+    if minutes < 1 { return "<1m ago" }
+    if minutes < 60 { return "\(minutes)m ago" }
+    let hours = minutes / 60
+    return "\(hours)h ago"
 }
 
 /// Format an interval like "1m 20s" or "5s".

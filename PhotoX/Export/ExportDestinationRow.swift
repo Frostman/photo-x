@@ -6,6 +6,7 @@ import SwiftUI
 struct ExportDestinationRow: View {
     let destination: ExportSettings.Destination
     let runnerState: ExportRunner.DestinationState
+    let completedAt: Date?
     let canRun: Bool
     let isAnotherRunning: Bool
     let onRunOne: () -> Void
@@ -175,6 +176,13 @@ struct ExportDestinationRow: View {
 
     @ViewBuilder
     private var statusRow: some View {
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            statusContent(now: context.date)
+        }
+    }
+
+    @ViewBuilder
+    private func statusContent(now: Date) -> some View {
         switch runnerState {
         case .idle:
             Text("Idle").font(.caption).foregroundStyle(.secondary)
@@ -208,23 +216,41 @@ struct ExportDestinationRow: View {
                     .foregroundStyle(.secondary)
             }
         case .done(let s):
-            Label(
-                "Done · \(s.copied) copied · \(s.skipped) skipped"
-                + (s.deleted > 0 ? " · \(s.deleted) deleted" : "")
-                + (s.errors.isEmpty ? "" : " · \(s.errors.count) errors"),
-                systemImage: "checkmark.circle.fill"
-            )
-            .font(.caption)
-            .foregroundStyle(s.errors.isEmpty ? Color.green : Color.orange)
+            HStack(spacing: 6) {
+                Label(
+                    "Done · \(s.copied) copied · \(s.skipped) skipped"
+                    + (s.deleted > 0 ? " · \(s.deleted) deleted" : "")
+                    + (s.errors.isEmpty ? "" : " · \(s.errors.count) errors"),
+                    systemImage: "checkmark.circle.fill"
+                )
+                .font(.caption)
+                .foregroundStyle(s.errors.isEmpty ? Color.green : Color.orange)
+                agoLabel(now: now)
+            }
         case .cancelled(let s):
-            Label(
-                "Cancelled · \(s.copied) copied · \(s.skipped) skipped",
-                systemImage: "stop.circle"
-            )
-            .font(.caption).foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                Label(
+                    "Cancelled · \(s.copied) copied · \(s.skipped) skipped",
+                    systemImage: "stop.circle"
+                )
+                .font(.caption).foregroundStyle(.secondary)
+                agoLabel(now: now)
+            }
         case .failed(let message, _):
-            Label("Failed: \(message)", systemImage: "exclamationmark.triangle.fill")
-                .font(.caption).foregroundStyle(.red)
+            HStack(spacing: 6) {
+                Label("Failed: \(message)", systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption).foregroundStyle(.red)
+                agoLabel(now: now)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func agoLabel(now: Date) -> some View {
+        if let completedAt {
+            Text("· \(agoString(from: completedAt, now: now))")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
         }
     }
 

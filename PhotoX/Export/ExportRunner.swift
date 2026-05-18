@@ -75,6 +75,22 @@ final class ExportRunner {
     /// Set when the batch starts; cleared when it finishes.
     private(set) var batchProgress: BatchProgress?
 
+    /// Outcome of the most recently completed batch. Drives the pill's
+    /// post-run label ("Export: done" / "Export: cancelled" with "Nm ago").
+    /// Not persisted across launches.
+    enum BatchOutcome: Sendable, Hashable {
+        case done       // every destination finished cleanly
+        case cancelled  // at least one destination was cancelled
+        case failed     // at least one destination failed (and none cancelled)
+    }
+    private(set) var lastBatchOutcome: BatchOutcome?
+    private(set) var lastBatchCompletedAt: Date?
+
+    /// When each destination reached a terminal state (done / cancelled /
+    /// failed). Used to render the "Nm ago" label on each row. Cleared at
+    /// the start of the next batch.
+    private(set) var perDestinationCompletedAt: [UUID: Date] = [:]
+
     struct BatchProgress: Sendable, Hashable {
         var filesDone: Int        // copied + skipped across all dests
         var filesTotal: Int
@@ -179,9 +195,15 @@ final class ExportRunner {
         notifications: ExportNotificationsAdapter = .live
     ) {
         guard !destinations.isEmpty else { return }
+        // Clear stale post-completion state for these destinations + the
+        // last batch — a new run shouldn't display "5m ago" alongside its
+        // own in-flight progress.
+        lastBatchOutcome = nil
+        lastBatchCompletedAt = nil
         for dest in destinations {
             perDestination[dest.id] = .queued
             cancellationTokens[dest.id] = CancellationToken()
+            perDestinationCompletedAt.removeValue(forKey: dest.id)
         }
         let task = Task { [weak self] in
             guard let self else { return }
@@ -225,6 +247,8 @@ final class ExportRunner {
             }
             notifications.postAllComplete(summaries)
             self.batchProgress = nil
+            self.lastBatchOutcome = self.summariseBatchOutcome(for: destinations)
+            self.lastBatchCompletedAt = Date()
         }
         runningTasks[Self.batchSentinelID] = task
     }
@@ -240,6 +264,7 @@ final class ExportRunner {
         for (idx, dest) in destinations.enumerated() {
             if cancellationTokens[dest.id]?.isCancelled == true {
                 perDestination[dest.id] = .cancelled(.empty)
+                perDestinationCompletedAt[dest.id] = Date()
                 continue
             }
             // Reflect "destination N of M" in the toolbar pill.
@@ -269,6 +294,9 @@ final class ExportRunner {
         destination: ExportSettings.Destination,
         notifications: ExportNotificationsAdapter = .live
     ) {
+        lastBatchOutcome = nil
+        lastBatchCompletedAt = nil
+        perDestinationCompletedAt.removeValue(forKey: destinationID)
         perDestination[destinationID] = .queued
         cancellationTokens[destinationID] = CancellationToken()
         let task = Task { [weak self] in
@@ -290,8 +318,29 @@ final class ExportRunner {
             )
             notifications.postDestinationComplete(destination, summary)
             self.batchProgress = nil
+            self.lastBatchOutcome = self.summariseBatchOutcome(for: [destination])
+            self.lastBatchCompletedAt = Date()
         }
         runningTasks[destinationID] = task
+    }
+
+    /// Inspect `perDestination` for the destinations in this batch and roll
+    /// up to a single outcome.
+    private func summariseBatchOutcome(
+        for destinations: [ExportSettings.Destination]
+    ) -> BatchOutcome {
+        var anyCancelled = false
+        var anyFailed = false
+        for dest in destinations {
+            switch perDestination[dest.id] {
+            case .cancelled: anyCancelled = true
+            case .failed:    anyFailed = true
+            default: break
+            }
+        }
+        if anyCancelled { return .cancelled }
+        if anyFailed    { return .failed }
+        return .done
     }
 
     func cancelAll() {
@@ -354,6 +403,7 @@ final class ExportRunner {
                                   errors: [.init(file: plan.outputFolder.path, message: err)],
                                   elapsed: Date().timeIntervalSince(progress.startedAt))
             perDestination[dest.id] = .failed(err, summary)
+            perDestinationCompletedAt[dest.id] = Date()
             return summary
         }
 
@@ -432,6 +482,7 @@ final class ExportRunner {
         } else {
             perDestination[dest.id] = .done(summary)
         }
+        perDestinationCompletedAt[dest.id] = Date()
         return summary
     }
 
@@ -648,6 +699,7 @@ final class ExportRunner {
             } else {
                 perDestination[dest.id] = .done(summary)
             }
+            perDestinationCompletedAt[dest.id] = Date()
             summaries.append((dest, summary))
         }
         return summaries
