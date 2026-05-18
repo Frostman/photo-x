@@ -255,6 +255,10 @@ struct ContentView: View {
             canvasBackdrop.ignoresSafeArea()
 
             if let image = state.currentImage {
+                // No .ignoresSafeArea() here — extending under the titlebar
+                // pushes the photo's top edge behind the toolbar so the user
+                // can't see the full frame at fit zoom. The backdrop above
+                // still extends under, so visual continuity is preserved.
                 ImageCanvasView(
                     image: image.cgImage,
                     viewport: state.viewport,
@@ -264,7 +268,6 @@ struct ContentView: View {
                         state.updateViewportFromCanvas(vp, pixelZoom: pz)
                     }
                 )
-                .ignoresSafeArea()
                 .overlay {
                     if state.overlays.afPoints {
                         AFPointOverlay(
