@@ -252,7 +252,13 @@ struct ContentView: View {
             // theme it makes the empty/error/loading states a solid black
             // rectangle with no chrome. Use the dark backdrop only when an
             // image is actively on screen.
-            canvasBackdrop.ignoresSafeArea()
+            //
+            // NOT ignoring safe area on purpose: when this view did, SwiftUI
+            // extended the enclosing HStack's bounds up to match, which made
+            // the sibling sidebar (sharing that HStack) also stretch under
+            // the titlebar. Letting the backdrop respect the safe area keeps
+            // both the canvas and the sidebar below the toolbar.
+            canvasBackdrop
 
             if let image = state.currentImage {
                 // No .ignoresSafeArea() here — extending under the titlebar
