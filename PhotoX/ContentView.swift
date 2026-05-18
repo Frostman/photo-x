@@ -196,10 +196,10 @@ struct ContentView: View {
                 .help("Open another folder (⌘O)")
             }
 
-            // Export pill is the leftmost primaryAction so it visually sits
-            // ahead of the rest of the right cluster (Open/Close/theme/…).
-            // Stays visible while an export is running even after the user
-            // closes the shoot.
+            // Export is its OWN ToolbarItem (not bundled with the other
+            // primaryActions) so the system treats it as a separate
+            // toolbar entry. The pill's explicit capsule background makes
+            // it visually distinct from the icon-only buttons that follow.
             if state.shoot != nil || exportRunner.isRunning {
                 ToolbarItem(placement: .primaryAction) {
                     ExportToolbarPill(state: state, showSheet: $showExportSheet)
