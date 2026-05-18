@@ -167,6 +167,35 @@ final class ExportSharedReadTests: XCTestCase {
                       "no errors expected — source must not have been read at all; got: \(s2.errors)")
     }
 
+    func test_modeB_preservesSourceMtime_atEveryDestination() async throws {
+        let p = try makePair("X", body: "hello")
+        let pastMtime = Date(timeIntervalSinceReferenceDate: 2_000_000)
+        let xmpSrc = sourceDir.appendingPathComponent("X.xmp")
+        for u in [p.rawURL, p.heifURL, xmpSrc] {
+            try FileManager.default.setAttributes(
+                [.modificationDate: pastMtime], ofItemAtPath: u.path)
+        }
+
+        let dB1 = dest(at: destB1)
+        let dB2 = dest(at: destB2)
+        runner.startAll(pairs: [p], pairXMPs: [:],
+                        projectName: "P", destinations: [dB1, dB2],
+                        sharedRead: true, notifications: .silent)
+        await runner.waitForCompletion()
+
+        let outRoots: [URL] = [destB1, destB2]
+        for outRoot in outRoots {
+            for name in ["X.ARW", "X.HIF", "X.xmp"] {
+                let path = outRoot.appendingPathComponent("P/\(name)").path
+                let attrs = try FileManager.default.attributesOfItem(atPath: path)
+                XCTAssertEqual(
+                    attrs[.modificationDate] as? Date, pastMtime,
+                    "shared-read mode must propagate source mtime to \(name) in \(outRoot.lastPathComponent)"
+                )
+            }
+        }
+    }
+
     func test_modeB_orphanPhase_runsPerDestinationStill() async throws {
         let pA = try makePair("A", body: "a")
         let pB = try makePair("B", body: "b")

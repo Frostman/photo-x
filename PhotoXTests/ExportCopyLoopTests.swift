@@ -284,6 +284,32 @@ final class ExportCopyLoopTests: XCTestCase {
                       "atomic copy must clean up its temp files; found \(tempFiles)")
     }
 
+    func test_atomicCopy_preservesSourceMtime_atDestination() async throws {
+        // Set source mtime to a known time in the past.
+        let p = try makePair(stem: "X")
+        let pastMtime = Date(timeIntervalSinceReferenceDate: 1_000_000)  // arbitrary past
+        for url in [p.rawURL, p.heifURL,
+                    sourceDir.appendingPathComponent("X.xmp")] {
+            try FileManager.default.setAttributes(
+                [.modificationDate: pastMtime], ofItemAtPath: url.path)
+        }
+
+        let dest = destination()
+        await run(dest, pairs: [p])
+
+        // Each copied file at the destination must carry the SOURCE mtime,
+        // not "now". Without that, the universal skip-if-same-size-and-mtime
+        // check would re-copy unchanged files on the next run.
+        let out = outputFolder(project: "P")
+        for name in ["X.ARW", "X.HIF", "X.xmp"] {
+            let attrs = try FileManager.default.attributesOfItem(
+                atPath: out.appendingPathComponent(name).path)
+            let destMtime = attrs[.modificationDate] as? Date
+            XCTAssertEqual(destMtime, pastMtime,
+                           "\(name) dest mtime must equal source mtime, got \(String(describing: destMtime))")
+        }
+    }
+
     func test_atomicCopy_overwriteIsAtomic_destNeverMissing() async throws {
         // Two runs against the same destination — second run overwrites.
         // After both, the destination must contain the new bytes; at no

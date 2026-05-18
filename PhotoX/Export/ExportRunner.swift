@@ -627,6 +627,16 @@ final class ExportRunner {
                         // would leave a small window where dest is missing.
                         _ = w.removeFirst   // intentionally unused
                         try data.write(to: w.destURL, options: .atomic)
+                        // Data.write sets mtime to "now". Without this stamp
+                        // the next run sees a mtime delta of however long
+                        // the export took, defeating the universal skip
+                        // rule. We must propagate the source's mtime.
+                        if let srcMtime = srcSnap.mtime {
+                            try? FileManager.default.setAttributes(
+                                [.modificationDate: srcMtime],
+                                ofItemAtPath: w.destURL.path
+                            )
+                        }
                         outcomes.append(.copied(destID: w.destID, bytes: w.size))
                     } catch {
                         outcomes.append(.errored(destID: w.destID,
@@ -727,11 +737,15 @@ final class ExportRunner {
     /// `destURL` — the user always sees either the old file or the
     /// complete new one, never a half-copy.
     ///
-    /// Cleanup: if the temp copy succeeds but the swap fails, the temp
-    /// file is removed before throwing so we don't leak partial files.
-    /// If the temp copy itself fails (cancel, disk full, read error),
-    /// the temp file may or may not exist depending on how far copyItem
-    /// got; we attempt cleanup defensively.
+    /// After the swap we explicitly re-stamp the destination's mtime to
+    /// match the source. `copyItem` is documented to preserve attributes,
+    /// but SMB / some FUSE mounts don't honour that across rename. Without
+    /// this, the next run sees dest.mtime as "now" and the universal
+    /// skip-if-same-size-and-mtime check fails, so unchanged files get
+    /// pointlessly recopied.
+    ///
+    /// Cleanup: if any step fails, the temp file is removed before throwing
+    /// so we don't leak partials.
     nonisolated static func atomicCopy(
         from src: URL, to dest: URL, destExists: Bool
     ) throws {
@@ -744,7 +758,7 @@ final class ExportRunner {
         do {
             try fm.copyItem(at: src, to: tmp)
         } catch {
-            try? fm.removeItem(at: tmp)  // copyItem may have left a partial
+            try? fm.removeItem(at: tmp)
             throw error
         }
         do {
@@ -756,6 +770,13 @@ final class ExportRunner {
         } catch {
             try? fm.removeItem(at: tmp)
             throw error
+        }
+        // Best-effort mtime preservation. Failure (e.g. read-only mount) is
+        // logged silently and not propagated — the file still copied.
+        if let srcAttrs = try? fm.attributesOfItem(atPath: src.path),
+           let srcMtime = srcAttrs[.modificationDate] as? Date {
+            try? fm.setAttributes([.modificationDate: srcMtime],
+                                  ofItemAtPath: dest.path)
         }
     }
 
