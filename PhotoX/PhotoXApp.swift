@@ -173,15 +173,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
         }
     }
 
-    /// Click handler. Activate the app and ask ContentView to open the
-    /// Export sheet via a NotificationCenter broadcast.
+    /// Click handler. Just bring the app to the front — the user can
+    /// inspect the toolbar pill / open the Export sheet themselves if they
+    /// want details. Popping the sheet automatically was too aggressive
+    /// (it interrupted whatever they were already doing in the window).
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
         NSApp.activate(ignoringOtherApps: true)
-        NotificationCenter.default.post(name: .photoxOpenExportSheet, object: nil)
         completionHandler()
     }
 

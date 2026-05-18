@@ -2,13 +2,6 @@ import AppKit
 import Foundation
 import UserNotifications
 
-extension Notification.Name {
-    /// Posted by the UNUserNotificationCenter delegate when the user clicks
-    /// an export notification. ContentView listens and opens the Export
-    /// sheet.
-    static let photoxOpenExportSheet = Notification.Name("photox.export.openSheet")
-}
-
 /// Thin wrapper around `UNUserNotificationCenter` for the Export feature.
 /// Authorization is requested lazily on the first attempt to post.
 @MainActor

@@ -66,9 +66,6 @@ struct ContentView: View {
         .sheet(isPresented: $showExportSheet) {
             ExportSheet(state: state, isPresented: $showExportSheet)
         }
-        .onReceive(NotificationCenter.default.publisher(for: .photoxOpenExportSheet)) { _ in
-            showExportSheet = true
-        }
         // When the export sheet is up, make ContentView completely
         // non-focusable so all key events are routed exclusively to the
         // sheet's controls. Just toggling canvasFocused to false isn't
