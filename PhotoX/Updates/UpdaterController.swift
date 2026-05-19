@@ -10,6 +10,9 @@ final class UpdaterController {
     let updater: SPUStandardUpdaterController
     var canCheckForUpdates: Bool
 
+    /// Strong reference — `SPUStandardUpdaterController` holds the delegate
+    /// weakly, so it must outlive the updater.
+    private let delegate: UpdaterDelegate
     private var observation: NSKeyValueObservation?
 
     init() {
@@ -26,9 +29,11 @@ final class UpdaterController {
         let startingUpdater = true
         #endif
 
+        let delegate = UpdaterDelegate()
+        self.delegate = delegate
         let controller = SPUStandardUpdaterController(
             startingUpdater: startingUpdater,
-            updaterDelegate: nil,
+            updaterDelegate: delegate,
             userDriverDelegate: nil
         )
         self.updater = controller
@@ -49,7 +54,31 @@ final class UpdaterController {
         #endif
     }
 
+    /// Manual menu trigger. Resets Sparkle's internal cycle first so we
+    /// don't reuse any "remind me later" cached state — every click does
+    /// a fresh appcast fetch + picks the newest version available NOW.
+    /// The cache-buster query param (see UpdaterDelegate) ensures the
+    /// fetch isn't served from a CDN cache either.
     func checkForUpdates() {
+        updater.updater.resetUpdateCycle()
         updater.checkForUpdates(nil)
+    }
+}
+
+/// Sparkle delegate. Lives only to inject a per-request timestamp into
+/// the appcast URL so each check bypasses any CDN/HTTP cache (GitHub
+/// Raw is fronted by Fastly and may serve a stale appcast even on a
+/// manual user-initiated check). Without this, dismissing v0.140 then
+/// clicking Check for Updates a minute later might re-prompt for v0.140
+/// instead of finding the freshly-published v0.145.
+final class UpdaterDelegate: NSObject, SPUUpdaterDelegate {
+    nonisolated func feedParameters(for updater: SPUUpdater,
+                                    sendingSystemProfile sendingProfile: Bool)
+        -> [[String: String]]
+    {
+        // Unix epoch seconds — unique per request, GitHub Raw ignores
+        // unknown query params so the file content returned is the same.
+        let t = String(Int(Date().timeIntervalSince1970))
+        return [["key": "_t", "value": t]]
     }
 }
