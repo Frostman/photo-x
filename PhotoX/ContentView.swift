@@ -532,12 +532,10 @@ struct ContentView: View {
 
 
     /// Auto-detected shoot folders from mounted SD / CFExpress cards.
-    /// Read-only — no remove or favorite buttons — clicking opens the
-    /// folder. Same leading 18-pt spacer as Recents so the folder icons
-    /// line up vertically across all three sections. Two 20-pt clear
-    /// placeholders after the pill match the star/xmark button slots
-    /// used by Favorites / Recents so the pair-count pills line up
-    /// across all sections.
+    /// Clicking the row opens the folder; the trailing eject button
+    /// unmounts the whole card (mirrors Finder's sidebar). One clear
+    /// placeholder sits where Recents has its star button so the
+    /// pair-count pill + eject button align with the other sections.
     private var cardsSection: some View {
         section(title: "Cards") {
             ForEach(volumes.cardFolders, id: \.self) { path in
@@ -547,9 +545,39 @@ struct ContentView: View {
                     trailing: {
                         pairCountPill(for: path)
                         Color.clear.frame(width: 20, height: 20)
-                        Color.clear.frame(width: 20, height: 20)
+                        rowButton(systemImage: "eject", tint: .secondary,
+                                  help: "Eject card") {
+                            ejectVolume(forCardPath: path)
+                        }
                     }
                 )
+            }
+        }
+    }
+
+    /// Walk a card path (`/Volumes/<NAME>/DCIM/<folder>`) two levels up
+    /// to its volume root and ask the system to unmount + eject it.
+    /// Drops the HIF bytes cache first so any mmap'd Data we held
+    /// from a previous shoot view doesn't keep the volume busy. On
+    /// failure (volume in use by another app) surfaces an NSAlert so
+    /// the user knows nothing happened and why.
+    private func ejectVolume(forCardPath path: String) {
+        let volumeURL = URL(fileURLWithPath: path)
+            .deletingLastPathComponent()   // /Volumes/<NAME>/DCIM
+            .deletingLastPathComponent()   // /Volumes/<NAME>
+        Task {
+            await state.pipeline.hifBytes.clear()
+            do {
+                try NSWorkspace.shared.unmountAndEjectDevice(at: volumeURL)
+                // VolumeWatcher's didUnmount observer will refresh the
+                // Cards list automatically; nothing to do here.
+            } catch {
+                let alert = NSAlert()
+                alert.alertStyle = .warning
+                alert.messageText = "Couldn't eject \(volumeURL.lastPathComponent)"
+                alert.informativeText = "macOS refused to unmount the card — it may still be in use by another app.\n\n\(error.localizedDescription)"
+                alert.addButton(withTitle: "OK")
+                alert.runModal()
             }
         }
     }
