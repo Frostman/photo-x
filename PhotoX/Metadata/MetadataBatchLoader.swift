@@ -25,6 +25,17 @@ enum MetadataBatchLoader {
         var seq:  [String: Int]                   = [:]   // by SourceFile path
     }
 
+    /// Subprocess wall time vs in-process JSON parse time for one batch.
+    /// Logged per batch by the indexer so we can see whether the cost is
+    /// inside exiftool (file open + tag scan, dominated by spawn cold-start
+    /// on small batches) or in our Swift parsing (rare).
+    struct Stats: Sendable, Hashable {
+        var filesIn:  Int    = 0
+        var bytesOut: Int    = 0
+        var spawnMS:  Double = 0   // process.run() → waitUntilExit() + stdout drain
+        var parseMS:  Double = 0   // JSONSerialization + per-entry build
+    }
+
     /// Tags fetched per file. Order matters only for readability; exiftool
     /// returns them all in the same JSON object regardless. Adding new tags
     /// is essentially free — the dominant cost is opening the file.
@@ -56,13 +67,20 @@ enum MetadataBatchLoader {
         "-Composite:ImageSize",   // "WxH" works across HEIF + ARW
     ]
 
-    /// Run one exiftool spawn over `urls` and return parsed per-pair data
-    /// keyed by source path. Empty Result on any failure — caller treats
-    /// missing entries as "not yet indexed".
+    /// Convenience wrapper that drops stats. Kept for tests / debugging.
     nonisolated static func read(_ urls: [URL]) -> Result {
-        guard !urls.isEmpty else { return Result() }
+        readInstrumented(urls).result
+    }
+
+    /// Run one exiftool spawn over `urls` and return parsed per-pair data
+    /// alongside per-batch timing stats. Empty Result + nil stats on any
+    /// failure — caller treats missing entries as "not yet indexed".
+    nonisolated static func readInstrumented(_ urls: [URL])
+        -> (result: Result, stats: Stats?)
+    {
+        guard !urls.isEmpty else { return (Result(), nil) }
         guard FileManager.default.isExecutableFile(atPath: ExifToolRunner.exifToolPath) else {
-            return Result()
+            return (Result(), nil)
         }
         // `-n` disables exiftool's pretty-printing for numeric fields so we
         // get raw Doubles for FNumber / ExposureTime / etc. instead of
@@ -71,13 +89,24 @@ enum MetadataBatchLoader {
         args.append(contentsOf: tagArgs)
         args.append("--")
         args.append(contentsOf: urls.map { $0.path })
+        let t0 = CFAbsoluteTimeGetCurrent()
+        let data: Data
         do {
-            let data = try runJSONArray(arguments: args)
-            return parse(jsonData: data)
+            data = try runJSONArray(arguments: args)
         } catch {
             Log.app.error("MetadataBatchLoader: \(String(describing: error), privacy: .public)")
-            return Result()
+            return (Result(), nil)
         }
+        let t1 = CFAbsoluteTimeGetCurrent()
+        let parsed = parse(jsonData: data)
+        let t2 = CFAbsoluteTimeGetCurrent()
+        let stats = Stats(
+            filesIn:  urls.count,
+            bytesOut: data.count,
+            spawnMS:  (t1 - t0) * 1000.0,
+            parseMS:  (t2 - t1) * 1000.0
+        )
+        return (parsed, stats)
     }
 
     /// Parse the array-of-objects JSON shape that `exiftool -j` emits, and

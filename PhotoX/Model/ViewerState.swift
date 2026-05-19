@@ -545,8 +545,8 @@ final class ViewerState {
             if Task.isCancelled || shootGeneration != gen { return }
             let batch = pairBatches[id]
             let urls = batch.map(\.rawURL)
-            let result = await Task.detached(priority: .utility) {
-                MetadataBatchLoader.read(urls)
+            let (result, stats) = await Task.detached(priority: .utility) {
+                MetadataBatchLoader.readInstrumented(urls)
             }.value
             var afByStem:   [String: ExifToolRunner.AFData] = [:]
             var exifByStem: [String: ExifSummary] = [:]
@@ -558,8 +558,20 @@ final class ViewerState {
             }
             flushExifBatch(af: afByStem, exif: exifByStem, seq: seqByStem,
                            generation: gen)
+            logExifBatchStats(id: id, stats: stats)
             await queue.markDone(id)
         }
+    }
+
+    /// Per-batch breakdown of exiftool subprocess time vs in-process JSON
+    /// parse time. Lets us tell whether exiftool is slow (per-file scan or
+    /// spawn cold-start) or our Swift parsing is the bottleneck.
+    private nonisolated func logExifBatchStats(id: Int,
+                                                stats: MetadataBatchLoader.Stats?) {
+        guard let s = stats else { return }
+        let kb = s.bytesOut / 1024
+        let perFileMS = Double(s.filesIn) > 0 ? s.spawnMS / Double(s.filesIn) : 0
+        Log.app.notice("exif batch \(id, privacy: .public): \(s.filesIn, privacy: .public) files, \(kb, privacy: .public) KB out, spawn \(s.spawnMS, format: .fixed(precision: 1)) ms (\(perFileMS, format: .fixed(precision: 1)) ms/file), parse \(s.parseMS, format: .fixed(precision: 1)) ms")
     }
 
     private func runXMPPipeline(queue: BatchQueue, gen: Int) async {
