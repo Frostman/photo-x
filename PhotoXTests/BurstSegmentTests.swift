@@ -198,6 +198,11 @@ final class BurstSegmentTests: XCTestCase {
         let state = ViewerState()
         state.shoot = Shoot(folderURL: dir, pairs: pairs)
         state.pairSequenceNumber = seq
+        // In production the indexer flushes seq + recomputes burst ids
+        // atomically (see `flushExifBatch`). Tests must do the same after
+        // seeding `pairSequenceNumber` directly, otherwise the burst-id
+        // cache stays empty.
+        state.recomputeBurstIDs()
         return state
     }
 }

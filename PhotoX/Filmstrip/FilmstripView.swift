@@ -19,6 +19,13 @@ struct FilmstripView: View {
                         let visible = enumeratedVisible.map(\.element)
                         let visibleSortedIndices = enumeratedVisible.map(\.offset)
                         let useBrackets = state.sortMode == .name
+                        // Hoist the burst id / size tables ONCE per render.
+                        // Both are O(N over the shoot); calling the per-cell
+                        // `state.burstSegment(at:visible:)` repeatedly would
+                        // make filmstrip rendering O(visible × N) and beach
+                        // the main thread on 3 k+ pair shoots.
+                        let burstIDs   = useBrackets ? state.burstIDByStem   : [:]
+                        let burstSizes = useBrackets ? state.burstSizesByID  : [:]
                         ForEach(visible.indices, id: \.self) { vIdx in
                             let pair = visible[vIdx]
                             let sortedIdx = visibleSortedIndices[vIdx]
@@ -28,10 +35,13 @@ struct FilmstripView: View {
                                 thumbnail: state.thumbnails[pair.stem],
                                 xmp: state.pairXMPs[pair.stem] ?? .empty,
                                 burstSegment: useBrackets
-                                    ? state.burstSegment(at: vIdx, visible: visible)
+                                    ? ViewerState.burstSegment(at: vIdx,
+                                                               in: visible,
+                                                               ids: burstIDs,
+                                                               sizes: burstSizes)
                                     : .none,
                                 onTap: { state.navigate(to: sortedIdx) },
-                                onAppear: { state.requestThumbnail(for: pair) }
+                                onAppear: { state.prioritizeBatch(forStem: pair.stem) }
                             )
                             .id(sortedIdx)
                         }

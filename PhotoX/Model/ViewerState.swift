@@ -73,8 +73,9 @@ final class ViewerState {
     var currentAFRegions: [AFRegion] = []
     var currentAFSettings: AFSettings = AFSettings()
     private var afGeneration: Int = 0
-    private var pairAFData: [String: ExifToolRunner.AFData] = [:]
-    private var afInflight: [String: Task<ExifToolRunner.AFData, Never>] = [:]
+    /// Per-stem AF data cache. Populated EXCLUSIVELY by the indexer's
+    /// exiftool pipeline (see `runExifPipeline`). Cleared on shoot switch.
+    var pairAFData: [String: ExifToolRunner.AFData] = [:]
 
     var currentXMP: XMPSidecar = .empty
     private var xmpGeneration: Int = 0
@@ -219,15 +220,42 @@ final class ViewerState {
         if showUnrated  { n += s.unrated }
         return n
     }
+    // MARK: - Indexer-populated caches
+    //
+    // The indexer (see `startIndexing`) is the SOLE writer for these — no
+    // per-pair lazy fetches anywhere. `applyCurrentPair` reads them
+    // synchronously; SwiftUI re-renders when the flush methods publish a
+    // batch's results to the cache.
+
     var thumbnails: [String: CGImage] = [:]
     var pairXMPs: [String: XMPSidecar] = [:]
-    /// Sony `SequenceNumber` per pair stem. Populated by the eager burst
-    /// loader; filter-independent (every loaded pair has its raw number).
-    /// Drives `burstIDByStem` for the filmstrip bracket overlay.
+    /// Sony `SequenceNumber` per pair stem; filter-independent (every loaded
+    /// pair has its raw number). Drives `burstIDByStem` for the filmstrip
+    /// bracket overlay.
     var pairSequenceNumber: [String: Int] = [:]
-    private var shootMetadataTask: Task<Void, Never>?
-    private var burstMetadataTask: Task<Void, Never>?
-    private var thumbnailRequestedFor: Set<String> = []
+    /// EXIF summary for the sidebar, indexed eagerly via the exiftool batch
+    /// loader. Replaces the per-navigation ImageIO read.
+    var pairExif: [String: ExifSummary] = [:]
+
+    // MARK: - Indexing state
+
+    enum IndexingStatus: Hashable, Sendable {
+        case idle                           // no shoot loaded
+        case indexing(percent: Double)      // 0.0 ... 1.0
+        case done                           // caches fully populated
+        case cancelled                      // shoot closed mid-flight
+    }
+    var indexingStatus: IndexingStatus = .idle
+
+    private var indexingTask: Task<Void, Never>?
+    private var batchQueues: (exif: BatchQueue, xmp: BatchQueue, thumb: BatchQueue)?
+    private var stemToBatchID: [String: Int] = [:]
+    private var pairBatches: [[PhotoPair]] = []
+
+    private static let batchSize = 50
+    /// 4-wide concurrency inside the thumbnail pipeline's per-batch fanout.
+    /// Thumbnails are independent file reads; exiftool / XMP stay serial.
+    private static let thumbConcurrency = 4
 
     let pipeline: DecodePipeline = DecodePipeline()
 
@@ -255,14 +283,16 @@ final class ViewerState {
     }
 
     /// Loads a shoot and focuses on a specific pair within it. Replaces the
-    /// previous single-pair flow.
+    /// previous single-pair flow. Kicks off indexing BEFORE the first image
+    /// decode so the focus pair's metadata batch is already in flight by
+    /// the time the HEIF preview lands on-screen.
     func loadShoot(_ shoot: Shoot, focus: PhotoPair) async {
         resetForShootSwitch()
         self.shoot = shoot
         self.currentIndex = shoot.index(of: focus) ?? 0
         RecentShoots.shared.add(shoot.folderURL.path)
+        startIndexing()
         await applyCurrentPair(resetViewport: true)
-        kickOffShootMetadata()
     }
 
     /// Drop the current shoot and return to the empty starter state.
@@ -283,21 +313,24 @@ final class ViewerState {
         afGeneration &+= 1
         histogramGeneration &+= 1
 
-        // 2) Cancel the trackable long-running tasks.
-        shootMetadataTask?.cancel()
-        shootMetadataTask = nil
-        burstMetadataTask?.cancel()
-        burstMetadataTask = nil
-        afInflight.values.forEach { $0.cancel() }
-        afInflight.removeAll()
+        // 2) Cancel the indexer; pipelines and the progress ticker observe
+        //    Task.isCancelled + shootGeneration drift and unwind cleanly.
+        indexingTask?.cancel()
+        indexingTask = nil
+        batchQueues = nil
+        stemToBatchID.removeAll()
+        pairBatches.removeAll()
 
         // 3) Clear all caches.
         pipeline.cache.clear()
         thumbnails.removeAll()
-        thumbnailRequestedFor.removeAll()
         pairXMPs.removeAll()
         pairAFData.removeAll()
         pairSequenceNumber.removeAll()
+        pairExif.removeAll()
+        burstIDByStem.removeAll()
+        burstSizesByID.removeAll()
+        indexingStatus = .idle
 
         // 4) Reset per-pair UI state.
         currentIndex = 0
@@ -321,111 +354,280 @@ final class ViewerState {
         filmstripVisible.toggle()
     }
 
-    /// Background-load XMP sidecars for every pair so filmstrip badges are
-    /// correct. Batched writes to pairXMPs (every 100 items / 250 ms) so
-    /// SwiftUI doesn't re-render a 5000-item ForEach on every single update.
-    /// Thumbnails are loaded LAZILY — see requestThumbnail(for:).
-    private func kickOffShootMetadata() {
-        kickOffXMPMetadata()
-        kickOffBurstMetadata()
-    }
+    // MARK: - Indexer (sole loader for EXIF / AF / XMP / SequenceNumber / thumbnails)
+    //
+    // The shoot is sliced into 50-pair batches at start. Three independent
+    // pipeline workers (exiftool, XMP, thumbnails) pull batches off their
+    // own priority queue. Each pipeline guarantees a batch is processed at
+    // most once. `prioritizeBatch(forStem:)` bumps a pair's batch to the
+    // head of all three queues so the focus pair's data lands fast even
+    // mid-indexing.
 
-    private func kickOffXMPMetadata() {
+    func startIndexing() {
         guard let shoot else { return }
-        shootMetadataTask?.cancel()
-        let pairs = shoot.pairs
         let gen = shootGeneration
-        shootMetadataTask = Task(priority: .utility) { [weak self] in
-            var batch: [(String, XMPSidecar)] = []
-            var lastFlush = CFAbsoluteTimeGetCurrent()
-            let flushSize = 100
-            let flushIntervalSec: Double = 0.25
 
-            for pair in pairs {
-                if Task.isCancelled { return }
-                let xmp = await Task.detached(priority: .utility) {
-                    XMPSidecarReader.read(for: pair)
-                }.value
-                batch.append((pair.stem, xmp))
+        pairBatches = stride(from: 0, to: shoot.pairs.count, by: Self.batchSize).map {
+            Array(shoot.pairs[$0 ..< min($0 + Self.batchSize, shoot.pairs.count)])
+        }
+        stemToBatchID.removeAll(keepingCapacity: true)
+        for (id, batch) in pairBatches.enumerated() {
+            for pair in batch { stemToBatchID[pair.stem] = id }
+        }
 
-                let now = CFAbsoluteTimeGetCurrent()
-                if batch.count >= flushSize || (now - lastFlush) > flushIntervalSec {
-                    let snapshot = batch
-                    batch.removeAll(keepingCapacity: true)
-                    lastFlush = now
-                    await self?.flushXMPBatch(snapshot, generation: gen)
+        let count = pairBatches.count
+        if count == 0 {
+            indexingStatus = .done
+            batchQueues = nil
+            return
+        }
+        let queues = (exif:  BatchQueue(batchCount: count),
+                      xmp:   BatchQueue(batchCount: count),
+                      thumb: BatchQueue(batchCount: count))
+        batchQueues = queues
+
+        indexingStatus = .indexing(percent: 0)
+        Log.app.notice("Indexing \(shoot.pairs.count, privacy: .public) pairs in \(count, privacy: .public) batches of \(Self.batchSize, privacy: .public)")
+
+        indexingTask = Task(priority: .utility) { [weak self] in
+            await withTaskGroup(of: Void.self) { group in
+                group.addTask { [weak self] in
+                    await self?.runExifPipeline(queue: queues.exif, gen: gen)
+                }
+                group.addTask { [weak self] in
+                    await self?.runXMPPipeline(queue: queues.xmp, gen: gen)
+                }
+                group.addTask { [weak self] in
+                    await self?.runThumbPipeline(queue: queues.thumb, gen: gen)
+                }
+                group.addTask { [weak self] in
+                    await self?.progressTicker(queues: queues,
+                                               total: count * 3,
+                                               gen: gen)
                 }
             }
-            if !batch.isEmpty {
-                await self?.flushXMPBatch(batch, generation: gen)
+            self?.finishIndexing(generation: gen)
+        }
+
+        // Make sure the pair the user is looking at gets indexed first.
+        if let stem = pair?.stem {
+            prioritizeBatch(forStem: stem)
+        }
+    }
+
+    /// Re-run indexing from scratch. Wipes the four eager caches, bumps
+    /// shootGeneration so any in-flight pipeline task observes the change
+    /// and bails, and starts a fresh indexing task. The status-bar
+    /// "Re-index" button is the only caller today.
+    func reIndex() {
+        guard shoot != nil else { return }
+        indexingTask?.cancel()
+        indexingTask = nil
+        shootGeneration &+= 1
+        thumbnails.removeAll()
+        pairXMPs.removeAll()
+        pairAFData.removeAll()
+        pairSequenceNumber.removeAll()
+        pairExif.removeAll()
+        burstIDByStem.removeAll()
+        burstSizesByID.removeAll()
+        batchQueues = nil
+        // pairBatches + stemToBatchID will be rebuilt by startIndexing.
+        startIndexing()
+    }
+
+    /// Signal the indexer to bump a pair's batch to the head of every
+    /// pipeline. No-op if the batch is already in progress or done.
+    func prioritizeBatch(forStem stem: String) {
+        guard let id = stemToBatchID[stem], let queues = batchQueues else { return }
+        Task {
+            await queues.exif.prioritize(id)
+            await queues.xmp.prioritize(id)
+            await queues.thumb.prioritize(id)
+        }
+    }
+
+    // MARK: pipelines
+
+    private func runExifPipeline(queue: BatchQueue, gen: Int) async {
+        while let id = await queue.popNext() {
+            if Task.isCancelled || shootGeneration != gen { return }
+            let batch = pairBatches[id]
+            let urls = batch.map(\.rawURL)
+            let result = await Task.detached(priority: .utility) {
+                MetadataBatchLoader.read(urls)
+            }.value
+            var afByStem:   [String: ExifToolRunner.AFData] = [:]
+            var exifByStem: [String: ExifSummary] = [:]
+            var seqByStem:  [String: Int] = [:]
+            for pair in batch {
+                if let v = result.af  [pair.rawURL.path] { afByStem  [pair.stem] = v }
+                if let v = result.exif[pair.rawURL.path] { exifByStem[pair.stem] = v }
+                if let v = result.seq [pair.rawURL.path] { seqByStem [pair.stem] = v }
+            }
+            flushExifBatch(af: afByStem, exif: exifByStem, seq: seqByStem,
+                           generation: gen)
+            await queue.markDone(id)
+        }
+    }
+
+    private func runXMPPipeline(queue: BatchQueue, gen: Int) async {
+        while let id = await queue.popNext() {
+            if Task.isCancelled || shootGeneration != gen { return }
+            let batch = pairBatches[id]
+            let results = await Task.detached(priority: .utility) {
+                batch.map { (stem: $0.stem, xmp: XMPSidecarReader.read(for: $0)) }
+            }.value
+            flushXMPSlice(results, generation: gen)
+            await queue.markDone(id)
+        }
+    }
+
+    private func runThumbPipeline(queue: BatchQueue, gen: Int) async {
+        while let id = await queue.popNext() {
+            if Task.isCancelled || shootGeneration != gen { return }
+            let batch = pairBatches[id]
+            // Sliding-window concurrency of `thumbConcurrency` ImageIO loads.
+            // ImageIO is thread-safe and HEIF embedded-thumb reads are
+            // independent — but capping fanout keeps disk IO predictable
+            // on slower media (SD cards) and avoids unbounded dispatch
+            // queue inflation.
+            let loaded = await withTaskGroup(of: (String, CGImage?).self,
+                                             returning: [(String, CGImage)].self) { group in
+                var iter = batch.makeIterator()
+                func spawnNext() -> Bool {
+                    guard let pair = iter.next() else { return false }
+                    let url = pair.heifURL
+                    let stem = pair.stem
+                    group.addTask {
+                        let img = await Task.detached(priority: .utility) {
+                            ThumbnailLoader.load(from: url)
+                        }.value
+                        return (stem, img)
+                    }
+                    return true
+                }
+                for _ in 0 ..< Self.thumbConcurrency {
+                    if !spawnNext() { break }
+                }
+                var out: [(String, CGImage)] = []
+                while let (stem, img) = await group.next() {
+                    if let img { out.append((stem, img)) }
+                    _ = spawnNext()
+                }
+                return out
+            }
+            flushThumbBatch(loaded, generation: gen)
+            await queue.markDone(id)
+        }
+    }
+
+    // MARK: flushes (all on MainActor)
+
+    private func flushExifBatch(af: [String: ExifToolRunner.AFData],
+                                exif: [String: ExifSummary],
+                                seq: [String: Int],
+                                generation: Int) {
+        guard shootGeneration == generation else { return }
+        for (stem, v) in af   { pairAFData[stem]          = v }
+        for (stem, v) in exif { pairExif[stem]            = v }
+        for (stem, v) in seq  { pairSequenceNumber[stem]  = v }
+        // Roll the burst-id table forward so the filmstrip's bracket
+        // overlay can read it as an O(1) lookup. Doing it here at the
+        // flush boundary (~60 times per 3 k-pair shoot, instead of per
+        // SwiftUI render which could be thousands of times) is the perf
+        // contract that keeps the main thread responsive during indexing.
+        if !seq.isEmpty { recomputeBurstIDs() }
+        // If the just-arrived batch covers the currently-displayed pair,
+        // refresh the view-state fields so the sidebar / AF overlay update
+        // without waiting for a navigation event.
+        if let stem = pair?.stem {
+            if let v = exif[stem] { self.currentExif = v }
+            if let v = af[stem] {
+                self.currentAFRegions = v.regions
+                self.currentAFSettings = v.settings
             }
         }
     }
 
-    private func flushXMPBatch(_ items: [(String, XMPSidecar)], generation: Int) {
-        // Drop a flush that lands after the shoot was closed/switched.
+    private func flushXMPSlice(_ items: [(stem: String, xmp: XMPSidecar)],
+                               generation: Int) {
         guard shootGeneration == generation else { return }
         for (stem, xmp) in items {
-            // Don't overwrite an optimistic user update. If the user has
-            // already set a rating on this pair, our in-memory value is the
-            // source of truth (and the disk write either landed or is in
-            // flight). Either way, skipping is correct.
-            if pairXMPs[stem] == nil {
-                pairXMPs[stem] = xmp
-            }
+            // Don't overwrite an optimistic user rating — see Phase 4c
+            // notes; in-memory wins if the user has already touched it.
+            if pairXMPs[stem] == nil { pairXMPs[stem] = xmp }
+        }
+        if let stem = pair?.stem, let xmp = items.first(where: { $0.stem == stem })?.xmp,
+           self.currentXMP == .empty {
+            self.currentXMP = xmp
         }
     }
 
-    /// Eagerly read `Sony:SequenceNumber` for every ARW in the shoot, batched
-    /// 100 URLs per exiftool spawn. Flushed back to `pairSequenceNumber`
-    /// between batches so the filmstrip's bracket overlay starts appearing
-    /// as the user scrolls (rather than only when the whole shoot is done).
-    private static let burstChunkSize = 100
-
-    private func kickOffBurstMetadata() {
-        guard let shoot else { return }
-        burstMetadataTask?.cancel()
-        // Build per-pair (stem, url) pairs once on the main actor so the
-        // detached task doesn't need to touch any actor-isolated state.
-        let chunks: [[(stem: String, url: URL)]] = stride(
-            from: 0, to: shoot.pairs.count, by: Self.burstChunkSize
-        ).map { start in
-            let end = min(start + Self.burstChunkSize, shoot.pairs.count)
-            return shoot.pairs[start..<end].map { (stem: $0.stem, url: $0.rawURL) }
-        }
-        let gen = shootGeneration
-        burstMetadataTask = Task(priority: .utility) { [weak self] in
-            for chunk in chunks {
-                if Task.isCancelled { return }
-                let bySource = await Task.detached(priority: .utility) {
-                    ExifToolBurstLoader.read(chunk.map(\.url))
-                }.value
-                // Re-key by stem; exiftool returns paths as-given.
-                var byStem: [String: Int] = [:]
-                for entry in chunk {
-                    if let n = bySource[entry.url.path] { byStem[entry.stem] = n }
-                }
-                await self?.flushBurstBatch(byStem, generation: gen)
-            }
-        }
-    }
-
-    private func flushBurstBatch(_ items: [String: Int], generation: Int) {
+    private func flushThumbBatch(_ items: [(String, CGImage)], generation: Int) {
         guard shootGeneration == generation else { return }
-        for (stem, n) in items {
-            pairSequenceNumber[stem] = n
+        for (stem, img) in items { thumbnails[stem] = img }
+    }
+
+    // MARK: progress
+
+    private func progressTicker(queues: (exif: BatchQueue, xmp: BatchQueue, thumb: BatchQueue),
+                                total: Int,
+                                gen: Int) async {
+        while !Task.isCancelled, shootGeneration == gen {
+            let exifDone  = await queues.exif.snapshotDoneCount()
+            let xmpDone   = await queues.xmp.snapshotDoneCount()
+            let thumbDone = await queues.thumb.snapshotDoneCount()
+            let done = exifDone + xmpDone + thumbDone
+            let pct = total == 0 ? 1.0 : Double(done) / Double(total)
+            setIndexingPercent(pct, generation: gen)
+            if done >= total { return }
+            try? await Task.sleep(for: .milliseconds(100))
         }
+    }
+
+    private func setIndexingPercent(_ pct: Double, generation: Int) {
+        guard shootGeneration == generation else { return }
+        // Don't downgrade a terminal status.
+        if case .done = indexingStatus { return }
+        if case .cancelled = indexingStatus { return }
+        indexingStatus = .indexing(percent: min(max(pct, 0), 1))
+    }
+
+    private func finishIndexing(generation: Int) {
+        guard shootGeneration == generation else { return }
+        indexingStatus = .done
+        Log.app.notice("Indexing complete")
     }
 
     // MARK: - Burst detection (filmstrip bracket overlay)
 
-    /// Burst id per pair stem. Walks the FULL name-sorted pair list; pairs
-    /// whose `Sony:SequenceNumber` is one greater than the previous pair's
-    /// share an id. Frames without a sequence number break any in-progress
-    /// run. Computed against the whole shoot — never the filtered/sorted
-    /// view — so filter toggles can't break up a burst's grouping.
-    var burstIDByStem: [String: Int] {
-        guard let shoot else { return [:] }
+    /// Burst id per pair stem. Pairs whose `Sony:SequenceNumber` is one
+    /// greater than the previous (name-sorted) pair's share an id. Frames
+    /// without a sequence number break any in-progress run. Computed
+    /// against the whole shoot — never the filtered/sorted view — so
+    /// filter toggles can't break up a burst's grouping.
+    ///
+    /// Reading is O(1) — the cache is rebuilt by `recomputeBurstIDs()`
+    /// from the indexer's exif flush boundary, so the per-frame SwiftUI
+    /// render cost stays flat regardless of shoot size.
+    private(set) var burstIDByStem: [String: Int] = [:]
+
+    /// Total membership per burst id across the FULL shoot. Used to drop
+    /// singleton bursts (size 1) regardless of the current filter.
+    private(set) var burstSizesByID: [Int: Int] = [:]
+
+    /// Recompute `burstIDByStem` + `burstSizesByID` from the current
+    /// `pairSequenceNumber` cache + name-sorted pair list. Called by the
+    /// indexer whenever an exif batch lands new SequenceNumber data, and
+    /// by tests that seed `pairSequenceNumber` directly. O(N over the
+    /// shoot); safe to call on MainActor.
+    func recomputeBurstIDs() {
+        guard let shoot else {
+            burstIDByStem = [:]
+            burstSizesByID = [:]
+            return
+        }
         var ids: [String: Int] = [:]
         var nextID = 0
         var prevSeq: Int? = nil
@@ -442,15 +644,10 @@ final class ViewerState {
             }
             prevSeq = seq
         }
-        return ids
-    }
-
-    /// Total membership per burst id across the FULL shoot. Used to drop
-    /// singleton bursts (size 1) regardless of the current filter.
-    var burstSizesByID: [Int: Int] {
         var sizes: [Int: Int] = [:]
-        for id in burstIDByStem.values { sizes[id, default: 0] += 1 }
-        return sizes
+        for id in ids.values { sizes[id, default: 0] += 1 }
+        burstIDByStem = ids
+        burstSizesByID = sizes
     }
 
     /// Where this pair sits in its burst, expressed as a top-edge bracket
@@ -467,13 +664,28 @@ final class ViewerState {
     /// Pure helper. `visible` is the filmstrip's display-order list (after
     /// sort + filter). Returns `.none` unless sort == .name AND the pair
     /// belongs to a multi-frame burst AND at least one VISIBLE neighbour
-    /// shares its burst id. Cheap enough to call once per visible
-    /// thumbnail per body re-eval.
+    /// shares its burst id.
+    ///
+    /// This convenience overload rebuilds the burst id + size dicts on
+    /// every call, which is O(N) over the shoot. **Do not call this in a
+    /// per-cell render loop** — use `Self.burstSegment(at:in:ids:sizes:)`
+    /// with hoisted ids/sizes so the cost stays O(visible) per render
+    /// instead of O(visible × N).
     func burstSegment(at index: Int, visible: [PhotoPair]) -> BurstSegment {
         guard sortMode == .name else { return .none }
+        return Self.burstSegment(at: index, in: visible,
+                                 ids: burstIDByStem,
+                                 sizes: burstSizesByID)
+    }
+
+    /// Per-cell segment helper that takes pre-hoisted burst id + size
+    /// dicts. Caller (FilmstripView) reads `burstIDByStem` / `burstSizesByID`
+    /// ONCE at the top of its body and passes them through so this loop
+    /// stays O(1) per cell.
+    static func burstSegment(at index: Int, in visible: [PhotoPair],
+                             ids: [String: Int],
+                             sizes: [Int: Int]) -> BurstSegment {
         guard visible.indices.contains(index) else { return .none }
-        let ids = burstIDByStem
-        let sizes = burstSizesByID
         guard let myID = ids[visible[index].stem],
               (sizes[myID] ?? 0) >= 2 else { return .none }
 
@@ -488,26 +700,6 @@ final class ViewerState {
         case (false, true):  return .start
         case (true,  true):  return .middle
         case (true,  false): return .end
-        }
-    }
-
-    /// Called by the filmstrip when a thumbnail cell appears. Loads the
-    /// thumbnail off main and caches it. Deduped — a second request for the
-    /// same pair is a no-op while the first is in flight.
-    func requestThumbnail(for pair: PhotoPair) {
-        guard thumbnails[pair.stem] == nil,
-              !thumbnailRequestedFor.contains(pair.stem) else { return }
-        thumbnailRequestedFor.insert(pair.stem)
-        let heifURL = pair.heifURL
-        let gen = shootGeneration
-        Task { [weak self] in
-            let thumb = await Task.detached(priority: .utility) {
-                ThumbnailLoader.load(from: heifURL)
-            }.value
-            guard let self, self.shootGeneration == gen else { return }
-            if let thumb {
-                self.thumbnails[pair.stem] = thumb
-            }
         }
     }
 
@@ -716,17 +908,18 @@ final class ViewerState {
         }
     }
 
-    /// Apply everything for the current pair: clear stale per-pair state,
-    /// kick off metadata loads, decode the HEIF preview, then warm the cache
-    /// with the neighbors' HEIFs so ←/→ feels instant.
+    /// Apply everything for the current pair. Metadata (EXIF, AF, XMP,
+    /// thumbnails, SequenceNumber) comes from the indexer's caches — this
+    /// method does NOT spawn any metadata Task. If the cache is cold for
+    /// the pair, the view shows empty/placeholder state and we signal the
+    /// indexer to bump that batch to the head of every pipeline; the flush
+    /// methods will fill `currentXxx` when the batch lands.
     private func applyCurrentPair(resetViewport: Bool) async {
         guard let pair else { return }
         PerfTracker.mark("applyCurrentPair entered")
         // Keep currentImage as-is so the previous frame stays on screen until
         // the new one decodes — avoids a flash to ProgressView (which would
-        // tear down the ImageCanvasView and lose SwiftUI focus). The
-        // metadata-side panels (XMP, EXIF, AF) DO clear, because they're
-        // pair-specific and a brief blank is better than showing stale info.
+        // tear down the ImageCanvasView and lose SwiftUI focus).
         self.errorMessage = nil
         self.displayedVariant = .heif
         self.requestedVariant = .heif
@@ -734,14 +927,15 @@ final class ViewerState {
             self.viewport = .identity
             self.currentPixelZoom = 1.0
         }
-        self.currentExif = nil
-        self.currentAFRegions = []
-        self.currentAFSettings = AFSettings()
-        self.currentXMP = .empty
-        self.currentPairFiles = pairFiles(for: pair)
-        kickOffExifLoad(for: pair)
-        kickOffAFLoad(for: pair)
-        kickOffXMPLoad(for: pair)
+        let af = pairAFData[pair.stem]
+        self.currentExif        = pairExif[pair.stem]
+        self.currentAFRegions   = af?.regions ?? []
+        self.currentAFSettings  = af?.settings ?? AFSettings()
+        self.currentXMP         = pairXMPs[pair.stem] ?? .empty
+        self.currentPairFiles   = pairFiles(for: pair)
+        self.perfStats.afMS     = (af != nil) ? 0 : nil
+        self.perfStats.afCached = af != nil
+        prioritizeBatch(forStem: pair.stem)
         await applyRequestedVariant()
         prefetchNeighborHEIFs()
     }
@@ -756,24 +950,9 @@ final class ViewerState {
         )
     }
 
-    private func kickOffXMPLoad(for pair: PhotoPair) {
-        xmpGeneration += 1
-        let gen = xmpGeneration
-        let pairCopy = pair
-        let t0 = CFAbsoluteTimeGetCurrent()
-        Task { [weak self] in
-            let xmp = await Task.detached(priority: .utility) {
-                XMPSidecarReader.read(for: pairCopy)
-            }.value
-            guard let self else { return }
-            guard self.xmpGeneration == gen else { return }
-            self.currentXMP = xmp
-            self.perfStats.xmpMS = (CFAbsoluteTimeGetCurrent() - t0) * 1000.0
-        }
-    }
-
-    /// Warm the pipeline cache with HEIFs for index ±1 so arrow-key
-    /// navigation feels instant. Best-effort; we ignore failures.
+    /// Warm the HEIF decode cache for index ±1 so arrow-key navigation
+    /// renders the next image without waiting. Image decode is its own
+    /// pipeline — the indexer does not own it.
     private func prefetchNeighborHEIFs() {
         let pairs = sortedPairs
         let neighborIndices = [currentIndex - 1, currentIndex + 1]
@@ -785,72 +964,7 @@ final class ViewerState {
                     pair: neighbor, variant: .heif, decoder: .imageIO
                 )
             }
-            // Warm the AF cache too — one exiftool call per neighbor, off main,
-            // deduped against any concurrent foreground request via loadAFData.
-            Task(priority: .utility) { [weak self] in
-                _ = await self?.loadAFData(for: neighbor)
-            }
         }
-    }
-
-    private func kickOffExifLoad(for pair: PhotoPair) {
-        exifGeneration += 1
-        let gen = exifGeneration
-        let url = pair.rawURL
-        Task { [weak self] in
-            let exif = await Task.detached(priority: .utility) {
-                ImageIOMetadata.read(from: url)
-            }.value
-            guard let self else { return }
-            guard self.exifGeneration == gen else { return }
-            self.currentExif = exif
-        }
-    }
-
-    private func kickOffAFLoad(for pair: PhotoPair) {
-        afGeneration += 1
-        let gen = afGeneration
-        let wasCached = pairAFData[pair.stem] != nil
-        let t0 = CFAbsoluteTimeGetCurrent()
-        Task { [weak self] in
-            guard let self else { return }
-            let data = await self.loadAFData(for: pair)
-            guard self.afGeneration == gen else { return }
-            let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000.0
-            self.currentAFRegions = data.regions
-            self.currentAFSettings = data.settings
-            self.perfStats.afMS = ms
-            self.perfStats.afCached = wasCached
-            Log.app.notice("AF regions loaded: \(data.regions.count) for \(pair.stem, privacy: .public) in \(ms, format: .fixed(precision: 1)) ms (cached=\(wasCached))")
-        }
-    }
-
-    /// Shared loader for AF data. Returns from cache when available, dedups
-    /// in-flight requests so foreground + prefetch for the same pair don't
-    /// spawn two exiftool calls.
-    func loadAFData(for pair: PhotoPair) async -> ExifToolRunner.AFData {
-        if let cached = pairAFData[pair.stem] {
-            return cached
-        }
-        if let existing = afInflight[pair.stem] {
-            return await existing.value
-        }
-        let url = pair.rawURL
-        let stem = pair.stem
-        let gen = shootGeneration
-        let task = Task<ExifToolRunner.AFData, Never>(priority: .utility) {
-            await Task.detached(priority: .utility) {
-                ExifToolRunner.readAF(from: url)
-            }.value
-        }
-        afInflight[stem] = task
-        defer { afInflight[stem] = nil }
-        let data = await task.value
-        // If the shoot was closed/switched while we were waiting on exiftool,
-        // don't pollute the (now-cleared) cache for the next shoot.
-        guard shootGeneration == gen else { return data }
-        pairAFData[stem] = data
-        return data
     }
 
     private func kickOffHistogramCompute(for image: DecodedImage) {

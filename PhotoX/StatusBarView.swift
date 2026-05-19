@@ -12,6 +12,7 @@ struct StatusBarView: View {
         HStack(spacing: 12) {
             stats
             Spacer()
+            indexingChip
             sortMenu
             Divider().frame(height: 18)
             toggles
@@ -21,6 +22,38 @@ struct StatusBarView: View {
         .background(Color(nsColor: .windowBackgroundColor))
         .overlay(alignment: .top) {
             Rectangle().fill(Color(nsColor: .separatorColor)).frame(height: 1)
+        }
+    }
+
+    /// Indexer status: hidden when there's no shoot, circular spinner +
+    /// percent during indexing, "Re-index" button once everything is in
+    /// memory. Sits between the stats and the sort menu so the user can
+    /// see exactly when navigation will be cache-only.
+    @ViewBuilder
+    private var indexingChip: some View {
+        switch state.indexingStatus {
+        case .idle:
+            EmptyView()
+        case .indexing(let pct):
+            HStack(spacing: 4) {
+                ProgressView(value: pct)
+                    .progressViewStyle(.circular)
+                    .controlSize(.mini)
+                Text("Indexing \(Int(pct * 100))%")
+                    .font(.caption.monospacedDigit().bold())
+                    .foregroundStyle(.secondary)
+            }
+            .help("Loading EXIF, AF data, XMP sidecars and thumbnails into memory")
+        case .done, .cancelled:
+            Button {
+                state.reIndex()
+            } label: {
+                Label("Re-index", systemImage: "arrow.clockwise")
+                    .font(.caption.bold())
+                    .labelStyle(.titleAndIcon)
+            }
+            .buttonStyle(.borderless)
+            .help("Re-read EXIF, AF data, XMP sidecars and thumbnails from disk")
         }
     }
 
@@ -52,7 +85,16 @@ struct StatusBarView: View {
     }
 
     private var stats: some View {
+        // shootStats is O(N over the shoot); call it ONCE and derive
+        // shownCount from the same tuple instead of `state.shownCount`
+        // (which walks the shoot a second time).
         let s = state.shootStats
+        var shown = 0
+        for (stars, count) in s.stars where state.showStars.contains(stars) {
+            shown += count
+        }
+        if state.showRejected { shown += s.rejected }
+        if state.showUnrated  { shown += s.unrated }
         return HStack(spacing: 6) {
             statChip(label: "rated",    count: s.rated,    color: .yellow)
             Text("·").foregroundStyle(.secondary)
@@ -61,7 +103,7 @@ struct StatusBarView: View {
             statChip(label: "unrated",  count: s.unrated,  color: .secondary)
             if state.filmstripVisible {
                 Text("·").foregroundStyle(.secondary)
-                Text("\(state.shownCount) shown")
+                Text("\(shown) shown")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
