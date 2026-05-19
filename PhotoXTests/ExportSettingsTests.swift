@@ -84,6 +84,80 @@ final class ExportSettingsTests: XCTestCase {
         XCTAssertEqual(ids.count, 3, "every Destination should have a fresh UUID")
     }
 
+    // MARK: add — validation against duplicate / nested paths
+
+    func test_add_returnsOk_onFreshPath() {
+        let s = ExportSettings(defaults: defaults)
+        XCTAssertEqual(s.add(path: "/foo"), .ok)
+        XCTAssertEqual(s.destinations.count, 1)
+    }
+
+    func test_add_rejectsDuplicatePath() {
+        let s = ExportSettings(defaults: defaults)
+        s.add(path: "/foo")
+        let result = s.add(path: "/foo")
+        XCTAssertEqual(result, .duplicate)
+        XCTAssertEqual(s.destinations.count, 1, "rejected add must not modify list")
+    }
+
+    func test_add_rejectsDuplicatePath_ignoringTrailingSlash() {
+        let s = ExportSettings(defaults: defaults)
+        s.add(path: "/foo")
+        XCTAssertEqual(s.add(path: "/foo/"), .duplicate)
+        XCTAssertEqual(s.destinations.count, 1)
+    }
+
+    func test_add_rejectsNestedUnderExisting() {
+        let s = ExportSettings(defaults: defaults)
+        s.add(path: "/foo")
+        let result = s.add(path: "/foo/bar")
+        XCTAssertEqual(result, .nestedUnder(existingPath: "/foo"))
+        XCTAssertEqual(s.destinations.count, 1)
+    }
+
+    func test_add_rejectsContainingExisting() {
+        let s = ExportSettings(defaults: defaults)
+        s.add(path: "/foo/bar")
+        let result = s.add(path: "/foo")
+        XCTAssertEqual(result, .containsExisting(existingPath: "/foo/bar"))
+        XCTAssertEqual(s.destinations.count, 1)
+    }
+
+    func test_add_allowsSiblingsWithCommonPrefix() {
+        // "/foo" must NOT be considered a parent of "/foo-bar" — the
+        // strict-prefix check uses the path separator to disambiguate.
+        let s = ExportSettings(defaults: defaults)
+        s.add(path: "/foo")
+        XCTAssertEqual(s.add(path: "/foo-bar"), .ok)
+        XCTAssertEqual(s.destinations.count, 2)
+    }
+
+    func test_add_allowsCompletelyDisjointPaths() {
+        let s = ExportSettings(defaults: defaults)
+        s.add(path: "/Volumes/A/photos")
+        XCTAssertEqual(s.add(path: "/Volumes/B/backups"), .ok)
+        XCTAssertEqual(s.destinations.count, 2)
+    }
+
+    func test_normalizePath_trimsTrailingSlashes_butKeepsRoot() {
+        XCTAssertEqual(ExportSettings.normalizePath("/foo/"), "/foo")
+        XCTAssertEqual(ExportSettings.normalizePath("/foo///"), "/foo")
+        XCTAssertEqual(ExportSettings.normalizePath("/"), "/",
+                       "the root must remain '/' even after normalisation")
+    }
+
+    func test_isStrictParent_basicCases() {
+        XCTAssertTrue (ExportSettings.isStrictParent("/foo", of: "/foo/bar"))
+        XCTAssertTrue (ExportSettings.isStrictParent("/foo", of: "/foo/bar/baz"))
+        XCTAssertFalse(ExportSettings.isStrictParent("/foo", of: "/foo"),
+                       "equal paths are not a strict parent relationship")
+        XCTAssertFalse(ExportSettings.isStrictParent("/foo", of: "/foo-bar"),
+                       "common prefix without separator must not match")
+        XCTAssertFalse(ExportSettings.isStrictParent("/foo/bar", of: "/foo"))
+        XCTAssertTrue (ExportSettings.isStrictParent("/", of: "/anything"),
+                       "root is a parent of everything")
+    }
+
     func test_remove_byID_persists() {
         let s = ExportSettings(defaults: defaults)
         s.add(path: "/a"); s.add(path: "/b"); s.add(path: "/c")

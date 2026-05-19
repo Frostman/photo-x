@@ -216,9 +216,34 @@ struct ExportSheet: View {
         panel.canCreateDirectories = true
         panel.prompt = "Choose"
         panel.message = "Select or create a destination folder for exports"
-        if panel.runModal() == .OK, let url = panel.url {
-            settings.add(path: url.path)
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let result = settings.add(path: url.path)
+        if case .ok = result { return }
+        presentAddRejection(result, attemptedPath: url.path)
+    }
+
+    /// Modal NSAlert that explains why the picked folder was refused.
+    /// Three rejection reasons are all variations on "destinations would
+    /// stomp on each other if both ran" — see `ExportSettings.AddResult`.
+    private func presentAddRejection(_ result: ExportSettings.AddResult,
+                                     attemptedPath: String) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        switch result {
+        case .ok:
+            return
+        case .duplicate:
+            alert.messageText = "Destination already added"
+            alert.informativeText = "\(attemptedPath) is already in the destinations list."
+        case .nestedUnder(let parent):
+            alert.messageText = "Destination is inside another destination"
+            alert.informativeText = "\(attemptedPath) is inside \(parent). Choose a folder that's not within any existing destination."
+        case .containsExisting(let child):
+            alert.messageText = "Destination contains another destination"
+            alert.informativeText = "\(attemptedPath) contains \(child). Choose a folder that doesn't enclose an existing destination."
         }
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 
     private func runExportAll() {

@@ -117,10 +117,59 @@ final class ExportSettings {
 
     // MARK: - Destinations CRUD
 
-    func add(path: String) {
+    /// Outcome of `add(path:)`. Anything other than `.ok` means the
+    /// path was rejected and the destinations list was NOT modified.
+    /// The picker UI surfaces the rejection as an NSAlert.
+    enum AddResult: Sendable, Hashable {
+        case ok
+        /// An existing destination has the same path (after trailing-slash
+        /// normalisation).
+        case duplicate
+        /// The new path is INSIDE one of the existing destinations.
+        /// Exporting both would write the same project subfolder in
+        /// nested locations, polluting the parent.
+        case nestedUnder(existingPath: String)
+        /// The new path CONTAINS one of the existing destinations.
+        /// Symmetric to nestedUnder; same reason to refuse.
+        case containsExisting(existingPath: String)
+    }
+
+    @discardableResult
+    func add(path: String) -> AddResult {
+        let normalized = Self.normalizePath(path)
+        for existing in destinations {
+            let exNorm = Self.normalizePath(existing.path)
+            if exNorm == normalized {
+                return .duplicate
+            }
+            if Self.isStrictParent(exNorm, of: normalized) {
+                return .nestedUnder(existingPath: existing.path)
+            }
+            if Self.isStrictParent(normalized, of: exNorm) {
+                return .containsExisting(existingPath: existing.path)
+            }
+        }
         let dest = Destination(path: path)
         destinations.append(dest)
         persistDestinations()
+        return .ok
+    }
+
+    /// Trim trailing slashes (except the root "/") so "/foo" and "/foo/"
+    /// compare equal.
+    static func normalizePath(_ path: String) -> String {
+        var n = path
+        while n.count > 1 && n.hasSuffix("/") { n.removeLast() }
+        return n
+    }
+
+    /// True when `child` lives strictly INSIDE `parent` (proper descendant —
+    /// the "+/+" guard prevents "/foo" matching "/foo-bar"). Both inputs
+    /// must already be normalised via `normalizePath`.
+    static func isStrictParent(_ parent: String, of child: String) -> Bool {
+        guard child.count > parent.count else { return false }
+        if parent == "/" { return child.hasPrefix("/") }
+        return child.hasPrefix(parent + "/")
     }
 
     func remove(id: UUID) {
