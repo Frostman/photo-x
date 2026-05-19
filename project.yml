@@ -38,6 +38,15 @@ targets:
         type: folder
         buildPhase: resources
         optional: true
+      # Bundled third-party license texts. Apache 2.0 + MIT + LGPL all
+      # require the license text to ship with binary distributions.
+      # End users can read these at PhotoX.app/Contents/Resources/Licenses/.
+      - path: Resources/Licenses
+        type: folder
+        buildPhase: resources
+      # macOS's standard About panel renders this inline if present.
+      - path: Resources/Credits.html
+        buildPhase: resources
     dependencies:
       - package: Sparkle
     info:

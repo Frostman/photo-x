@@ -36,3 +36,21 @@ creates a GitHub Release.
 
 Running PhotoX checks `https://raw.githubusercontent.com/Frostman/photo-x/master/docs/appcast.xml`
 once a day and offers updates via **PhotoX → Check for Updates…** (Sparkle 2).
+
+## License
+
+PhotoX is published under the [Apache License 2.0](LICENSE).
+
+Third-party components bundled with the app:
+
+- **Sparkle** (auto-update) — MIT
+- **LibRaw** (RAW decoder) — LGPL 2.1, selected from LibRaw's dual
+  LGPL / CDDL / commercial license
+- **ExifTool** by Phil Harvey (metadata) — Artistic License 1.0,
+  selected from ExifTool's dual Artistic / GPL license
+
+See [NOTICE](NOTICE) for attribution details and
+[THIRD_PARTY_LICENSES/](THIRD_PARTY_LICENSES/) for full license texts.
+The shipped `.app` carries the same texts at
+`PhotoX.app/Contents/Resources/Licenses/`; PhotoX → About PhotoX
+surfaces a short attribution panel inline.
