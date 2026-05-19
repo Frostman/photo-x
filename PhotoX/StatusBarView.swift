@@ -230,13 +230,13 @@ private struct IndexingProgressPopover: View {
                     }
                 }
             }
-            row("Thumbs + basic EXIF",
-                value: progress.thumbsAndBasicExif,
-                timing: timings.thumbsAndBasicExif,
+            row("Basic EXIF + thumbs",
+                value: progress.basicExifAndThumbs,
+                timing: timings.basicExifAndThumbs,
                 icon: "photo.on.rectangle.angled")
-            row("Sony AF / seq",
-                value: progress.sonyAfSeq,
-                timing: timings.sonyAfSeq,
+            row("Advanced EXIF: AF/seq",
+                value: progress.advancedExif,
+                timing: timings.advancedExif,
                 icon: "doc.text.magnifyingglass")
             row("XMP sidecars",
                 value: progress.xmpSidecars,

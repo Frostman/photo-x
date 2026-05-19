@@ -242,28 +242,28 @@ final class ViewerState {
     /// fraction of batches that pipeline has marked `.done` (0 ... 1).
     ///
     /// Pipelines after the standard-EXIF-via-TIFF refactor:
-    /// - `thumbsAndBasicExif`: HEIF box parse → embedded JPEG + Exif item
-    ///   bytes → TIFF parse for ExifSummary. Combined cost ~2 ms / file.
-    /// - `sonyAfSeq`: stay-open exiftool for proprietary Sony tags
-    ///   (AF, FaceN, SequenceNumber, CameraOrientation). ~11 ms / file
-    ///   on a CFExpress card, dominated by card IO.
+    /// - `basicExifAndThumbs`: HEIF box parse → embedded JPEG + Exif
+    ///   item bytes → TIFF parse for ExifSummary. Combined ~2 ms / file.
+    /// - `advancedExif`: one-shot exiftool per batch for proprietary
+    ///   Sony tags (AF, FaceN, SequenceNumber, CameraOrientation).
+    ///   ~11 ms / file on a CFExpress card, dominated by card IO.
     /// - `xmpSidecars`: per-pair XMP file read. ~1 ms / file.
     struct IndexingProgress: Hashable, Sendable {
-        var thumbsAndBasicExif: Double = 0
-        var sonyAfSeq:          Double = 0
+        var basicExifAndThumbs: Double = 0
+        var advancedExif:       Double = 0
         var xmpSidecars:        Double = 0
 
         // Weights from measured wall times on a 4695-pair CFExpress
-        // shoot: thumbs+EXIF 6 s, Sony 28 s, XMP 3 s (≈37 s total).
+        // shoot: basic 6 s, advanced 28 s, XMP 3 s (≈37 s total).
         // 0.15 / 0.75 / 0.10 ≈ those ratios and sums to 1.0 so `total`
         // tracks the actual indexing wall-time fraction.
-        static let thumbsAndBasicExifWeight: Double = 0.15
-        static let sonyAfSeqWeight:          Double = 0.75
+        static let basicExifAndThumbsWeight: Double = 0.15
+        static let advancedExifWeight:       Double = 0.75
         static let xmpSidecarsWeight:        Double = 0.10
 
         var total: Double {
-            thumbsAndBasicExif * Self.thumbsAndBasicExifWeight
-          + sonyAfSeq          * Self.sonyAfSeqWeight
+            basicExifAndThumbs * Self.basicExifAndThumbsWeight
+          + advancedExif       * Self.advancedExifWeight
           + xmpSidecars        * Self.xmpSidecarsWeight
         }
     }
@@ -298,8 +298,8 @@ final class ViewerState {
     }
 
     struct PipelineTimings: Hashable, Sendable {
-        var thumbsAndBasicExif: PipelineTiming = .init()
-        var sonyAfSeq:          PipelineTiming = .init()
+        var basicExifAndThumbs: PipelineTiming = .init()
+        var advancedExif:       PipelineTiming = .init()
         var xmpSidecars:        PipelineTiming = .init()
     }
     var indexingTimings: PipelineTimings = .init()
@@ -310,36 +310,39 @@ final class ViewerState {
     var indexingCompletedAt: Date?
 
     private var indexingTask: Task<Void, Never>?
-    private var batchQueues: (sony: BatchQueue, xmp: BatchQueue, thumbs: BatchQueue)?
-    /// Stem → batch id for the Sony + XMP pipelines (50-pair batches).
-    private var stemToSonyBatchID: [String: Int] = [:]
-    /// Stem → batch id for the thumbs+EXIF pipeline (10-pair batches).
-    /// Kept separate so signal prioritisation maps to the right id per
-    /// queue.
-    private var stemToThumbsBatchID: [String: Int] = [:]
-    /// 50-pair batches shared by Sony + XMP pipelines.
-    private var sonyBatches: [[PhotoPair]] = []
-    /// 10-pair batches used by the thumbs+EXIF pipeline — smaller so a
-    /// navigation signal bumps a tighter slice of work to the head,
-    /// which keeps user-visible thumbnails appearing fast even on big
-    /// shoots.
-    private var thumbsBatches: [[PhotoPair]] = []
+    private var batchQueues: (advancedExif: BatchQueue,
+                              xmp: BatchQueue,
+                              basicExif: BatchQueue)?
+    /// Stem → batch id for the advanced-EXIF + XMP pipelines (50-pair
+    /// batches).
+    private var stemToAdvancedExifBatchID: [String: Int] = [:]
+    /// Stem → batch id for the basic-EXIF + thumbs pipeline (5-pair
+    /// batches). Kept separate so signal prioritisation maps to the
+    /// right id per queue.
+    private var stemToBasicExifBatchID: [String: Int] = [:]
+    /// 50-pair batches shared by the advanced-EXIF + XMP pipelines.
+    private var advancedExifBatches: [[PhotoPair]] = []
+    /// 5-pair batches used by the basic-EXIF + thumbs pipeline —
+    /// smaller so a navigation signal bumps a tighter slice of work to
+    /// the head, keeping user-visible thumbnails appearing fast even
+    /// on big shoots.
+    private var basicExifBatches: [[PhotoPair]] = []
 
-    /// Sony + XMP share this batch size. Stay-open exiftool eliminates
-    /// the per-batch cold-start, so the count isn't IO-critical anymore;
-    /// 50 keeps argv lengths and JSON parse cost reasonable.
-    private static let sonyBatchSize = 50
-    /// Thumbs+EXIF batches stay small so concurrent loads finish quickly
-    /// and signal-prioritised batches land fast.
-    private static let thumbsBatchSize = 5
-    /// All `thumbsBatchSize` files in a batch run in parallel inside the
-    /// pipeline; the inner TaskGroup just gathers results.
-    private static let thumbsConcurrency = 5
-    /// Number of parallel Sony-tag workers. Each worker spawns one
-    /// exiftool per batch, so N workers = up to N concurrent exiftool
-    /// processes. 1 = serial; 2 is the measured sweet spot on a
-    /// CFExpress reader; 4 helps on faster NVMe SSDs.
-    private static let sonyExifWorkerCount = 2
+    /// Advanced-EXIF + XMP share this batch size. 50 keeps argv
+    /// lengths and JSON parse cost reasonable while amortising
+    /// exiftool's cold start.
+    private static let advancedExifBatchSize = 50
+    /// Basic-EXIF + thumbs batches stay small so concurrent loads
+    /// finish quickly and signal-prioritised batches land fast.
+    private static let basicExifBatchSize = 5
+    /// All `basicExifBatchSize` files in a batch run in parallel inside
+    /// the pipeline; the inner TaskGroup just gathers results.
+    private static let basicExifConcurrency = 5
+    /// Number of parallel advanced-EXIF workers. Each worker spawns
+    /// one exiftool per batch, so N workers = up to N concurrent
+    /// exiftool processes. 1 = serial; 2 is the measured sweet spot
+    /// on a CFExpress reader; 4 helps on faster NVMe SSDs.
+    private static let advancedExifWorkerCount = 2
 
     let pipeline: DecodePipeline = DecodePipeline()
 
@@ -424,10 +427,10 @@ final class ViewerState {
         indexingTask?.cancel()
         indexingTask = nil
         batchQueues = nil
-        stemToSonyBatchID.removeAll()
-        stemToThumbsBatchID.removeAll()
-        sonyBatches.removeAll()
-        thumbsBatches.removeAll()
+        stemToAdvancedExifBatchID.removeAll()
+        stemToBasicExifBatchID.removeAll()
+        advancedExifBatches.removeAll()
+        basicExifBatches.removeAll()
 
         // 3) Clear all caches.
         pipeline.cache.clear()
@@ -477,65 +480,65 @@ final class ViewerState {
         guard let shoot else { return }
         let gen = shootGeneration
 
-        sonyBatches = stride(from: 0, to: shoot.pairs.count, by: Self.sonyBatchSize).map {
-            Array(shoot.pairs[$0 ..< min($0 + Self.sonyBatchSize, shoot.pairs.count)])
+        advancedExifBatches = stride(from: 0, to: shoot.pairs.count, by: Self.advancedExifBatchSize).map {
+            Array(shoot.pairs[$0 ..< min($0 + Self.advancedExifBatchSize, shoot.pairs.count)])
         }
-        thumbsBatches = stride(from: 0, to: shoot.pairs.count, by: Self.thumbsBatchSize).map {
-            Array(shoot.pairs[$0 ..< min($0 + Self.thumbsBatchSize, shoot.pairs.count)])
+        basicExifBatches = stride(from: 0, to: shoot.pairs.count, by: Self.basicExifBatchSize).map {
+            Array(shoot.pairs[$0 ..< min($0 + Self.basicExifBatchSize, shoot.pairs.count)])
         }
-        stemToSonyBatchID.removeAll(keepingCapacity: true)
-        stemToThumbsBatchID.removeAll(keepingCapacity: true)
-        for (id, batch) in sonyBatches.enumerated() {
-            for pair in batch { stemToSonyBatchID[pair.stem] = id }
+        stemToAdvancedExifBatchID.removeAll(keepingCapacity: true)
+        stemToBasicExifBatchID.removeAll(keepingCapacity: true)
+        for (id, batch) in advancedExifBatches.enumerated() {
+            for pair in batch { stemToAdvancedExifBatchID[pair.stem] = id }
         }
-        for (id, batch) in thumbsBatches.enumerated() {
-            for pair in batch { stemToThumbsBatchID[pair.stem] = id }
+        for (id, batch) in basicExifBatches.enumerated() {
+            for pair in batch { stemToBasicExifBatchID[pair.stem] = id }
         }
 
-        let sonyCount   = sonyBatches.count
-        let thumbsCount = thumbsBatches.count
-        if sonyCount == 0 && thumbsCount == 0 {
+        let advancedExifCount = advancedExifBatches.count
+        let basicExifCount    = basicExifBatches.count
+        if advancedExifCount == 0 && basicExifCount == 0 {
             indexingStatus = .done
             batchQueues = nil
             return
         }
-        let queues = (sony:   BatchQueue(batchCount: sonyCount),
-                      xmp:    BatchQueue(batchCount: sonyCount),
-                      thumbs: BatchQueue(batchCount: thumbsCount))
+        let queues = (advancedExif: BatchQueue(batchCount: advancedExifCount),
+                      xmp:          BatchQueue(batchCount: advancedExifCount),
+                      basicExif:    BatchQueue(batchCount: basicExifCount))
         batchQueues = queues
 
         indexingStatus = .indexing(percent: 0)
         indexingProgress = .init()
         let startTime = CFAbsoluteTimeGetCurrent()
         indexingTimings = PipelineTimings(
-            thumbsAndBasicExif: PipelineTiming(startedAt: startTime),
-            sonyAfSeq:          PipelineTiming(startedAt: startTime),
+            basicExifAndThumbs: PipelineTiming(startedAt: startTime),
+            advancedExif:       PipelineTiming(startedAt: startTime),
             xmpSidecars:        PipelineTiming(startedAt: startTime)
         )
         #if DEBUG
-        Log.app.notice("Indexing \(shoot.pairs.count, privacy: .public) pairs: \(sonyCount, privacy: .public) sony/xmp batches × \(Self.sonyBatchSize, privacy: .public), \(thumbsCount, privacy: .public) thumbs+EXIF batches × \(Self.thumbsBatchSize, privacy: .public), \(Self.sonyExifWorkerCount, privacy: .public) sony workers")
+        Log.app.notice("Indexing \(shoot.pairs.count, privacy: .public) pairs: \(advancedExifCount, privacy: .public) advanced exif/xmp batches × \(Self.advancedExifBatchSize, privacy: .public), \(basicExifCount, privacy: .public) basic exif + thumbs batches × \(Self.basicExifBatchSize, privacy: .public), \(Self.advancedExifWorkerCount, privacy: .public) advanced exif workers")
         #endif
 
         indexingTask = Task(priority: .utility) { [weak self] in
             await withTaskGroup(of: Void.self) { group in
-                // N parallel Sony workers, each spawning a one-shot
-                // exiftool per batch. They safely share one queue
-                // (BatchQueue.popNext no-double-pop is tested).
-                for _ in 0 ..< Self.sonyExifWorkerCount {
+                // N parallel advanced-EXIF workers, each spawning a
+                // one-shot exiftool per batch. They safely share one
+                // queue (BatchQueue.popNext no-double-pop is tested).
+                for _ in 0 ..< Self.advancedExifWorkerCount {
                     group.addTask { [weak self] in
-                        await self?.runSonyExifPipeline(queue: queues.sony, gen: gen)
+                        await self?.runAdvancedExifPipeline(queue: queues.advancedExif, gen: gen)
                     }
                 }
                 group.addTask { [weak self] in
                     await self?.runXMPPipeline(queue: queues.xmp, gen: gen)
                 }
                 group.addTask { [weak self] in
-                    await self?.runThumbsAndBasicExifPipeline(queue: queues.thumbs, gen: gen)
+                    await self?.runBasicExifAndThumbsPipeline(queue: queues.basicExif, gen: gen)
                 }
                 group.addTask { [weak self] in
                     await self?.progressTicker(queues: queues,
-                                               sonyBatchCount: sonyCount,
-                                               thumbsBatchCount: thumbsCount,
+                                               advancedExifBatchCount: advancedExifCount,
+                                               basicExifBatchCount: basicExifCount,
                                                gen: gen)
                 }
             }
@@ -568,40 +571,42 @@ final class ViewerState {
         indexingTimings = .init()
         indexingCompletedAt = nil
         batchQueues = nil
-        // sonyBatches + stemToSonyBatchID will be rebuilt by startIndexing.
+        // advancedExifBatches + stemToAdvancedExifBatchID will be rebuilt
+        // by startIndexing.
         startIndexing()
     }
 
     /// Signal the indexer to bump a pair's batch to the head of every
     /// pipeline. Resolves the stem to each pipeline's own batch id
-    /// (Sony/XMP use 50-pair batches, thumbs+EXIF uses 10-pair).
-    /// No-op if the batch is already in progress or done.
+    /// (advanced-EXIF + XMP use 50-pair batches, basic-EXIF + thumbs
+    /// uses 5-pair). No-op if the batch is already in progress or done.
     func prioritizeBatch(forStem stem: String) {
         guard let queues = batchQueues else { return }
-        let sonyID   = stemToSonyBatchID[stem]
-        let thumbsID = stemToThumbsBatchID[stem]
+        let advancedID = stemToAdvancedExifBatchID[stem]
+        let basicID    = stemToBasicExifBatchID[stem]
         Task {
-            if let id = sonyID {
-                await queues.sony.prioritize(id)
+            if let id = advancedID {
+                await queues.advancedExif.prioritize(id)
                 await queues.xmp.prioritize(id)
             }
-            if let id = thumbsID { await queues.thumbs.prioritize(id) }
+            if let id = basicID { await queues.basicExif.prioritize(id) }
         }
     }
 
     // MARK: pipelines
 
-    /// Sony AF / SequenceNumber / CameraOrientation pipeline. Reads
-    /// only the proprietary tags via one-shot exiftool per batch;
-    /// standard EXIF (Make/Model/Lens/exposure) comes from the
-    /// thumbs+EXIF pipeline via the in-process TIFF parser.
+    /// Advanced-EXIF pipeline: Sony AF / SequenceNumber /
+    /// CameraOrientation. Reads only the proprietary tags via one-shot
+    /// exiftool per batch; standard EXIF (Make/Model/Lens/exposure)
+    /// comes from the basic-EXIF + thumbs pipeline via the in-process
+    /// TIFF parser.
     ///
     /// Sharing one queue across N workers is safe per BatchQueue.popNext's
     /// no-double-pop invariant.
-    private func runSonyExifPipeline(queue: BatchQueue, gen: Int) async {
+    private func runAdvancedExifPipeline(queue: BatchQueue, gen: Int) async {
         while let id = await queue.popNext() {
             if Task.isCancelled || shootGeneration != gen { return }
-            let batch = sonyBatches[id]
+            let batch = advancedExifBatches[id]
             let urls = batch.map(\.heifURL)
             let (result, stats) = await MetadataBatchLoader.readInstrumented(urls)
             var afByStem:  [String: ExifToolRunner.AFData] = [:]
@@ -610,28 +615,28 @@ final class ViewerState {
                 if let v = result.af [pair.heifURL.path] { afByStem [pair.stem] = v }
                 if let v = result.seq[pair.heifURL.path] { seqByStem[pair.stem] = v }
             }
-            flushSonyBatch(af: afByStem, seq: seqByStem, generation: gen)
-            logSonyBatchStats(id: id, stats: stats)
+            flushAdvancedExifBatch(af: afByStem, seq: seqByStem, generation: gen)
+            logAdvancedExifBatchStats(id: id, stats: stats)
             await queue.markDone(id)
         }
     }
 
     /// Per-batch log: includes exiftool subprocess startup + scan time
-    /// in `spawn ms`. DEBUG-only.
-    private nonisolated func logSonyBatchStats(id: Int,
-                                               stats: MetadataBatchLoader.Stats?) {
+    /// in `rt ms`. DEBUG-only.
+    private nonisolated func logAdvancedExifBatchStats(id: Int,
+                                                       stats: MetadataBatchLoader.Stats?) {
         #if DEBUG
         guard let s = stats else { return }
         let kb = s.bytesOut / 1024
         let perFileMS = Double(s.filesIn) > 0 ? s.spawnMS / Double(s.filesIn) : 0
-        Log.app.notice("sony batch \(id, privacy: .public): \(s.filesIn, privacy: .public) files, \(kb, privacy: .public) KB out, rt \(s.spawnMS, format: .fixed(precision: 1)) ms (\(perFileMS, format: .fixed(precision: 1)) ms/file), parse \(s.parseMS, format: .fixed(precision: 1)) ms")
+        Log.app.notice("advanced exif batch \(id, privacy: .public): \(s.filesIn, privacy: .public) files, \(kb, privacy: .public) KB out, rt \(s.spawnMS, format: .fixed(precision: 1)) ms (\(perFileMS, format: .fixed(precision: 1)) ms/file), parse \(s.parseMS, format: .fixed(precision: 1)) ms")
         #endif
     }
 
     private func runXMPPipeline(queue: BatchQueue, gen: Int) async {
         while let id = await queue.popNext() {
             if Task.isCancelled || shootGeneration != gen { return }
-            let batch = sonyBatches[id]
+            let batch = advancedExifBatches[id]
             let results = await Task.detached(priority: .utility) {
                 batch.map { (stem: $0.stem, xmp: XMPSidecarReader.read(for: $0)) }
             }.value
@@ -640,15 +645,15 @@ final class ViewerState {
         }
     }
 
-    /// Thumbs + basic EXIF pipeline. One HEIF box parse per file gets
+    /// Basic-EXIF + thumbs pipeline. One HEIF box parse per file gets
     /// us BOTH the embedded JPEG bytes (→ filmstrip thumbnail) AND the
     /// Exif item bytes (→ ExifSummary via TIFFEXIFParser). Standard
     /// EXIF for the sidebar therefore arrives without any subprocess
     /// or ImageIO call — measured ~2 ms / file on a CFExpress card.
-    private func runThumbsAndBasicExifPipeline(queue: BatchQueue, gen: Int) async {
+    private func runBasicExifAndThumbsPipeline(queue: BatchQueue, gen: Int) async {
         while let id = await queue.popNext() {
             if Task.isCancelled || shootGeneration != gen { return }
-            let batch = thumbsBatches[id]
+            let batch = basicExifBatches[id]
             typealias Result = (stem: String,
                                 image: CGImage?,
                                 exif: ExifSummary?,
@@ -677,16 +682,16 @@ final class ViewerState {
                 guard let ex = $0.exif else { return nil }
                 return ($0.stem, ex)
             }
-            flushThumbsAndExifBatch(thumbs: thumbs, exifs: exifs, generation: gen)
-            logThumbsAndExifBatchStats(id: id, results: results)
+            flushBasicExifAndThumbsBatch(thumbs: thumbs, exifs: exifs, generation: gen)
+            logBasicExifAndThumbsBatchStats(id: id, results: results)
             await queue.markDone(id)
         }
     }
 
-    /// Per-batch aggregate. With the new in-process path: bytes is now
-    /// the JPEG + Exif item slice (~50 KB combined), read time folded
-    /// into decode since each step is sub-ms. DEBUG-only.
-    private nonisolated func logThumbsAndExifBatchStats(
+    /// Per-batch aggregate. With the in-process path: bytes is the
+    /// JPEG + Exif item slice (~99 KB combined), read time folded into
+    /// decode since each step is sub-ms. DEBUG-only.
+    private nonisolated func logBasicExifAndThumbsBatchStats(
         id: Int,
         results: [(stem: String,
                    image: CGImage?,
@@ -702,15 +707,15 @@ final class ViewerState {
         let kbAvg    = (bytes / max(count, 1)) / 1024
         let decAvg   = decode / Double(count)
         let withExif = results.filter { $0.exif != nil }.count
-        Log.app.notice("thumbs+exif batch \(id, privacy: .public): \(count, privacy: .public) files (\(withExif, privacy: .public) w/ exif), ~\(kbAvg, privacy: .public) KB avg, decode \(decAvg, format: .fixed(precision: 1)) ms avg")
+        Log.app.notice("basic exif batch \(id, privacy: .public): \(count, privacy: .public) files (\(withExif, privacy: .public) w/ exif), ~\(kbAvg, privacy: .public) KB avg, decode \(decAvg, format: .fixed(precision: 1)) ms avg")
         #endif
     }
 
     // MARK: flushes (all on MainActor)
 
-    private func flushSonyBatch(af: [String: ExifToolRunner.AFData],
-                                seq: [String: Int],
-                                generation: Int) {
+    private func flushAdvancedExifBatch(af: [String: ExifToolRunner.AFData],
+                                        seq: [String: Int],
+                                        generation: Int) {
         guard shootGeneration == generation else { return }
         for (stem, v) in af   { pairAFData[stem]          = v }
         for (stem, v) in seq  { pairSequenceNumber[stem]  = v }
@@ -742,13 +747,13 @@ final class ViewerState {
         }
     }
 
-    /// Thumbs+EXIF pipeline flush. Publishes BOTH the thumbnails (for
-    /// the filmstrip) AND the standard EXIF (for the sidebar). The
-    /// merged flush mirrors the merged input from a single HEIF box
-    /// parse per file.
-    private func flushThumbsAndExifBatch(thumbs: [(String, CGImage)],
-                                         exifs: [(String, ExifSummary)],
-                                         generation: Int) {
+    /// Basic-EXIF + thumbs pipeline flush. Publishes BOTH the thumbnails
+    /// (for the filmstrip) AND the standard EXIF (for the sidebar).
+    /// The merged flush mirrors the merged input from a single HEIF
+    /// box parse per file.
+    private func flushBasicExifAndThumbsBatch(thumbs: [(String, CGImage)],
+                                              exifs: [(String, ExifSummary)],
+                                              generation: Int) {
         guard shootGeneration == generation else { return }
         for (stem, img) in thumbs { thumbnails[stem] = img }
         for (stem, ex)  in exifs  { pairExif[stem]   = ex }
@@ -762,36 +767,38 @@ final class ViewerState {
 
     // MARK: progress
 
-    private func progressTicker(queues: (sony: BatchQueue, xmp: BatchQueue, thumbs: BatchQueue),
-                                sonyBatchCount: Int,
-                                thumbsBatchCount: Int,
+    private func progressTicker(queues: (advancedExif: BatchQueue,
+                                          xmp: BatchQueue,
+                                          basicExif: BatchQueue),
+                                advancedExifBatchCount: Int,
+                                basicExifBatchCount: Int,
                                 gen: Int) async {
         while !Task.isCancelled, shootGeneration == gen {
-            let sonyDone   = await queues.sony.snapshotDoneCount()
-            let xmpDone    = await queues.xmp.snapshotDoneCount()
-            let thumbsDone = await queues.thumbs.snapshotDoneCount()
+            let advancedDone = await queues.advancedExif.snapshotDoneCount()
+            let xmpDone      = await queues.xmp.snapshotDoneCount()
+            let basicDone    = await queues.basicExif.snapshotDoneCount()
             let p = IndexingProgress(
-                thumbsAndBasicExif: thumbsBatchCount == 0 ? 1 : Double(thumbsDone) / Double(thumbsBatchCount),
-                sonyAfSeq:          sonyBatchCount   == 0 ? 1 : Double(sonyDone)   / Double(sonyBatchCount),
-                xmpSidecars:        sonyBatchCount   == 0 ? 1 : Double(xmpDone)    / Double(sonyBatchCount)
+                basicExifAndThumbs: basicExifBatchCount    == 0 ? 1 : Double(basicDone)    / Double(basicExifBatchCount),
+                advancedExif:       advancedExifBatchCount == 0 ? 1 : Double(advancedDone) / Double(advancedExifBatchCount),
+                xmpSidecars:        advancedExifBatchCount == 0 ? 1 : Double(xmpDone)      / Double(advancedExifBatchCount)
             )
-            let sonyDoneNow   = sonyDone   >= sonyBatchCount
-            let xmpDoneNow    = xmpDone    >= sonyBatchCount
-            let thumbsDoneNow = thumbsDone >= thumbsBatchCount
+            let advancedDoneNow = advancedDone >= advancedExifBatchCount
+            let xmpDoneNow      = xmpDone      >= advancedExifBatchCount
+            let basicDoneNow    = basicDone    >= basicExifBatchCount
             setIndexingProgress(p,
-                                sonyFinished:   sonyDoneNow,
-                                xmpFinished:    xmpDoneNow,
-                                thumbsFinished: thumbsDoneNow,
+                                advancedExifFinished: advancedDoneNow,
+                                xmpFinished:          xmpDoneNow,
+                                basicExifFinished:    basicDoneNow,
                                 generation: gen)
-            if sonyDoneNow, xmpDoneNow, thumbsDoneNow { return }
+            if advancedDoneNow, xmpDoneNow, basicDoneNow { return }
             try? await Task.sleep(for: .milliseconds(100))
         }
     }
 
     private func setIndexingProgress(_ p: IndexingProgress,
-                                     sonyFinished: Bool,
+                                     advancedExifFinished: Bool,
                                      xmpFinished: Bool,
-                                     thumbsFinished: Bool,
+                                     basicExifFinished: Bool,
                                      generation: Int) {
         guard shootGeneration == generation else { return }
         // Don't downgrade a terminal status.
@@ -803,14 +810,14 @@ final class ViewerState {
         // Latches once set so subsequent ticks don't keep moving the
         // "took Ns" target.
         let now = CFAbsoluteTimeGetCurrent()
-        if sonyFinished, indexingTimings.sonyAfSeq.finishedAt == nil {
-            indexingTimings.sonyAfSeq.finishedAt = now
+        if advancedExifFinished, indexingTimings.advancedExif.finishedAt == nil {
+            indexingTimings.advancedExif.finishedAt = now
         }
         if xmpFinished, indexingTimings.xmpSidecars.finishedAt == nil {
             indexingTimings.xmpSidecars.finishedAt = now
         }
-        if thumbsFinished, indexingTimings.thumbsAndBasicExif.finishedAt == nil {
-            indexingTimings.thumbsAndBasicExif.finishedAt = now
+        if basicExifFinished, indexingTimings.basicExifAndThumbs.finishedAt == nil {
+            indexingTimings.basicExifAndThumbs.finishedAt = now
         }
     }
 
@@ -824,11 +831,11 @@ final class ViewerState {
         // wall times. The three pipelines run in parallel so the total
         // wall time is the max, not the sum.
         let pairs = shoot?.pairs.count ?? 0
-        let sonyDur   = indexingTimings.sonyAfSeq.duration         ?? 0
-        let xmpDur    = indexingTimings.xmpSidecars.duration       ?? 0
-        let thumbsDur = indexingTimings.thumbsAndBasicExif.duration ?? 0
-        let total = max(sonyDur, max(xmpDur, thumbsDur))
-        Log.app.notice("Indexing complete: \(pairs, privacy: .public) pairs in \(formattedDuration(total), privacy: .public) (thumbs+exif \(formattedDuration(thumbsDur), privacy: .public), sony \(formattedDuration(sonyDur), privacy: .public), xmp \(formattedDuration(xmpDur), privacy: .public))")
+        let advancedDur = indexingTimings.advancedExif.duration       ?? 0
+        let xmpDur      = indexingTimings.xmpSidecars.duration        ?? 0
+        let basicDur    = indexingTimings.basicExifAndThumbs.duration ?? 0
+        let total = max(advancedDur, max(xmpDur, basicDur))
+        Log.app.notice("Indexing complete: \(pairs, privacy: .public) pairs in \(formattedDuration(total), privacy: .public) (basic \(formattedDuration(basicDur), privacy: .public), advanced \(formattedDuration(advancedDur), privacy: .public), xmp \(formattedDuration(xmpDur), privacy: .public))")
     }
 
     // MARK: - Burst detection (filmstrip bracket overlay)
