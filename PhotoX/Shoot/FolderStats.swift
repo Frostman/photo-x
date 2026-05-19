@@ -41,8 +41,11 @@ final class FolderStats {
         }
     }
 
-    private static let rawExtensions: Set<String> = ["arw"]
-    private static let heifExtensions: Set<String> = ["hif", "heif", "heic"]
+    // Read by the `nonisolated` compute(for:) below, so they must not
+    // inherit the enclosing class's @MainActor isolation. Immutable Set
+    // literals are trivially Sendable, so nonisolated is safe.
+    nonisolated private static let rawExtensions: Set<String> = ["arw"]
+    nonisolated private static let heifExtensions: Set<String> = ["hif", "heif", "heic"]
 
     /// Pure function. Reads directory contents in one shot; counts stems with
     /// both an ARW and a HIF (PhotoX's pair definition), and tracks how many
