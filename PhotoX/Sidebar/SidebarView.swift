@@ -32,17 +32,6 @@ struct SidebarView: View {
                 }
                 .padding(12)
             }
-
-            // Pinned footer: always visible regardless of scroll position.
-            VStack(alignment: .leading, spacing: 8) {
-                Divider()
-                Text("Perf")
-                    .font(.caption.smallCaps())
-                    .foregroundStyle(.secondary)
-                PerfPanelView(stats: state.perfStats)
-            }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(width: Self.width)
         .background(Color(nsColor: .windowBackgroundColor))

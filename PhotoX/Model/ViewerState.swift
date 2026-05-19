@@ -87,16 +87,6 @@ final class ViewerState {
     /// user closed the shoot or switched folders.
     private var shootGeneration: Int = 0
 
-    var perfStats: PerfStats = PerfStats()
-
-    struct PerfStats: Hashable, Sendable {
-        var imageMS: Double?
-        var imageCached: Bool = false
-        var afMS: Double?
-        var afCached: Bool = false
-        var xmpMS: Double?
-    }
-
     var currentPairFiles: PairFiles = .none
 
     struct PairFiles: Hashable, Sendable {
@@ -448,7 +438,6 @@ final class ViewerState {
         currentAFRegions = []
         currentAFSettings = AFSettings()
         currentPairFiles = .none
-        perfStats = PerfStats()
         errorMessage = nil
         isDecoding = false
         viewport = .identity
@@ -1148,8 +1137,6 @@ final class ViewerState {
         self.currentAFSettings  = af?.settings ?? AFSettings()
         self.currentXMP         = pairXMPs[pair.stem] ?? .empty
         self.currentPairFiles   = pairFiles(for: pair)
-        self.perfStats.afMS     = (af != nil) ? 0 : nil
-        self.perfStats.afCached = af != nil
         prioritizeBatch(forStem: pair.stem)
         await applyRequestedVariant()
         prefetchNeighborHEIFs()
@@ -1206,15 +1193,10 @@ final class ViewerState {
 
         do {
             PerfTracker.mark("about to await pipeline.decode")
-            let wasCached = pipeline.isCached(pair: pair, variant: variant, decoder: chosenDecoder)
-            let t0 = CFAbsoluteTimeGetCurrent()
             let decoded = try await pipeline.decode(pair: pair, variant: variant, decoder: chosenDecoder)
-            let imageWallMS = (CFAbsoluteTimeGetCurrent() - t0) * 1000.0
             PerfTracker.mark("pipeline.decode returned")
             guard variant == self.requestedVariant, chosenDecoder == self.decoder else { return }
             self.currentImage = decoded
-            self.perfStats.imageMS = imageWallMS
-            self.perfStats.imageCached = wasCached
             PerfTracker.mark("currentImage set")
             self.displayedVariant = variant
             kickOffHistogramCompute(for: decoded)
