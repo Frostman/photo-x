@@ -24,6 +24,10 @@ struct ContentView: View {
     @AppStorage(SettingsKey.appearance, store: AppDefaults.shared) private var appearanceRaw = SettingsKey.Defaults.appearance
     @State private var recents = RecentShoots.shared
     @State private var favorites = FavoriteShoots.shared
+    /// Auto-detects mounted SD / CFExpress cards with DCIM shoots. Only
+    /// active while the starter screen is on-screen; opening a shoot
+    /// stops the watcher via emptyState.onDisappear.
+    @State private var volumes = VolumeWatcher()
     @State private var folderStats = FolderStats()
     @State private var favoriteDropTarget: String? = nil
     @State private var showExportSheet: Bool = false
@@ -394,15 +398,31 @@ struct ContentView: View {
             if !favorites.paths.isEmpty {
                 favoritesSection
             }
+            if !volumes.cardFolders.isEmpty {
+                cardsSection
+            }
             if !visibleRecents.isEmpty {
                 recentsSection
             }
-            if !favorites.paths.isEmpty || !visibleRecents.isEmpty {
+            if !favorites.paths.isEmpty
+                || !volumes.cardFolders.isEmpty
+                || !visibleRecents.isEmpty {
                 refreshCountsButton
             }
         }
         .onAppear {
             // Recount every time we return to the starter screen.
+            folderStats.refresh(allStarterPaths)
+            // Start watching for SD / CFExpress cards. Stops on
+            // .onDisappear so we don't poll while viewing a shoot.
+            volumes.start()
+        }
+        .onDisappear {
+            volumes.stop()
+        }
+        .onChange(of: volumes.cardFolders) {
+            // A freshly-detected card needs its pair-count pill
+            // populated; the same folderStats machinery handles it.
             folderStats.refresh(allStarterPaths)
         }
     }
@@ -418,7 +438,7 @@ struct ContentView: View {
     }
 
     private var allStarterPaths: [String] {
-        favorites.paths + visibleRecents
+        favorites.paths + volumes.cardFolders + visibleRecents
     }
 
     private var refreshCountsButton: some View {
@@ -510,6 +530,29 @@ struct ContentView: View {
             }
     }
 
+
+    /// Auto-detected shoot folders from mounted SD / CFExpress cards.
+    /// Read-only — no remove or favorite buttons — clicking opens the
+    /// folder. Same leading 18-pt spacer as Recents so the folder icons
+    /// line up vertically across all three sections. Two 20-pt clear
+    /// placeholders after the pill match the star/xmark button slots
+    /// used by Favorites / Recents so the pair-count pills line up
+    /// across all sections.
+    private var cardsSection: some View {
+        section(title: "Cards") {
+            ForEach(volumes.cardFolders, id: \.self) { path in
+                pathRow(
+                    path,
+                    leading: { Color.clear.frame(width: 18, height: 20) },
+                    trailing: {
+                        pairCountPill(for: path)
+                        Color.clear.frame(width: 20, height: 20)
+                        Color.clear.frame(width: 20, height: 20)
+                    }
+                )
+            }
+        }
+    }
 
     private var recentsSection: some View {
         section(title: "Recent") {

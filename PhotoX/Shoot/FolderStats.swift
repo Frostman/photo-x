@@ -50,7 +50,9 @@ final class FolderStats {
     /// Pure function. Reads directory contents in one shot; counts stems with
     /// both an ARW and a HIF (PhotoX's pair definition), and tracks how many
     /// of those have an .xmp sidecar. nonisolated so callers can hop off main.
-    nonisolated private static func compute(for path: String) -> FolderState {
+    /// Internal (not private) so `VolumeScanner` can reuse the same
+    /// "what's a valid shoot" check when scanning DCIM subfolders on cards.
+    nonisolated static func compute(for path: String) -> FolderState {
         let url = URL(fileURLWithPath: path)
         var isDir: ObjCBool = false
         guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir),
