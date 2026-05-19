@@ -76,3 +76,41 @@ dev:
 
     echo "==> Launch dev build"
     open -a "$APP_PATH"
+
+# Bootstrap vendored deps (LibRaw + exiftool) and regenerate the
+# Xcode project. Idempotent; safe to re-run after pulling.
+#   just bootstrap            → materialise missing deps
+#   just bootstrap --force    → re-download even if already present
+#   just bootstrap --verify   → check only, don't write
+bootstrap *args:
+    ./scripts/bootstrap.sh {{args}}
+
+# Compile-check the Debug target. Use this while editing — it's the
+# fast path that does NOT relaunch the dev app (unlike `just dev`).
+# No clean, no version injection — just enough to surface type errors.
+build:
+    xcodebuild -scheme PhotoX -configuration Debug -destination 'platform=macOS' build
+
+# Run the test suite (or a slice of it).
+#   just test                                              → full suite
+#   just test PhotoXTests/TIFFEXIFParserTests              → one class
+#   just test PhotoXTests/TIFFEXIFParserTests/test_X       → one method
+# Multiple `-only-testing:` filters by passing space-separated args.
+test *only="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ARGS=(test -scheme PhotoX -configuration Debug -destination 'platform=macOS')
+    for filter in {{only}}; do
+        ARGS+=(-only-testing:"$filter")
+    done
+    # Hard 60s cap — unit tests should never need longer; a hang here
+    # almost always means a stuck subprocess or runaway test, so we
+    # fail fast instead of waiting indefinitely.
+    timeout 60 xcodebuild "${ARGS[@]}"
+
+# Cut a release via scripts/release.sh.
+#   just release              → full release (build, sign, DMG, publish)
+#   just release --verify-only → build + tests, no publish
+#   just release --dry-run    → full build + DMG, no commit/push
+release *args:
+    ./scripts/release.sh {{args}}
