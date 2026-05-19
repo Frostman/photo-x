@@ -331,10 +331,10 @@ final class ViewerState {
     private static let sonyBatchSize = 50
     /// Thumbs+EXIF batches stay small so concurrent loads finish quickly
     /// and signal-prioritised batches land fast.
-    private static let thumbsBatchSize = 10
+    private static let thumbsBatchSize = 5
     /// All `thumbsBatchSize` files in a batch run in parallel inside the
     /// pipeline; the inner TaskGroup just gathers results.
-    private static let thumbsConcurrency = 10
+    private static let thumbsConcurrency = 5
     /// Number of parallel Sony-tag workers. Each worker spawns one
     /// exiftool per batch, so N workers = up to N concurrent exiftool
     /// processes. 1 = serial; 2 is the measured sweet spot on a
