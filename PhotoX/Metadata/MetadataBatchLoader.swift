@@ -63,7 +63,15 @@ enum MetadataBatchLoader {
         "-Sony:Face4Position", "-Sony:Face5Position", "-Sony:Face6Position",
         "-Sony:FacesDetected",
         "-Composite:FocusDistance", "-Composite:FocusDistance2",
-        "-Orientation#",   // numeric (1-8) so AF rects can be transformed
+        // EXIF Orientation (1-8) so AF rects can be transformed from
+        // sensor space to display space. Sony HIFs don't expose the
+        // standard IFD0:Orientation — they put the same value into
+        // Sony:CameraOrientation in MakerNotes. Request both; the
+        // parser picks whichever the file has (parseOrientation walks
+        // dict keys with suffix "Orientation"). ARW gets IFD0; HIF
+        // gets Sony:CameraOrientation; either gives the right 1/6/8.
+        "-Orientation#",
+        "-Sony:CameraOrientation#",
         // ── Sony burst sequence ──────────────────────────────────────────
         "-Sony:SequenceNumber",
         // ── EXIF (sidebar) ───────────────────────────────────────────────
