@@ -258,7 +258,7 @@ private struct IndexingProgressPopover: View {
                 }
             }
         }
-        .frame(minWidth: 320)
+        .frame(minWidth: 360)
     }
 
     private func row(_ label: String,
@@ -282,7 +282,10 @@ private struct IndexingProgressPopover: View {
             Text(timingLabel(value: value, timing: timing))
                 .font(.caption2.monospacedDigit())
                 .foregroundStyle(.secondary)
-                .frame(width: 64, alignment: .trailing)
+                // Leading-align in a fixed-width slot so digits don't
+                // shift left/right as the value changes (only the right
+                // edge grows). 84 pt fits "took 1h 10m" / "ETA 99m".
+                .frame(width: 84, alignment: .leading)
         }
     }
 
