@@ -254,9 +254,21 @@ final class ViewerState {
         var exif:  Double = 0
         var xmp:   Double = 0
         var thumb: Double = 0
-        /// Mean of the three. The status-bar chip displays this; the
-        /// popover shows the breakdown.
-        var total: Double { (exif + xmp + thumb) / 3 }
+
+        // Weights approximate the wall-time ratio measured on a 5 k-file
+        // CFExpress shoot: exif 1m 38s, xmp 5s, thumb 4m 44s ≈ 25/1/73.
+        // Rounded to clean 5 %-increments that sum to 1.0 so `total`
+        // tracks the actual indexing wall-time fraction, not the
+        // batch-count mean. Status bar chip shows `Int(total * 100)`.
+        static let exifWeight:  Double = 0.25
+        static let xmpWeight:   Double = 0.05
+        static let thumbWeight: Double = 0.70
+
+        var total: Double {
+            exif  * Self.exifWeight
+          + xmp   * Self.xmpWeight
+          + thumb * Self.thumbWeight
+        }
     }
     var indexingProgress: IndexingProgress = .init()
 
