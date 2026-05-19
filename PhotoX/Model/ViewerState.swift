@@ -262,13 +262,28 @@ final class ViewerState {
 
     private var indexingTask: Task<Void, Never>?
     private var batchQueues: (exif: BatchQueue, xmp: BatchQueue, thumb: BatchQueue)?
+    /// Stem → batch id for the exif + xmp pipelines (50-pair batches).
     private var stemToBatchID: [String: Int] = [:]
+    /// Stem → batch id for the thumbnail pipeline (5-pair batches). Kept
+    /// separate so signal prioritisation maps to the right id per queue.
+    private var stemToThumbBatchID: [String: Int] = [:]
+    /// 50-pair batches shared by exif + xmp pipelines.
     private var pairBatches: [[PhotoPair]] = []
+    /// 5-pair batches used by the thumbnail pipeline — smaller so a
+    /// navigation signal bumps a tighter slice of work to the head, which
+    /// keeps user-visible thumbnails appearing fast even on big shoots.
+    private var thumbBatches: [[PhotoPair]] = []
 
-    private static let batchSize = 50
-    /// 4-wide concurrency inside the thumbnail pipeline's per-batch fanout.
-    /// Thumbnails are independent file reads; exiftool / XMP stay serial.
-    private static let thumbConcurrency = 4
+    /// Exif + XMP share this batch size. Smaller batches mean more
+    /// exiftool cold-starts, which dominate, so this stays at 50.
+    private static let exifBatchSize = 50
+    /// Thumbnails get a much smaller batch so concurrent loads finish
+    /// quickly and signal-prioritised batches land fast.
+    private static let thumbBatchSize = 10
+    /// All `thumbBatchSize` thumbnails in a batch load in parallel; with
+    /// `thumbBatchSize == thumbConcurrency` the batch completes in roughly
+    /// the time of its slowest single load.
+    private static let thumbConcurrency = 10
 
     let pipeline: DecodePipeline = DecodePipeline()
 
@@ -332,7 +347,9 @@ final class ViewerState {
         indexingTask = nil
         batchQueues = nil
         stemToBatchID.removeAll()
+        stemToThumbBatchID.removeAll()
         pairBatches.removeAll()
+        thumbBatches.removeAll()
 
         // 3) Clear all caches.
         pipeline.cache.clear()
@@ -381,27 +398,35 @@ final class ViewerState {
         guard let shoot else { return }
         let gen = shootGeneration
 
-        pairBatches = stride(from: 0, to: shoot.pairs.count, by: Self.batchSize).map {
-            Array(shoot.pairs[$0 ..< min($0 + Self.batchSize, shoot.pairs.count)])
+        pairBatches = stride(from: 0, to: shoot.pairs.count, by: Self.exifBatchSize).map {
+            Array(shoot.pairs[$0 ..< min($0 + Self.exifBatchSize, shoot.pairs.count)])
+        }
+        thumbBatches = stride(from: 0, to: shoot.pairs.count, by: Self.thumbBatchSize).map {
+            Array(shoot.pairs[$0 ..< min($0 + Self.thumbBatchSize, shoot.pairs.count)])
         }
         stemToBatchID.removeAll(keepingCapacity: true)
+        stemToThumbBatchID.removeAll(keepingCapacity: true)
         for (id, batch) in pairBatches.enumerated() {
             for pair in batch { stemToBatchID[pair.stem] = id }
         }
+        for (id, batch) in thumbBatches.enumerated() {
+            for pair in batch { stemToThumbBatchID[pair.stem] = id }
+        }
 
-        let count = pairBatches.count
-        if count == 0 {
+        let exifCount  = pairBatches.count
+        let thumbCount = thumbBatches.count
+        if exifCount == 0 && thumbCount == 0 {
             indexingStatus = .done
             batchQueues = nil
             return
         }
-        let queues = (exif:  BatchQueue(batchCount: count),
-                      xmp:   BatchQueue(batchCount: count),
-                      thumb: BatchQueue(batchCount: count))
+        let queues = (exif:  BatchQueue(batchCount: exifCount),
+                      xmp:   BatchQueue(batchCount: exifCount),
+                      thumb: BatchQueue(batchCount: thumbCount))
         batchQueues = queues
 
         indexingStatus = .indexing(percent: 0)
-        Log.app.notice("Indexing \(shoot.pairs.count, privacy: .public) pairs in \(count, privacy: .public) batches of \(Self.batchSize, privacy: .public)")
+        Log.app.notice("Indexing \(shoot.pairs.count, privacy: .public) pairs: \(exifCount, privacy: .public) exif/xmp batches × \(Self.exifBatchSize, privacy: .public), \(thumbCount, privacy: .public) thumb batches × \(Self.thumbBatchSize, privacy: .public)")
 
         indexingTask = Task(priority: .utility) { [weak self] in
             await withTaskGroup(of: Void.self) { group in
@@ -416,7 +441,8 @@ final class ViewerState {
                 }
                 group.addTask { [weak self] in
                     await self?.progressTicker(queues: queues,
-                                               batchCount: count,
+                                               exifBatchCount: exifCount,
+                                               thumbBatchCount: thumbCount,
                                                gen: gen)
                 }
             }
@@ -452,13 +478,19 @@ final class ViewerState {
     }
 
     /// Signal the indexer to bump a pair's batch to the head of every
-    /// pipeline. No-op if the batch is already in progress or done.
+    /// pipeline. Resolves the stem to each pipeline's own batch id
+    /// (exif/xmp use 50-pair batches, thumbnails use 5-pair batches).
+    /// No-op if the batch is already in progress or done.
     func prioritizeBatch(forStem stem: String) {
-        guard let id = stemToBatchID[stem], let queues = batchQueues else { return }
+        guard let queues = batchQueues else { return }
+        let exifID  = stemToBatchID[stem]
+        let thumbID = stemToThumbBatchID[stem]
         Task {
-            await queues.exif.prioritize(id)
-            await queues.xmp.prioritize(id)
-            await queues.thumb.prioritize(id)
+            if let id = exifID {
+                await queues.exif.prioritize(id)
+                await queues.xmp.prioritize(id)
+            }
+            if let id = thumbID { await queues.thumb.prioritize(id) }
         }
     }
 
@@ -501,40 +533,56 @@ final class ViewerState {
     private func runThumbPipeline(queue: BatchQueue, gen: Int) async {
         while let id = await queue.popNext() {
             if Task.isCancelled || shootGeneration != gen { return }
-            let batch = pairBatches[id]
-            // Sliding-window concurrency of `thumbConcurrency` ImageIO loads.
-            // ImageIO is thread-safe and HEIF embedded-thumb reads are
-            // independent — but capping fanout keeps disk IO predictable
-            // on slower media (SD cards) and avoids unbounded dispatch
-            // queue inflation.
-            let loaded = await withTaskGroup(of: (String, CGImage?).self,
-                                             returning: [(String, CGImage)].self) { group in
-                var iter = batch.makeIterator()
-                func spawnNext() -> Bool {
-                    guard let pair = iter.next() else { return false }
+            let batch = thumbBatches[id]
+            // With thumbBatchSize == thumbConcurrency every pair in the
+            // batch loads in parallel; the inner TaskGroup just gathers
+            // results. ImageIO is thread-safe; HEIF embedded-thumb reads
+            // are independent.
+            typealias Result = (stem: String, image: CGImage?, stats: ThumbnailLoader.Stats?)
+            let results: [Result] = await withTaskGroup(of: Result.self,
+                                                        returning: [Result].self) { group in
+                for pair in batch {
                     let url = pair.heifURL
                     let stem = pair.stem
                     group.addTask {
-                        let img = await Task.detached(priority: .utility) {
-                            ThumbnailLoader.load(from: url)
+                        let (img, stats) = await Task.detached(priority: .utility) {
+                            ThumbnailLoader.loadInstrumented(from: url)
                         }.value
-                        return (stem, img)
+                        return (stem, img, stats)
                     }
-                    return true
                 }
-                for _ in 0 ..< Self.thumbConcurrency {
-                    if !spawnNext() { break }
-                }
-                var out: [(String, CGImage)] = []
-                while let (stem, img) = await group.next() {
-                    if let img { out.append((stem, img)) }
-                    _ = spawnNext()
-                }
+                var out: [Result] = []
+                for await r in group { out.append(r) }
                 return out
             }
+            let loaded: [(String, CGImage)] = results.compactMap {
+                guard let img = $0.image else { return nil }
+                return ($0.stem, img)
+            }
             flushThumbBatch(loaded, generation: gen)
+            logThumbBatchStats(id: id, results: results)
             await queue.markDone(id)
         }
+    }
+
+    /// Per-batch aggregate of file-read vs decode timings. Surface in
+    /// Console.app via `subsystem == "dev.frostman.PhotoX"` filter — gives
+    /// us a quick answer to "is the bottleneck disk or CPU" on any given
+    /// shoot without needing a profiler attached.
+    private nonisolated func logThumbBatchStats(
+        id: Int,
+        results: [(stem: String, image: CGImage?, stats: ThumbnailLoader.Stats?)]
+    ) {
+        let stats = results.compactMap(\.stats)
+        guard !stats.isEmpty else { return }
+        let count    = stats.count
+        let bytes    = stats.reduce(0) { $0 + $1.fileBytes }
+        let read     = stats.reduce(0.0) { $0 + $1.readMS }
+        let decode   = stats.reduce(0.0) { $0 + $1.decodeMS }
+        let kbAvg    = (bytes / max(count, 1)) / 1024
+        let readAvg  = read / Double(count)
+        let decAvg   = decode / Double(count)
+        Log.app.notice("thumb batch \(id, privacy: .public): \(count, privacy: .public) files, ~\(kbAvg, privacy: .public) KB avg, read \(readAvg, format: .fixed(precision: 1)) ms avg, decode \(decAvg, format: .fixed(precision: 1)) ms avg")
     }
 
     // MARK: flushes (all on MainActor)
@@ -587,19 +635,22 @@ final class ViewerState {
     // MARK: progress
 
     private func progressTicker(queues: (exif: BatchQueue, xmp: BatchQueue, thumb: BatchQueue),
-                                batchCount: Int,
+                                exifBatchCount: Int,
+                                thumbBatchCount: Int,
                                 gen: Int) async {
         while !Task.isCancelled, shootGeneration == gen {
             let exifDone  = await queues.exif.snapshotDoneCount()
             let xmpDone   = await queues.xmp.snapshotDoneCount()
             let thumbDone = await queues.thumb.snapshotDoneCount()
             let p = IndexingProgress(
-                exif:  batchCount == 0 ? 1 : Double(exifDone)  / Double(batchCount),
-                xmp:   batchCount == 0 ? 1 : Double(xmpDone)   / Double(batchCount),
-                thumb: batchCount == 0 ? 1 : Double(thumbDone) / Double(batchCount)
+                exif:  exifBatchCount  == 0 ? 1 : Double(exifDone)  / Double(exifBatchCount),
+                xmp:   exifBatchCount  == 0 ? 1 : Double(xmpDone)   / Double(exifBatchCount),
+                thumb: thumbBatchCount == 0 ? 1 : Double(thumbDone) / Double(thumbBatchCount)
             )
             setIndexingProgress(p, generation: gen)
-            if exifDone + xmpDone + thumbDone >= batchCount * 3 { return }
+            if exifDone >= exifBatchCount,
+               xmpDone  >= exifBatchCount,
+               thumbDone >= thumbBatchCount { return }
             try? await Task.sleep(for: .milliseconds(100))
         }
     }
