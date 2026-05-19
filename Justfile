@@ -108,6 +108,12 @@ test *only="":
     # fail fast instead of waiting indefinitely.
     timeout 60 xcodebuild "${ARGS[@]}"
 
+# Regenerate the Release + Debug app iconsets via the icon generator.
+# Writes PNGs into PhotoX/Assets.xcassets/{AppIcon,AppIcon-Debug}.appiconset/.
+# Re-run only when the icon design or the generator script changes.
+icon:
+    swift scripts/generate_icon.swift
+
 # Cut a release via scripts/release.sh.
 #   just release              → full release (build, sign, DMG, publish)
 #   just release --verify-only → build + tests, no publish

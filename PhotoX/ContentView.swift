@@ -174,12 +174,15 @@ struct ContentView: View {
         .toolbar {
             #if DEBUG
             ToolbarItem(placement: .navigation) {
+                // Same amber + dark-brown palette as the DEV pill baked
+                // into AppIcon-Debug, so the titlebar badge reads as the
+                // same "this is the dev build" cue at a glance.
                 Text("DEV")
                     .font(.caption2.bold().monospaced())
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color(red: 0.20, green: 0.10, blue: 0.0))
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
-                    .background(Color.red, in: Capsule())
+                    .background(Color(red: 1.00, green: 0.78, blue: 0.10), in: Capsule())
                     .help("Debug build — separate bundle ID (dev.frostman.PhotoX.debug), Sparkle disabled, settings shared with production via AppDefaults")
             }
             #endif

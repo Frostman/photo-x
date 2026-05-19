@@ -3,18 +3,23 @@
 // PhotoX app icon generator.
 // Renders a dark glossy-squircle background with a centered photo frame
 // and a big gold star, then writes PNGs at all macOS app-icon sizes into
-// PhotoX/Assets.xcassets/AppIcon.appiconset/.
+// two asset catalogs:
+//   PhotoX/Assets.xcassets/AppIcon.appiconset/        ← Release
+//   PhotoX/Assets.xcassets/AppIcon-Debug.appiconset/  ← Debug (amber DEV pill)
 //
-// Run from repo root: `swift scripts/generate_icon.swift`
+// Run from repo root: `swift scripts/generate_icon.swift` (or `just icon`).
 //
 
 import CoreGraphics
+import CoreText
 import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
-let outputDir = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+let releaseDir = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
     .appendingPathComponent("PhotoX/Assets.xcassets/AppIcon.appiconset")
+let debugDir = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+    .appendingPathComponent("PhotoX/Assets.xcassets/AppIcon-Debug.appiconset")
 let sizes: [Int] = [16, 32, 64, 128, 256, 512, 1024]
 
 @discardableResult
@@ -198,6 +203,124 @@ func drawStar(in ctx: CGContext,
     ctx.restoreGState()
 }
 
+/// Draws an amber "DEV" pill at the bottom-center of `ctx`, sized to
+/// roughly 22 % of the icon height. Text is skipped below 48 px (would
+/// be unreadable smudge); the pill colour alone is enough to flag the
+/// debug build at small sizes.
+func drawDevPill(in ctx: CGContext, sizePx: Int, colorSpace cs: CGColorSpace) {
+    let s = CGFloat(sizePx)
+    let pillW = s * 0.50
+    let pillH = s * 0.22
+    let pillX = (s - pillW) / 2
+    let pillY = s * 0.06             // bottom-center inset
+    let pillRect = CGRect(x: pillX, y: pillY, width: pillW, height: pillH)
+    let pillPath = CGPath(roundedRect: pillRect,
+                          cornerWidth: pillH / 2,
+                          cornerHeight: pillH / 2,
+                          transform: nil)
+
+    // Soft drop shadow so the pill lifts off the photo behind it.
+    ctx.saveGState()
+    ctx.setShadow(offset: CGSize(width: 0, height: -s * 0.012),
+                   blur: s * 0.04,
+                   color: CGColor(red: 0, green: 0, blue: 0, alpha: 0.65))
+    ctx.addPath(pillPath)
+    ctx.setFillColor(CGColor(red: 1.00, green: 0.78, blue: 0.10, alpha: 1.0))
+    ctx.fillPath()
+    ctx.restoreGState()
+
+    // Amber → darker amber vertical gradient (subtle, matches the gold star).
+    ctx.saveGState()
+    ctx.addPath(pillPath)
+    ctx.clip()
+    let pillColors = [
+        CGColor(red: 1.00, green: 0.86, blue: 0.30, alpha: 1.0),
+        CGColor(red: 0.92, green: 0.66, blue: 0.05, alpha: 1.0),
+    ] as CFArray
+    let pillGradient = CGGradient(colorsSpace: cs, colors: pillColors, locations: [0, 1])!
+    ctx.drawLinearGradient(pillGradient,
+                            start: CGPoint(x: 0, y: pillY + pillH),
+                            end: CGPoint(x: 0, y: pillY),
+                            options: [])
+    ctx.restoreGState()
+
+    // Thin dark outline so the pill reads on light photo backgrounds too.
+    ctx.saveGState()
+    ctx.addPath(pillPath)
+    ctx.setStrokeColor(CGColor(red: 0.20, green: 0.10, blue: 0.0, alpha: 0.85))
+    ctx.setLineWidth(max(1, s * 0.012))
+    ctx.strokePath()
+    ctx.restoreGState()
+
+    // Text only at sizes where it'd actually be legible. Below ~48 px the
+    // text would render as a 6–8 px smudge — the amber colour alone is
+    // enough of a "this is the dev build" tell at small sizes.
+    guard sizePx >= 48 else { return }
+
+    let text = "DEV"
+    let fontSize = pillH * 0.62
+    let font = CTFontCreateWithName("Helvetica-Bold" as CFString, fontSize, nil)
+    // CoreText attribute keys — using these directly (rather than the
+    // AppKit-extended `NSAttributedString.Key.font` constants) keeps the
+    // script runnable as a pure `swift` interpreter invocation, no
+    // AppKit import required.
+    let attrs: CFDictionary = [
+        kCTFontAttributeName: font,
+        kCTForegroundColorAttributeName: CGColor(red: 0.20, green: 0.10, blue: 0.0, alpha: 1.0),
+    ] as CFDictionary
+    let attributed = CFAttributedStringCreate(nil, text as CFString, attrs)!
+    let line = CTLineCreateWithAttributedString(attributed)
+    let textBounds = CTLineGetBoundsWithOptions(line, .useGlyphPathBounds)
+    let textX = pillX + (pillW - textBounds.width) / 2 - textBounds.origin.x
+    let textY = pillY + (pillH - textBounds.height) / 2 - textBounds.origin.y
+
+    ctx.saveGState()
+    ctx.textPosition = CGPoint(x: textX, y: textY)
+    CTLineDraw(line, ctx)
+    ctx.restoreGState()
+}
+
+/// Overlay the DEV pill onto a copy of `base` and return the composited
+/// CGImage. Keeps `base` untouched so the same base render serves both
+/// iconsets without re-drawing the whole icon.
+func overlayDevPill(on base: CGImage, sizePx: Int) -> CGImage? {
+    let cs = CGColorSpaceCreateDeviceRGB()
+    let bitmap = CGImageAlphaInfo.premultipliedLast.rawValue
+    guard let ctx = CGContext(data: nil, width: sizePx, height: sizePx,
+                              bitsPerComponent: 8, bytesPerRow: 0,
+                              space: cs, bitmapInfo: bitmap) else {
+        return nil
+    }
+    ctx.draw(base, in: CGRect(x: 0, y: 0, width: sizePx, height: sizePx))
+    drawDevPill(in: ctx, sizePx: sizePx, colorSpace: cs)
+    return ctx.makeImage()
+}
+
+/// The Contents.json shape is identical for both iconsets — same set of
+/// scale / size declarations pointing at filenames the generator just
+/// wrote. Re-emitting it here keeps the iconset self-describing if a
+/// devappends a new size in the future.
+let contentsJSON = """
+{
+  "images" : [
+    { "size" : "16x16",   "idiom" : "mac", "filename" : "icon_16.png",   "scale" : "1x" },
+    { "size" : "16x16",   "idiom" : "mac", "filename" : "icon_32.png",   "scale" : "2x" },
+    { "size" : "32x32",   "idiom" : "mac", "filename" : "icon_32.png",   "scale" : "1x" },
+    { "size" : "32x32",   "idiom" : "mac", "filename" : "icon_64.png",   "scale" : "2x" },
+    { "size" : "128x128", "idiom" : "mac", "filename" : "icon_128.png",  "scale" : "1x" },
+    { "size" : "128x128", "idiom" : "mac", "filename" : "icon_256.png",  "scale" : "2x" },
+    { "size" : "256x256", "idiom" : "mac", "filename" : "icon_256.png",  "scale" : "1x" },
+    { "size" : "256x256", "idiom" : "mac", "filename" : "icon_512.png",  "scale" : "2x" },
+    { "size" : "512x512", "idiom" : "mac", "filename" : "icon_512.png",  "scale" : "1x" },
+    { "size" : "512x512", "idiom" : "mac", "filename" : "icon_1024.png", "scale" : "2x" }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}
+"""
+
 func savePNG(_ image: CGImage, to url: URL) throws {
     guard let dest = CGImageDestinationCreateWithURL(url as CFURL,
                                                       UTType.png.identifier as CFString,
@@ -211,18 +334,41 @@ func savePNG(_ image: CGImage, to url: URL) throws {
 }
 
 // ----- main -----
-try? FileManager.default.createDirectory(at: outputDir,
-                                          withIntermediateDirectories: true)
+for dir in [releaseDir, debugDir] {
+    try? FileManager.default.createDirectory(at: dir,
+                                              withIntermediateDirectories: true)
+    try? contentsJSON.write(
+        to: dir.appendingPathComponent("Contents.json"),
+        atomically: true,
+        encoding: .utf8
+    )
+}
+
 for size in sizes {
-    guard let img = renderIcon(size: size) else {
+    guard let base = renderIcon(size: size) else {
         FileHandle.standardError.write(Data("Failed to render \(size)px\n".utf8))
         continue
     }
-    let url = outputDir.appendingPathComponent("icon_\(size).png")
+
+    // Release: clean icon.
+    let releaseURL = releaseDir.appendingPathComponent("icon_\(size).png")
     do {
-        try savePNG(img, to: url)
-        print("Wrote \(url.lastPathComponent) (\(size)px)")
+        try savePNG(base, to: releaseURL)
+        print("Wrote Release \(releaseURL.lastPathComponent) (\(size)px)")
     } catch {
-        FileHandle.standardError.write(Data("Failed to save \(url.lastPathComponent): \(error)\n".utf8))
+        FileHandle.standardError.write(Data("Failed to save \(releaseURL.lastPathComponent): \(error)\n".utf8))
+    }
+
+    // Debug: same base + amber DEV pill.
+    guard let dev = overlayDevPill(on: base, sizePx: size) else {
+        FileHandle.standardError.write(Data("Failed to overlay DEV pill at \(size)px\n".utf8))
+        continue
+    }
+    let debugURL = debugDir.appendingPathComponent("icon_\(size).png")
+    do {
+        try savePNG(dev, to: debugURL)
+        print("Wrote Debug   \(debugURL.lastPathComponent) (\(size)px)")
+    } catch {
+        FileHandle.standardError.write(Data("Failed to save \(debugURL.lastPathComponent): \(error)\n".utf8))
     }
 }

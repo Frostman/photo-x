@@ -121,6 +121,10 @@ targets:
         # data while testing.
         Debug:
           PRODUCT_BUNDLE_IDENTIFIER: dev.frostman.PhotoX.debug
+          # Distinct iconset with an amber "DEV" pill so the debug build
+          # is visually obvious in Finder, Dock, and Cmd-Tab. Generated
+          # by scripts/generate_icon.swift (or `just icon`).
+          ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon-Debug
         Release:
           PRODUCT_BUNDLE_IDENTIFIER: dev.frostman.PhotoX
 
