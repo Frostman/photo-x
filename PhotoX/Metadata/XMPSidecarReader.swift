@@ -13,7 +13,9 @@ enum XMPSidecarReader {
             return .empty
         }
         guard let metadata = CGImageMetadataCreateFromXMPData(data as CFData) else {
+            #if DEBUG
             Log.app.notice("XMPSidecarReader: failed to parse \(url.lastPathComponent, privacy: .public)")
+            #endif
             return .empty
         }
 

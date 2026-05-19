@@ -258,10 +258,15 @@ final class ExportRunner {
             // One summary notification at the end of the batch — covers
             // single- and multi-destination runs alike.
             notifications.postAllComplete(summaries)
+            let startedAt = self.batchProgress?.startedAt ?? Date()
             self.batchProgress = nil
             self.endPreventingSleep()
-            self.lastBatchOutcome = self.summariseBatchOutcome(for: destinations)
+            let outcome = self.summariseBatchOutcome(for: destinations)
+            self.lastBatchOutcome = outcome
             self.lastBatchCompletedAt = Date()
+            self.logBatchCompletion(summaries: summaries,
+                                    outcome: outcome,
+                                    startedAt: startedAt)
         }
         runningTasks[Self.batchSentinelID] = task
     }
@@ -328,12 +333,39 @@ final class ExportRunner {
             // Single-destination Run uses the same one-summary notification
             // as Export-all (just a batch of one).
             notifications.postAllComplete([(destination, summary)])
+            let startedAt = self.batchProgress?.startedAt ?? Date()
             self.batchProgress = nil
             self.endPreventingSleep()
-            self.lastBatchOutcome = self.summariseBatchOutcome(for: [destination])
+            let outcome = self.summariseBatchOutcome(for: [destination])
+            self.lastBatchOutcome = outcome
             self.lastBatchCompletedAt = Date()
+            self.logBatchCompletion(summaries: [(destination, summary)],
+                                    outcome: outcome,
+                                    startedAt: startedAt)
         }
         runningTasks[destinationID] = task
+    }
+
+    /// One production summary line per export batch. Stats answer the
+    /// only useful post-hoc questions: outcome, how many destinations,
+    /// how many files copied / skipped / deleted, how many errors, total
+    /// wall time.
+    private func logBatchCompletion(
+        summaries: [(ExportSettings.Destination, Summary)],
+        outcome: BatchOutcome,
+        startedAt: Date
+    ) {
+        let copied  = summaries.reduce(0) { $0 + $1.1.copied }
+        let skipped = summaries.reduce(0) { $0 + $1.1.skipped }
+        let deleted = summaries.reduce(0) { $0 + $1.1.deleted }
+        let errors  = summaries.reduce(0) { $0 + $1.1.errors.count }
+        let elapsed = Date().timeIntervalSince(startedAt)
+        let word: String = switch outcome {
+        case .done:      "complete"
+        case .cancelled: "cancelled"
+        case .failed:    "failed"
+        }
+        Log.app.notice("Export \(word, privacy: .public): \(summaries.count, privacy: .public) destinations, \(copied, privacy: .public) copied, \(skipped, privacy: .public) skipped, \(deleted, privacy: .public) deleted, \(errors, privacy: .public) errors, \(formattedDuration(elapsed), privacy: .public)")
     }
 
     /// Inspect `perDestination` for the destinations in this batch and roll

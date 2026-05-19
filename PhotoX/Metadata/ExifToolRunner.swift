@@ -40,7 +40,6 @@ enum ExifToolRunner {
     /// exiftool isn't installed; the viewer still works without it.
     static func readAF(from url: URL) -> AFData {
         guard FileManager.default.isExecutableFile(atPath: exifToolPath) else {
-            Log.app.notice("exiftool not at \(exifToolPath, privacy: .public) — skipping AF parse")
             return AFData()
         }
         do {

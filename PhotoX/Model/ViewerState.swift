@@ -487,7 +487,9 @@ final class ViewerState {
             xmp:   PipelineTiming(startedAt: startTime),
             thumb: PipelineTiming(startedAt: startTime)
         )
+        #if DEBUG
         Log.app.notice("Indexing \(shoot.pairs.count, privacy: .public) pairs: \(exifCount, privacy: .public) exif/xmp batches × \(Self.exifBatchSize, privacy: .public), \(thumbCount, privacy: .public) thumb batches × \(Self.thumbBatchSize, privacy: .public)")
+        #endif
 
         indexingTask = Task(priority: .utility) { [weak self] in
             await withTaskGroup(of: Void.self) { group in
@@ -587,14 +589,16 @@ final class ViewerState {
     }
 
     /// Per-batch breakdown of exiftool subprocess time vs in-process JSON
-    /// parse time. Lets us tell whether exiftool is slow (per-file scan or
-    /// spawn cold-start) or our Swift parsing is the bottleneck.
+    /// parse time. DEBUG-only: useful when chasing indexing perf, too
+    /// noisy for production logs.
     private nonisolated func logExifBatchStats(id: Int,
                                                 stats: MetadataBatchLoader.Stats?) {
+        #if DEBUG
         guard let s = stats else { return }
         let kb = s.bytesOut / 1024
         let perFileMS = Double(s.filesIn) > 0 ? s.spawnMS / Double(s.filesIn) : 0
         Log.app.notice("exif batch \(id, privacy: .public): \(s.filesIn, privacy: .public) files, \(kb, privacy: .public) KB out, spawn \(s.spawnMS, format: .fixed(precision: 1)) ms (\(perFileMS, format: .fixed(precision: 1)) ms/file), parse \(s.parseMS, format: .fixed(precision: 1)) ms")
+        #endif
     }
 
     private func runXMPPipeline(queue: BatchQueue, gen: Int) async {
@@ -644,14 +648,14 @@ final class ViewerState {
         }
     }
 
-    /// Per-batch aggregate of file-read vs decode timings. Surface in
-    /// Console.app via `subsystem == "dev.frostman.PhotoX"` filter — gives
-    /// us a quick answer to "is the bottleneck disk or CPU" on any given
-    /// shoot without needing a profiler attached.
+    /// Per-batch aggregate of file-read vs decode timings. DEBUG-only:
+    /// tells us whether the bottleneck is disk or CPU when iterating on
+    /// indexing perf, too noisy for production logs.
     private nonisolated func logThumbBatchStats(
         id: Int,
         results: [(stem: String, image: CGImage?, stats: ThumbnailLoader.Stats?)]
     ) {
+        #if DEBUG
         let stats = results.compactMap(\.stats)
         guard !stats.isEmpty else { return }
         let count    = stats.count
@@ -662,6 +666,7 @@ final class ViewerState {
         let readAvg  = read / Double(count)
         let decAvg   = decode / Double(count)
         Log.app.notice("thumb batch \(id, privacy: .public): \(count, privacy: .public) files, ~\(kbAvg, privacy: .public) KB avg, read \(readAvg, format: .fixed(precision: 1)) ms avg, decode \(decAvg, format: .fixed(precision: 1)) ms avg")
+        #endif
     }
 
     // MARK: flushes (all on MainActor)
@@ -769,7 +774,17 @@ final class ViewerState {
         guard shootGeneration == generation else { return }
         indexingStatus = .done
         indexingCompletedAt = Date()
-        Log.app.notice("Indexing complete")
+
+        // One production summary line per indexing run — has everything
+        // needed to diagnose performance later: pair count + per-pipeline
+        // wall times. The three pipelines run in parallel so the total
+        // wall time is the max, not the sum.
+        let pairs = shoot?.pairs.count ?? 0
+        let exifDur  = indexingTimings.exif.duration  ?? 0
+        let xmpDur   = indexingTimings.xmp.duration   ?? 0
+        let thumbDur = indexingTimings.thumb.duration ?? 0
+        let total = max(exifDur, max(xmpDur, thumbDur))
+        Log.app.notice("Indexing complete: \(pairs, privacy: .public) pairs in \(formattedDuration(total), privacy: .public) (exif \(formattedDuration(exifDur), privacy: .public), xmp \(formattedDuration(xmpDur), privacy: .public), thumb \(formattedDuration(thumbDur), privacy: .public))")
     }
 
     // MARK: - Burst detection (filmstrip bracket overlay)
@@ -983,7 +998,9 @@ final class ViewerState {
                 try await Task.detached(priority: .userInitiated) {
                     try XMPSidecarWriter.updateRating(rating, for: capturedPair)
                 }.value
+                #if DEBUG
                 Log.app.notice("XMP write OK: \(capturedPair.stem, privacy: .public) rating=\(rating.map(String.init) ?? "nil", privacy: .public)")
+                #endif
             } catch {
                 // Rollback. Only touch currentXMP if the user hasn't navigated
                 // away — otherwise we'd clobber unrelated state.
@@ -1030,7 +1047,9 @@ final class ViewerState {
                 try await Task.detached(priority: .userInitiated) {
                     try XMPSidecarWriter.updateLabel(label, for: capturedPair)
                 }.value
+                #if DEBUG
                 Log.app.notice("XMP label write OK: \(capturedPair.stem, privacy: .public) label=\(label ?? "nil", privacy: .public)")
+                #endif
             } catch {
                 if self.pair?.id == capturedPair.id {
                     self.currentXMP = previous
@@ -1074,7 +1093,9 @@ final class ViewerState {
 
         guard autoSwapEnabled, pair != nil else { return }
         if curr >= 1.0 && prev < 1.0 && requestedVariant == .heif {
+            #if DEBUG
             Log.app.notice("auto-swap: HEIF → RAW (pz \(prev, format: .fixed(precision: 2)) → \(curr, format: .fixed(precision: 2)))")
+            #endif
             requestedVariant = .raw
             await applyRequestedVariant()
         }
