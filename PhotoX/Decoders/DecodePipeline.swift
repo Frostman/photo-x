@@ -2,16 +2,28 @@ import Foundation
 
 @MainActor
 final class DecodePipeline {
+    /// Decoded-pixel cache: ~200 MB per 50-MP frame × ~20 entries =
+    /// ~4 GB worst case, but typical working sets are much smaller.
+    /// Hot path for the currently-displayed frame + its neighbours.
     let cache: DecodedImageCache
 
-    private let heifDecoder: any ImageDecoder = HEIFDecoder()
+    /// Raw-byte cache for HIFs: 2 GB ≈ ~200+ HIFs in RAM. Persists
+    /// across shoot switches; LRU naturally trims. Sits in front of the
+    /// HEIF decoder so back-and-forth culling never re-reads from the
+    /// source card.
+    let hifBytes: HIFBytesCache
+
+    private let heifDecoder: any ImageDecoder
     private let rawImageIODecoder: any ImageDecoder = RAWImageIODecoder()
     private let rawLibRawDecoder: any ImageDecoder = RAWLibRawDecoder()
 
     private var inflight: [DecodeKey: Task<DecodedImage, Error>] = [:]
 
-    init(cacheCapacity: Int = 12) {
+    init(cacheCapacity: Int = 20,
+         hifBytesCapacity: Int = 2 * 1024 * 1024 * 1024) {
         self.cache = DecodedImageCache(capacity: cacheCapacity)
+        self.hifBytes = HIFBytesCache(byteCapacity: hifBytesCapacity)
+        self.heifDecoder = HEIFDecoder(bytesCache: self.hifBytes)
     }
 
     /// Cheap pre-check — does the pipeline already have this image cached?
@@ -31,7 +43,9 @@ final class DecodePipeline {
         let key = DecodeKey(pairID: pair.id, variant: variant, decoder: keyDecoder)
 
         if let cached = cache.get(key) {
+            #if DEBUG
             Log.decode.notice("cache hit: \(key.pairID, privacy: .public) \(key.variant.rawValue, privacy: .public)/\(key.decoder.rawValue, privacy: .public)")
+            #endif
             return cached
         }
 
@@ -42,7 +56,9 @@ final class DecodePipeline {
         let decoderImpl = decoderFor(variant: variant, choice: decoder)
         let url = (variant == .heif) ? pair.heifURL : pair.rawURL
 
+        #if DEBUG
         Log.decode.notice("start: \(key.pairID, privacy: .public) \(key.variant.rawValue, privacy: .public)/\(key.decoder.rawValue, privacy: .public) → \(url.lastPathComponent, privacy: .public)")
+        #endif
         let task = Task<DecodedImage, Error> {
             try await decoderImpl.decode(url: url)
         }
@@ -51,7 +67,9 @@ final class DecodePipeline {
 
         let result = try await task.value
         cache.set(result, for: key)
+        #if DEBUG
         Log.decode.notice("done: \(key.pairID, privacy: .public) \(key.variant.rawValue, privacy: .public)/\(key.decoder.rawValue, privacy: .public) in \(result.decodeMS, format: .fixed(precision: 1)) ms")
+        #endif
         return result
     }
 

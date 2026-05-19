@@ -12,7 +12,7 @@ final class DecodedImageCache {
     private var insertionOrder: [DecodeKey] = []
     let capacity: Int
 
-    init(capacity: Int = 4) {
+    init(capacity: Int = 20) {
         self.capacity = capacity
     }
 
