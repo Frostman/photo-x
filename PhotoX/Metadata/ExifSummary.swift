@@ -110,14 +110,16 @@ extension ExifSummary {
         return nil
     }
 
-    private static func prettyMake(_ make: String) -> String {
+    // Internal so the in-process TIFF parser (TIFFEXIFParser) and the
+    // exiftool-dict path share one set of formatters.
+    static func prettyMake(_ make: String) -> String {
         if make == make.uppercased() {
             return make.prefix(1) + make.dropFirst().lowercased()
         }
         return make
     }
 
-    private static func formatShutter(_ time: Double) -> String {
+    static func formatShutter(_ time: Double) -> String {
         if time <= 0 { return "—" }
         if time >= 0.5 { return String(format: "%.1f s", time) }
         return "1/\(Int((1.0 / time).rounded()))"

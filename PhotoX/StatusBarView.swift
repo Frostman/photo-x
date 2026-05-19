@@ -230,18 +230,18 @@ private struct IndexingProgressPopover: View {
                     }
                 }
             }
-            row("EXIF · AF · sequence",
-                value: progress.exif,
-                timing: timings.exif,
+            row("Thumbs + basic EXIF",
+                value: progress.thumbsAndBasicExif,
+                timing: timings.thumbsAndBasicExif,
+                icon: "photo.on.rectangle.angled")
+            row("Sony AF / seq",
+                value: progress.sonyAfSeq,
+                timing: timings.sonyAfSeq,
                 icon: "doc.text.magnifyingglass")
             row("XMP sidecars",
-                value: progress.xmp,
-                timing: timings.xmp,
+                value: progress.xmpSidecars,
+                timing: timings.xmpSidecars,
                 icon: "tag")
-            row("Thumbnails",
-                value: progress.thumb,
-                timing: timings.thumb,
-                icon: "photo.on.rectangle.angled")
             if completedAt != nil {
                 Divider().padding(.vertical, 2)
                 HStack {

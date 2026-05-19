@@ -13,69 +13,67 @@ enum ThumbnailLoader {
         var decodeMS:  Double = 0    // CGImageSource extract + scale
     }
 
-    /// Extract a small CGImage suitable for the filmstrip and return it
-    /// alongside per-step timings.
+    /// Extract a small CGImage suitable for the filmstrip + the standard
+    /// EXIF that sits alongside it in the HEIF, along with per-step
+    /// timings. One file read powers both outputs.
     ///
     /// FAST PATH: HEIFs from camera cards carry an embedded JPEG
-    /// thumbnail (Sony A1 II: ~160×120, 8 KB) that we can extract
-    /// without touching the 50-MP HEVC primary image at all. Reads
-    /// ~50–200 KB of the file (header + thumb item), decodes the
-    /// JPEG — ~5 ms total vs ~200 ms for a full HEVC decode.
+    /// thumbnail (Sony A1 II: ~160×120, 8 KB) AND an Exif item (TIFF
+    /// block with Make/Model/Lens/exposure/etc.). Both live in the
+    /// first ~256 KB of the file. Reading those bytes once and parsing
+    /// in-process (~5 ms total) gives us thumb + ExifSummary without
+    /// any subprocess spawn or ImageIO call.
     ///
     /// FALLBACK: if the HEIF parser can't find a JPEG item (e.g.
-    /// non-Sony HEICs without an embedded thumb), revert to the old
-    /// path: `Data(contentsOf:)` + CGImageSource thumbnail extraction.
-    /// Returns `(nil, nil)` only if both paths fail.
+    /// non-Sony HEICs), revert to `Data(contentsOf:)` + CGImageSource
+    /// thumbnail extraction. ExifSummary stays nil in that case —
+    /// caller (the indexer) leaves `pairExif` empty for that file
+    /// (sidebar shows no metadata; fine since it's a rare fallback).
+    /// Returns `(nil, nil, nil)` only if both paths fail.
     static func loadInstrumented(from url: URL, maxPixelSize: Int = 240)
-        -> (image: CGImage?, stats: Stats?)
+        -> (image: CGImage?, exif: ExifSummary?, stats: Stats?)
     {
-        // FAST PATH: embedded JPEG thumbnail. Time the whole thing
-        // (parse + read + decode + orient + crop) as a single
-        // decodeMS measurement since each step is sub-ms.
+        // FAST PATH: embedded JPEG + Exif item in one file read.
         let t0 = CFAbsoluteTimeGetCurrent()
         if let extracted = try? HEIFEmbeddedThumbnail.extract(from: url),
            let raw = decode(data: extracted.jpeg, maxPixelSize: maxPixelSize) {
-            // Crop FIRST (always in landscape — Sony's embedded thumb
-            // is 160×120 with the 3:2 scene letterboxed on top+bottom),
-            // THEN rotate. Reversing the order would crop along the
-            // wrong axis on portrait shots since rotation transposes
-            // width and height.
+            // Crop FIRST in landscape (Sony letterboxes 3:2 scene into a
+            // 4:3 thumb), THEN rotate — reversing the order would crop
+            // along the wrong axis after transpose.
             let cropped = cropToCameraAspect3by2(raw)
-            // The embedded JPEG has NO EXIF orientation tag — Sony
-            // stores rotation in the HEIF container's `irot` box.
-            // Apply it now or portrait shots render sideways.
             let img = OrientationApplier.apply(orientation: extracted.exifOrientation,
                                                to: cropped)
+            // Parse the TIFF block from the HEIF Exif item. Returns nil
+            // if the Exif item was missing OR the parser failed; caller
+            // tolerates either.
+            let exif: ExifSummary? = extracted.exifBytes.flatMap(TIFFEXIFParser.parse)
             let elapsed = (CFAbsoluteTimeGetCurrent() - t0) * 1000.0
-            return (img, Stats(
-                fileBytes: extracted.jpeg.count,
+            return (img, exif, Stats(
+                fileBytes: extracted.jpeg.count + (extracted.exifBytes?.count ?? 0),
                 readMS:    0,
                 decodeMS:  elapsed
             ))
         }
-        // FALLBACK: full HEIF decode via ImageIO (the pre-optimisation
-        // behavior). Splits read vs decode timing so logs make it
-        // obvious which path the file took (huge bytes + big read =
-        // fallback path; ~8 KB + 0 ms read = fast path).
+        // FALLBACK: ImageIO. No ExifSummary in this path — by the time
+        // we're here the file isn't a camera HEIF we recognise.
         let data: Data
         do {
             data = try Data(contentsOf: url)
         } catch {
-            return (nil, nil)
+            return (nil, nil, nil)
         }
         let t1 = CFAbsoluteTimeGetCurrent()
         let img = decode(data: data, maxPixelSize: maxPixelSize)
         let t2 = CFAbsoluteTimeGetCurrent()
-        return (img, Stats(
+        return (img, nil, Stats(
             fileBytes: data.count,
             readMS:    (t1 - t0) * 1000.0,
             decodeMS:  (t2 - t1) * 1000.0
         ))
     }
 
-    /// Convenience: throw away the stats. Kept for any caller that just
-    /// wants the image (tests, debugging) — the indexer uses the
-    /// instrumented variant directly so it can roll up stats per batch.
+    /// Convenience: throw away the stats and exif. Kept for any caller
+    /// that just wants the image (tests, debugging).
     static func load(from url: URL, maxPixelSize: Int = 240) -> CGImage? {
         loadInstrumented(from: url, maxPixelSize: maxPixelSize).image
     }

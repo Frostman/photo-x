@@ -160,8 +160,8 @@ final class MetadataBatchLoaderTests: XCTestCase {
         XCTAssertTrue(r.af.isEmpty); XCTAssertTrue(r.exif.isEmpty); XCTAssertTrue(r.seq.isEmpty)
     }
 
-    func test_read_emptyURLsList_isNoOp() {
-        let r = MetadataBatchLoader.read([])
+    func test_read_emptyURLsList_isNoOp() async {
+        let r = await MetadataBatchLoader.read([])
         XCTAssertTrue(r.af.isEmpty); XCTAssertTrue(r.exif.isEmpty); XCTAssertTrue(r.seq.isEmpty)
     }
 }

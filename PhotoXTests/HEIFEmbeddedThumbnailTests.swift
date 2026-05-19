@@ -222,6 +222,29 @@ final class HEIFEmbeddedThumbnailTests: XCTestCase {
                        "landscape Sony A1 II shot should have EXIF orientation 1")
     }
 
+    func test_extract_realSonyHIF_returnsValidExifBytes() throws {
+        let url = URL(fileURLWithPath:
+            "/Users/frostman/workspace/personal/photo-x/sample/DSC04207.HIF")
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw XCTSkip("sample HIF not available")
+        }
+        guard let extracted = try HEIFEmbeddedThumbnail.extract(from: url) else {
+            XCTFail("extract returned nil")
+            return
+        }
+        guard let exifBytes = extracted.exifBytes else {
+            XCTFail("expected exifBytes from a known Sony HIF")
+            return
+        }
+        XCTAssertGreaterThan(exifBytes.count, 100,
+                             "Sony Exif block is normally a few KB")
+        // First byte after the 4-byte prefix is stripped should be the
+        // TIFF byte-order marker: 'I' (little-endian) or 'M' (big-endian).
+        let first = exifBytes[exifBytes.startIndex]
+        XCTAssertTrue(first == 0x49 || first == 0x4D,
+                      "Exif bytes should start with II or MM, got 0x\(String(first, radix: 16))")
+    }
+
     func test_extract_realSonyPortraitHIF_returnsCorrectOrientation() throws {
         let url = URL(fileURLWithPath:
             "/Users/frostman/workspace/personal/photo-x/sample/DSC08866.HIF")

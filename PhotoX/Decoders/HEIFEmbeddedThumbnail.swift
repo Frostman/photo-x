@@ -18,39 +18,161 @@ enum HEIFEmbeddedThumbnail {
         let length: Int
     }
 
-    /// Parsed thumbnail + the EXIF-orientation value (1, 3, 6 or 8)
-    /// the caller should apply before display. The HEIF stores the
-    /// orientation in an `irot` box separate from the JPEG bytes; the
-    /// extracted JPEG itself has no EXIF, so without this we'd render
-    /// portrait shots sideways.
+    /// Parsed thumbnail + EXIF block + rotation hint. The HEIF stores
+    /// the orientation in an `irot` box separate from the JPEG bytes;
+    /// the extracted JPEG itself has no EXIF, so without this we'd
+    /// render portrait shots sideways. The `exifBytes` blob is the
+    /// TIFF data the HEIF's `Exif` item points at (with the 4-byte
+    /// offset prefix stripped) — feed it to `TIFFEXIFParser.parse`
+    /// to populate the sidebar without ever touching exiftool.
     struct ExtractedThumbnail: Equatable {
         let jpeg: Data
         let exifOrientation: Int     // 1, 3, 6, or 8
+        let exifBytes: Data?         // TIFF block, ready for TIFFEXIFParser
     }
 
-    /// Read the embedded JPEG thumbnail bytes from `url` along with
-    /// the HEIF's rotation hint. Returns nil if the file isn't HEIF,
-    /// has no JPEG thumbnail item, or the parser can't find one
-    /// (defensive — caller falls back to a full-decode path).
+    /// Read the embedded JPEG thumbnail bytes + Exif TIFF block from
+    /// `url` along with the HEIF's rotation hint. Returns nil if the
+    /// file isn't HEIF, has no JPEG thumbnail item, or the parser
+    /// can't find one (defensive — caller falls back to a
+    /// full-decode path). `exifBytes` is independently nullable: a
+    /// HEIF may have a thumbnail item but no Exif item (rare).
     static func extract(from url: URL) throws -> ExtractedThumbnail? {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? handle.close() }
         // Read the first ~256 KB. The `ftyp` + `meta` boxes always sit
         // near the start; for Sony A1 II HIFs the JPEG thumb itself
-        // is at ~0x26000 = 152 KB, comfortably inside this window.
-        // One read covers parse + extract for the common case.
+        // is at ~0x26000 = 152 KB and the Exif item is in the first
+        // few KB. One read covers parse + both extracts.
         let header = try handle.read(upToCount: 256 * 1024) ?? Data()
-        guard let location = locateJPEGThumbnail(in: header) else { return nil }
+        guard let jpegLoc = locateJPEGThumbnail(in: header) else { return nil }
         let orientation = locateOrientation(in: header) ?? 1
-        let bytes: Data
-        if location.offset + location.length <= header.count {
-            bytes = header.subdata(in: location.offset ..< location.offset + location.length)
+        let exifLoc = locateExifItem(in: header)
+
+        let jpegBytes: Data
+        if jpegLoc.offset + jpegLoc.length <= header.count {
+            jpegBytes = header.subdata(in: jpegLoc.offset ..< jpegLoc.offset + jpegLoc.length)
         } else {
-            // Rare: thumb past the first 256 KB. Seek + read directly.
-            try handle.seek(toOffset: UInt64(location.offset))
-            bytes = (try handle.read(upToCount: location.length)) ?? Data()
+            try handle.seek(toOffset: UInt64(jpegLoc.offset))
+            jpegBytes = (try handle.read(upToCount: jpegLoc.length)) ?? Data()
         }
-        return ExtractedThumbnail(jpeg: bytes, exifOrientation: orientation)
+
+        let exifBytes: Data? = readExifBytes(from: header, handle: handle, location: exifLoc)
+
+        return ExtractedThumbnail(jpeg: jpegBytes,
+                                  exifOrientation: orientation,
+                                  exifBytes: exifBytes)
+    }
+
+    /// HEIF Exif items begin with a 4-byte big-endian offset that
+    /// points to the TIFF header WITHIN the item data, measured from
+    /// the byte just after the offset field itself. Sony A1 II HIFs
+    /// use offset=6, with an "Exif\0\0" magic prefix in those 6 bytes
+    /// before the TIFF block. Some files use offset=0 (TIFF starts
+    /// immediately after the 4-byte field, no Exif magic).
+    ///
+    /// Either way, the byte index where the parser should start is
+    /// `4 + offset` from the start of the item data. Returns nil when
+    /// no Exif item exists or the resolved start lands past EOF.
+    private static func readExifBytes(from header: Data,
+                                      handle: FileHandle,
+                                      location: ItemLocation?) -> Data? {
+        guard let loc = location, loc.length >= 4 else { return nil }
+        let raw: Data
+        if loc.offset + loc.length <= header.count {
+            raw = header.subdata(in: loc.offset ..< loc.offset + loc.length)
+        } else {
+            // Rare: Exif item past first 256 KB.
+            try? handle.seek(toOffset: UInt64(loc.offset))
+            raw = (try? handle.read(upToCount: loc.length)) ?? Data()
+        }
+        guard raw.count >= 4 else { return nil }
+        // 4-byte big-endian offset → byte index of the TIFF marker
+        // within `raw`, counting from byte 4.
+        let base = raw.startIndex
+        let tiffStart = 4 + Int(
+            (UInt32(raw[base]) << 24)
+          | (UInt32(raw[base + 1]) << 16)
+          | (UInt32(raw[base + 2]) << 8)
+          |  UInt32(raw[base + 3])
+        )
+        guard tiffStart < raw.count else { return nil }
+        return raw.subdata(in: tiffStart ..< raw.count)
+    }
+
+    /// Walk `meta` to locate the item whose item_type is "Exif"
+    /// (case-sensitive per HEIF spec) and return its byte range via
+    /// the same `iloc` table the JPEG locator uses. Returns nil if
+    /// either the `iinf` lookup or the `iloc` cross-reference miss.
+    static func locateExifItem(in data: Data) -> ItemLocation? {
+        var cursor = BoxCursor(data: data, base: 0, end: data.count)
+        while let box = cursor.next() {
+            if box.type == "meta" {
+                return parseMetaFindItem(in: data, box: box, type: "Exif")
+            }
+        }
+        return nil
+    }
+
+    /// Generalised version of `parseMeta` — takes a target item_type
+    /// instead of hard-coding "jpeg". Looks up the matching item_id
+    /// in `iinf` and resolves it via `iloc`.
+    private static func parseMetaFindItem(in data: Data, box: Box,
+                                          type itemType: String) -> ItemLocation? {
+        guard box.body.count >= 4 else { return nil }
+        var cursor = BoxCursor(data: data,
+                               base: box.bodyOffset + 4,
+                               end: box.bodyOffset + box.body.count)
+        var wantedID: UInt32?
+        var locations: [UInt32: ItemLocation] = [:]
+        while let child = cursor.next() {
+            switch child.type {
+            case "iinf":
+                if let id = parseIINF_findItemID(in: data, box: child, type: itemType) {
+                    wantedID = id
+                }
+            case "iloc":
+                locations = parseILOC(in: data, box: child)
+            default:
+                break
+            }
+            if wantedID != nil && !locations.isEmpty { break }
+        }
+        guard let id = wantedID, let loc = locations[id] else { return nil }
+        return loc
+    }
+
+    /// Like `parseIINF_findJPEGItemID` but takes any target type
+    /// ("jpeg", "Exif", "hvc1", …). The existing JPEG locator is now
+    /// a thin specialisation of this.
+    private static func parseIINF_findItemID(in data: Data, box: Box,
+                                              type itemType: String) -> UInt32? {
+        guard box.body.count >= 6 else { return nil }
+        let version = box.body[box.body.startIndex]
+        let countBytes = version >= 1 ? 4 : 2
+        let headerLen = 4 + countBytes
+        guard box.body.count >= headerLen else { return nil }
+        var cursor = BoxCursor(data: data,
+                               base: box.bodyOffset + headerLen,
+                               end: box.bodyOffset + box.body.count)
+        while let child = cursor.next() {
+            if child.type != "infe" { continue }
+            let body = child.body
+            guard body.count >= 12 else { continue }
+            let infeVersion = body[body.startIndex]
+            let idSize = (infeVersion == 2) ? 2 : 4
+            let typeOffset = 4 + idSize + 2
+            guard body.count >= typeOffset + 4 else { continue }
+            let foundType = asciiString(body, offset: typeOffset, length: 4)
+            if foundType == itemType {
+                if idSize == 2 {
+                    return UInt32(readU16(body, at: 4))
+                } else {
+                    return readU32(body, at: 4)
+                }
+            }
+        }
+        return nil
     }
 
     /// Pure box-walk. Looks for the top-level `meta` box and asks the

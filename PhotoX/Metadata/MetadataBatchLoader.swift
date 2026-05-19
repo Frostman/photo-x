@@ -1,53 +1,48 @@
 import Foundation
 
-/// Batched reader that pulls EVERYTHING per-pair metadata needs from
-/// exiftool in a single subprocess spawn. Reads:
+/// Batched reader for the **proprietary Sony tags** the indexer needs:
+/// AF point locations, AF settings, face positions, Composite focus
+/// distance, EXIF Orientation override (Sony:CameraOrientation handles
+/// the HEIF pre-rotation case), and Sony:SequenceNumber for the
+/// filmstrip burst bracket overlay.
 ///
-///   - Sony AF tags (focus location, focal-plane points, faces, AF settings)
-///   - Orientation (numeric, for AF-rect transforms)
-///   - Sony:SequenceNumber (drives the filmstrip burst bracket overlay)
-///   - The EXIF / TIFF / Aux fields that populate `ExifSummary` for the sidebar
+/// **Standard EXIF is NOT read here.** The thumbs pipeline extracts the
+/// HEIF Exif item bytes alongside the embedded JPEG and parses them
+/// with `TIFFEXIFParser`, so Make/Model/Lens/exposure/ImageSize/
+/// Orientation arrive without an exiftool round-trip.
 ///
-/// One subprocess for ~50 URLs replaces what used to be N exiftool spawns
-/// (one per pair for AF) + N CGImageSource opens (one per pair for EXIF) +
-/// a separate exiftool batch (for SequenceNumber). Since exiftool's cost is
-/// per-file-opened, not per-tag-read, folding everything into one invocation
-/// is essentially free relative to the AF-only spawn we had before.
-///
-/// This loader is the SOLE production caller of exiftool (and of the per-pair
-/// metadata reading paths in general — see `project_indexer_sole_loader`).
-/// `ImageIOMetadata.read(from:)` and `ExifToolRunner.readAF(from:)` remain
-/// in the tree for tests + debugging but are not used by the running app.
+/// Spawns one exiftool process per batch (50 URLs by default). Warm
+/// throughput is ~22 ms / file including the ~1 s cold-start amortised
+/// across the batch. We do NOT use exiftool's `-stay_open` mode here —
+/// it deadlocks under Foundation `Pipe`s because exiftool buffers
+/// stdout 4 KB-at-a-time when stdout isn't a TTY, and the autoflush
+/// path doesn't fire reliably (see project memory).
 enum MetadataBatchLoader {
     struct Result: Sendable {
         var af:   [String: ExifToolRunner.AFData] = [:]   // by SourceFile path
-        var exif: [String: ExifSummary]           = [:]   // by SourceFile path
+        var exif: [String: ExifSummary]           = [:]   // populated by the thumbs+EXIF pipeline, NOT by this loader
         var seq:  [String: Int]                   = [:]   // by SourceFile path
     }
 
-    /// Subprocess wall time vs in-process JSON parse time for one batch.
-    /// Logged per batch by the indexer so we can see whether the cost is
-    /// inside exiftool (file open + tag scan, dominated by spawn cold-start
-    /// on small batches) or in our Swift parsing (rare).
+    /// Per-batch timing stats. `spawnMS` includes both subprocess
+    /// startup and exiftool's per-file scan; `parseMS` is JSON
+    /// deserialisation only.
     struct Stats: Sendable, Hashable {
         var filesIn:  Int    = 0
         var bytesOut: Int    = 0
-        var spawnMS:  Double = 0   // process.run() → waitUntilExit() + stdout drain
-        var parseMS:  Double = 0   // JSONSerialization + per-entry build
+        var spawnMS:  Double = 0
+        var parseMS:  Double = 0
     }
 
-    /// Tags fetched per file. Adding new tags is essentially free — the
-    /// dominant cost is opening the file.
+    /// Tag args sent to exiftool. **Sony-only** — standard EXIF tags
+    /// removed since `TIFFEXIFParser` produces them from the HEIF Exif
+    /// item bytes the thumbs pipeline already extracted.
     ///
-    /// Per-tag `#` suffix forces exiftool's RAW (un-print-converted) value
-    /// for that tag — used on the EXIF numerics so FNumber comes back as
-    /// `5.6` (Double) instead of `"5.6"` and ExposureTime as `0.005`
-    /// instead of the un-parseable `"1/200"`. Sony enum tags
-    /// (FocusMode, AFAreaModeSetting, AFTracking, …) are LEFT WITHOUT `#`
-    /// so they come back as friendly strings (`"DMF"`, `"Wide / Multi"`)
-    /// instead of raw enum integers. The sidebar reads those strings
-    /// verbatim.
-    private static let tagArgs: [String] = [
+    /// `#` suffix forces RAW (un-print-converted) value for that tag.
+    /// Sony enum tags (FocusMode, AFAreaModeSetting, AFTracking) are
+    /// LEFT WITHOUT `#` so they come back as friendly strings
+    /// ("DMF", "Wide / Multi") that the sidebar can display verbatim.
+    static let tagArgs: [String] = [
         // ── Sony AF ───────────────────────────────────────────────────────
         "-Sony:FocusLocation", "-Sony:FocusFrameSize",
         "-Sony:FocalPlaneAFPointArea",
@@ -63,61 +58,39 @@ enum MetadataBatchLoader {
         "-Sony:Face4Position", "-Sony:Face5Position", "-Sony:Face6Position",
         "-Sony:FacesDetected",
         "-Composite:FocusDistance", "-Composite:FocusDistance2",
-        // EXIF Orientation (1-8) so AF rects can be transformed from
-        // sensor space to display space. Sony HIFs don't expose the
-        // standard IFD0:Orientation — they put the same value into
-        // Sony:CameraOrientation in MakerNotes. Request both; the
-        // parser picks whichever the file has (parseOrientation walks
-        // dict keys with suffix "Orientation"). ARW gets IFD0; HIF
-        // gets Sony:CameraOrientation; either gives the right 1/6/8.
+        // Orientation# / Sony:CameraOrientation# for the AF transform.
+        // Sony HIFs don't expose IFD0:Orientation as 1-8 (pre-rotated
+        // pixels report 1) — Sony:CameraOrientation in MakerNotes
+        // carries the real value. parseOrientation picks whichever
+        // the file has.
         "-Orientation#",
         "-Sony:CameraOrientation#",
         // ── Sony burst sequence ──────────────────────────────────────────
         "-Sony:SequenceNumber",
-        // ── EXIF (sidebar) ───────────────────────────────────────────────
-        "-EXIF:Make", "-EXIF:Model",
-        "-EXIF:LensModel", "-ExifIFD:LensModel",
-        "-EXIF:FNumber#",                // raw Double, e.g. 5.6
-        "-EXIF:ExposureTime#",           // raw seconds, e.g. 0.005
-        "-EXIF:ISO#",                    // raw Int, e.g. 400
-        "-EXIF:FocalLength#",            // raw mm, e.g. 50.0
-        "-EXIF:ExposureCompensation#",   // raw EV, e.g. 0.333
-        "-EXIF:DateTimeOriginal",
-        "-Composite:ImageSize",   // "WxH" works across HEIF + ARW
     ]
 
-    /// Convenience wrapper that drops stats. Kept for tests / debugging.
-    nonisolated static func read(_ urls: [URL]) -> Result {
-        readInstrumented(urls).result
+    /// Convenience wrapper that drops stats. Kept for tests; production
+    /// uses `readInstrumented` so it can publish per-batch timings.
+    nonisolated static func read(_ urls: [URL]) async -> Result {
+        await readInstrumented(urls).result
     }
 
-    /// Run one exiftool spawn over `urls` and return parsed per-pair data
-    /// alongside per-batch timing stats. Empty Result + nil stats on any
-    /// failure — caller treats missing entries as "not yet indexed".
+    /// Spawn a one-shot exiftool per batch, request the Sony argv +
+    /// URLs, parse the JSON into AF + SequenceNumber. Empty Result +
+    /// nil stats on any failure — caller treats missing entries as
+    /// "not yet indexed".
     nonisolated static func readInstrumented(_ urls: [URL])
-        -> (result: Result, stats: Stats?)
+        async -> (result: Result, stats: Stats?)
     {
         guard !urls.isEmpty else { return (Result(), nil) }
-        guard FileManager.default.isExecutableFile(atPath: ExifToolRunner.exifToolPath) else {
-            return (Result(), nil)
-        }
-        // No global `-n`. Per-tag `#` (see `tagArgs`) requests raw values
-        // only for the EXIF numerics; Sony enum tags stay print-converted
-        // so the sidebar gets "DMF" / "Wide / Multi" instead of "3" / "0".
         var args: [String] = ["-j", "-G1"]
         args.append(contentsOf: tagArgs)
         args.append("--")
         args.append(contentsOf: urls.map { $0.path })
         let t0 = CFAbsoluteTimeGetCurrent()
-        let data: Data
-        do {
-            data = try runJSONArray(arguments: args)
-        } catch {
-            Log.app.error("MetadataBatchLoader: \(String(describing: error), privacy: .public)")
-            return (Result(), nil)
-        }
+        let data = await spawnExiftool(args: args)
         let t1 = CFAbsoluteTimeGetCurrent()
-        let parsed = parse(jsonData: data)
+        let parsed = parseSony(jsonData: data)
         let t2 = CFAbsoluteTimeGetCurrent()
         let stats = Stats(
             filesIn:  urls.count,
@@ -128,10 +101,50 @@ enum MetadataBatchLoader {
         return (parsed, stats)
     }
 
-    /// Parse the array-of-objects JSON shape that `exiftool -j` emits, and
-    /// demux it into the three per-source dicts. Each entry yields zero or
-    /// more entries across the dicts depending on which tags are present;
-    /// absence of a tag is silently fine.
+    private static func spawnExiftool(args: [String]) async -> Data {
+        await withCheckedContinuation { (cont: CheckedContinuation<Data, Never>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: ExifToolRunner.exifToolPath)
+                process.arguments = args
+                let outPipe = Pipe()
+                process.standardOutput = outPipe
+                process.standardError = Pipe()
+                do {
+                    try process.run()
+                } catch {
+                    Log.app.error("MetadataBatchLoader spawn: \(String(describing: error), privacy: .public)")
+                    cont.resume(returning: Data())
+                    return
+                }
+                let data = outPipe.fileHandleForReading.readDataToEndOfFile()
+                process.waitUntilExit()
+                cont.resume(returning: data)
+            }
+        }
+    }
+
+    /// Parse the array-of-objects JSON shape exiftool emits and demux
+    /// into AF + SequenceNumber dicts. **Does NOT touch exif** — that
+    /// dict is populated by `TIFFEXIFParser` upstream. Each entry
+    /// yields zero or more entries depending on which tags are present.
+    static func parseSony(jsonData data: Data) -> Result {
+        guard let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            return Result()
+        }
+        var out = Result()
+        for entry in arr {
+            guard let source = entry["SourceFile"] as? String else { continue }
+            if let af = parseAF(from: entry) { out.af[source] = af }
+            if let seq = sequenceNumber(in: entry), seq > 0 { out.seq[source] = seq }
+        }
+        return out
+    }
+
+    /// Pre-refactor entry point. Kept so MetadataBatchLoaderTests still
+    /// compile; the new pipeline doesn't call it. Reads BOTH the Sony
+    /// half AND `ExifSummary.from(exiftoolDict:)` for the EXIF half so
+    /// the existing parser tests still exercise both code paths.
     static func parse(jsonData data: Data) -> Result {
         guard let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
             return Result()
@@ -170,9 +183,9 @@ enum MetadataBatchLoader {
         return ExifToolRunner.AFData(regions: regions, settings: settings)
     }
 
-    /// `Sony:SequenceNumber` may come back as Int, NSNumber, or String. With
-    /// `-G1` the key is group-prefixed; older exiftool builds occasionally
-    /// drop the prefix, so check the bare key too.
+    /// `Sony:SequenceNumber` may come back as Int, NSNumber, or String.
+    /// With `-G1` the key is group-prefixed; older exiftool builds
+    /// occasionally drop the prefix, so check the bare key too.
     private static func sequenceNumber(in entry: [String: Any]) -> Int? {
         for key in ["Sony:SequenceNumber", "SequenceNumber"] {
             if let i = entry[key] as? Int { return i }
@@ -180,32 +193,5 @@ enum MetadataBatchLoader {
             if let s = entry[key] as? String, let i = Int(s) { return i }
         }
         return nil
-    }
-
-    enum BatchLoaderError: Error {
-        case launchFailed(String)
-        case nonZeroExit(Int32, String)
-    }
-
-    private static func runJSONArray(arguments: [String]) throws -> Data {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: ExifToolRunner.exifToolPath)
-        process.arguments = arguments
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
-
-        do { try process.run() } catch {
-            throw BatchLoaderError.launchFailed(error.localizedDescription)
-        }
-        process.waitUntilExit()
-
-        guard process.terminationStatus == 0 else {
-            let errData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-            throw BatchLoaderError.nonZeroExit(process.terminationStatus,
-                                               String(data: errData, encoding: .utf8) ?? "")
-        }
-        return stdoutPipe.fileHandleForReading.readDataToEndOfFile()
     }
 }
