@@ -548,7 +548,7 @@ struct ContentView: View {
             rows()
         }
         .padding(.top, 6)
-        .frame(maxWidth: 520, alignment: .leading)
+        .frame(maxWidth: 640, alignment: .leading)
     }
 
     /// Path row: optional caller-supplied leading content (drag handle for
