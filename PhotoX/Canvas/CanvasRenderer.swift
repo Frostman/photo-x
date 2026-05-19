@@ -1,5 +1,6 @@
 import CoreGraphics
 import Metal
+import MetalKit
 import QuartzCore
 
 @MainActor
@@ -7,6 +8,7 @@ final class CanvasRenderer {
     let device: MTLDevice
     private let commandQueue: MTLCommandQueue
     private let pipelineState: MTLRenderPipelineState
+    private let textureLoader: MTKTextureLoader
 
     private var baseTexture: MTLTexture?
     private var imagePixelSize: CGSize = .zero
@@ -14,6 +16,18 @@ final class CanvasRenderer {
     private var showClipping: Bool = false
     private var showPeaking: Bool = false
     private var peakingThreshold: Float = 0.15
+
+    /// Generation counter for the async texture loader. Bumped on every
+    /// `setImage`; completions whose captured gen ≠ current are dropped
+    /// so a fast burst of nav events doesn't see stale frames.
+    private var loadGeneration: Int = 0
+
+    /// Called on the main actor after an async texture load completes
+    /// and `baseTexture` has been updated. Payload is the pixel size of
+    /// the newly-loaded image so the NSView can update its own
+    /// imagePixelSize in lock-step (avoids a glitch frame where the
+    /// previous image is drawn at the new image's dimensions).
+    var onTextureReady: ((CGSize) -> Void)?
 
     private struct FragmentUniforms {
         var showClipping: Int32
@@ -46,22 +60,75 @@ final class CanvasRenderer {
         self.device = device
         self.commandQueue = queue
         self.pipelineState = pipeline
+        self.textureLoader = MTKTextureLoader(device: device)
     }
 
+    /// Kick off an async load of `cgImage` into a Metal texture. The
+    /// previous texture stays bound (and visible) until the new one is
+    /// ready, so arrow-key navigation stays responsive even while the
+    /// upload is in flight. Stale loads (a newer setImage came in
+    /// before this one finished) are dropped via the generation counter.
+    /// Reads to follow up:
+    /// `onTextureReady` fires on the main actor when `baseTexture` has
+    /// been updated.
     func setImage(_ cgImage: CGImage) {
         PerfTracker.mark("CanvasRenderer.setImage entered")
-        guard let texture = makeTexture(from: cgImage) else {
-            Log.canvas.error("setImage: makeTexture returned nil for \(cgImage.width)x\(cgImage.height)")
-            baseTexture = nil
-            imagePixelSize = .zero
-            return
+        loadGeneration += 1
+        let gen = loadGeneration
+        let pixelSize = CGSize(width: cgImage.width, height: cgImage.height)
+        let loader = textureLoader
+        let queue = commandQueue
+
+        Task.detached(priority: .userInitiated) {
+            // MTKTextureLoader handles format conversion + upload via
+            // its own optimized path (typically GPU-side, no 200 MB
+            // CGContext on the CPU). Mipmap generation is requested
+            // up-front so we don't need a separate blit pass.
+            let texture: MTLTexture?
+            do {
+                texture = try await loader.newTexture(
+                    cgImage: cgImage,
+                    options: [
+                        .generateMipmaps: NSNumber(value: true),
+                        .SRGB:            NSNumber(value: true),
+                        .textureStorageMode: NSNumber(value: MTLStorageMode.shared.rawValue),
+                        .textureUsage:    NSNumber(value: MTLTextureUsage.shaderRead.rawValue),
+                    ]
+                )
+            } catch {
+                Log.canvas.error("MTKTextureLoader failed (\(String(describing: error), privacy: .public)); falling back to manual CGContext upload")
+                texture = Self.manualUpload(cgImage: cgImage, device: loader.device, commandQueue: queue)
+            }
+
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                guard self.loadGeneration == gen else {
+                    // A newer setImage was issued — drop this stale load.
+                    return
+                }
+                guard let texture else {
+                    Log.canvas.error("setImage: texture creation returned nil for \(Int(pixelSize.width))x\(Int(pixelSize.height))")
+                    self.baseTexture = nil
+                    self.imagePixelSize = .zero
+                    return
+                }
+                self.baseTexture = texture
+                self.imagePixelSize = pixelSize
+                PerfTracker.mark("CanvasRenderer.setImage done (async)")
+                self.onTextureReady?(pixelSize)
+            }
         }
-        baseTexture = texture
-        imagePixelSize = CGSize(width: cgImage.width, height: cgImage.height)
-        PerfTracker.mark("CanvasRenderer.setImage done")
     }
 
-    private func makeTexture(from cgImage: CGImage) -> MTLTexture? {
+    /// Fallback path. Same algorithm as the original synchronous
+    /// `makeTexture` (CGContext rasterise → `replace` into MTLTexture →
+    /// mipmap blit) but runs off the main actor inside the detached
+    /// task that called us. Used only when MTKTextureLoader throws,
+    /// which can happen for unusual CGImage formats.
+    private nonisolated static func manualUpload(cgImage: CGImage,
+                                                  device: MTLDevice,
+                                                  commandQueue: MTLCommandQueue) -> MTLTexture?
+    {
         let width = cgImage.width
         let height = cgImage.height
         let bytesPerRow = width * 4
@@ -79,14 +146,9 @@ final class CanvasRenderer {
             space: colorSpace,
             bitmapInfo: bitmapInfo
         ), let dataPtr = context.data else {
-            Log.canvas.error("makeTexture: CGContext creation failed")
             return nil
         }
-        PerfTracker.mark("CGContext allocated (\(bytesPerRow * height / 1_000_000) MB)")
-
-        context.interpolationQuality = .high
         context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
-        PerfTracker.mark("CGContext.draw done")
 
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .bgra8Unorm_srgb,
@@ -96,12 +158,7 @@ final class CanvasRenderer {
         )
         descriptor.usage = [.shaderRead]
         descriptor.storageMode = .shared
-
-        guard let texture = device.makeTexture(descriptor: descriptor) else {
-            Log.canvas.error("makeTexture: MTLTexture creation failed")
-            return nil
-        }
-        PerfTracker.mark("MTLTexture allocated")
+        guard let texture = device.makeTexture(descriptor: descriptor) else { return nil }
 
         texture.replace(
             region: MTLRegionMake2D(0, 0, width, height),
@@ -109,7 +166,6 @@ final class CanvasRenderer {
             withBytes: dataPtr,
             bytesPerRow: bytesPerRow
         )
-        PerfTracker.mark("MTLTexture.replace done")
 
         if let cmd = commandQueue.makeCommandBuffer(),
            let blit = cmd.makeBlitCommandEncoder() {
@@ -117,8 +173,6 @@ final class CanvasRenderer {
             blit.endEncoding()
             cmd.commit()
         }
-        PerfTracker.mark("mipmap blit committed")
-
         return texture
     }
 

@@ -47,10 +47,22 @@ final class ImageCanvasNSView: NSView {
         guard window != nil else { return }
         if renderer == nil {
             renderer = CanvasRenderer(layerPixelFormat: metalLayer.pixelFormat)
-            if let renderer { metalLayer.device = renderer.device }
+            if let renderer {
+                metalLayer.device = renderer.device
+                // Async texture loads call this back on the main actor
+                // when baseTexture has been swapped in. We update our
+                // imagePixelSize from the callback (not from setImage)
+                // so geometry stays in lock-step with what's actually
+                // bound — the OLD image keeps rendering at its OLD
+                // size during the load window, no glitch frame.
+                renderer.onTextureReady = { [weak self] pixelSize in
+                    guard let self else { return }
+                    self.imagePixelSize = pixelSize
+                    self.scheduleDraw()
+                }
+            }
             if let pendingImage {
                 renderer?.setImage(pendingImage)
-                imagePixelSize = CGSize(width: pendingImage.width, height: pendingImage.height)
                 self.pendingImage = nil
             }
             renderer?.setViewport(viewport)
@@ -92,10 +104,18 @@ final class ImageCanvasNSView: NSView {
     func setImage(_ cgImage: CGImage) {
         PerfTracker.mark("ImageCanvasNSView.setImage entered")
         if let renderer {
+            // Async path: renderer.setImage kicks off the upload off
+            // the main actor. The OLD baseTexture (+ OLD imagePixelSize)
+            // stay bound until onTextureReady fires, which keeps the
+            // previous frame on screen instead of flashing black during
+            // the ~100 ms upload window.
             renderer.setImage(cgImage)
-            imagePixelSize = CGSize(width: cgImage.width, height: cgImage.height)
-            scheduleDraw()
         } else {
+            // Renderer hasn't been built yet (viewDidMoveToWindow runs
+            // shortly after init). Stash the image and pre-set the
+            // pixelSize so any layout that runs before the first async
+            // load completes has the right geometry — there's no old
+            // image to worry about glitching against.
             pendingImage = cgImage
             imagePixelSize = CGSize(width: cgImage.width, height: cgImage.height)
         }
