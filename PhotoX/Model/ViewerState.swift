@@ -544,7 +544,11 @@ final class ViewerState {
         while let id = await queue.popNext() {
             if Task.isCancelled || shootGeneration != gen { return }
             let batch = pairBatches[id]
-            let urls = batch.map(\.rawURL)
+            // Read from the HIF, not the ARW. Sony A1 II carries the same
+            // MakerNotes (FocusLocation, FocalPlaneAFPoint*, FaceN,
+            // SequenceNumber, AF settings) in both, but HIFs are ~10×
+            // smaller, so exiftool's per-file scan is faster.
+            let urls = batch.map(\.heifURL)
             let (result, stats) = await Task.detached(priority: .utility) {
                 MetadataBatchLoader.readInstrumented(urls)
             }.value
@@ -552,9 +556,9 @@ final class ViewerState {
             var exifByStem: [String: ExifSummary] = [:]
             var seqByStem:  [String: Int] = [:]
             for pair in batch {
-                if let v = result.af  [pair.rawURL.path] { afByStem  [pair.stem] = v }
-                if let v = result.exif[pair.rawURL.path] { exifByStem[pair.stem] = v }
-                if let v = result.seq [pair.rawURL.path] { seqByStem [pair.stem] = v }
+                if let v = result.af  [pair.heifURL.path] { afByStem  [pair.stem] = v }
+                if let v = result.exif[pair.heifURL.path] { exifByStem[pair.stem] = v }
+                if let v = result.seq [pair.heifURL.path] { seqByStem [pair.stem] = v }
             }
             flushExifBatch(af: afByStem, exif: exifByStem, seq: seqByStem,
                            generation: gen)
