@@ -36,9 +36,17 @@ enum MetadataBatchLoader {
         var parseMS:  Double = 0   // JSONSerialization + per-entry build
     }
 
-    /// Tags fetched per file. Order matters only for readability; exiftool
-    /// returns them all in the same JSON object regardless. Adding new tags
-    /// is essentially free — the dominant cost is opening the file.
+    /// Tags fetched per file. Adding new tags is essentially free — the
+    /// dominant cost is opening the file.
+    ///
+    /// Per-tag `#` suffix forces exiftool's RAW (un-print-converted) value
+    /// for that tag — used on the EXIF numerics so FNumber comes back as
+    /// `5.6` (Double) instead of `"5.6"` and ExposureTime as `0.005`
+    /// instead of the un-parseable `"1/200"`. Sony enum tags
+    /// (FocusMode, AFAreaModeSetting, AFTracking, …) are LEFT WITHOUT `#`
+    /// so they come back as friendly strings (`"DMF"`, `"Wide / Multi"`)
+    /// instead of raw enum integers. The sidebar reads those strings
+    /// verbatim.
     private static let tagArgs: [String] = [
         // ── Sony AF ───────────────────────────────────────────────────────
         "-Sony:FocusLocation", "-Sony:FocusFrameSize",
@@ -61,8 +69,11 @@ enum MetadataBatchLoader {
         // ── EXIF (sidebar) ───────────────────────────────────────────────
         "-EXIF:Make", "-EXIF:Model",
         "-EXIF:LensModel", "-ExifIFD:LensModel",
-        "-EXIF:FNumber", "-EXIF:ExposureTime", "-EXIF:ISO",
-        "-EXIF:FocalLength", "-EXIF:ExposureCompensation",
+        "-EXIF:FNumber#",                // raw Double, e.g. 5.6
+        "-EXIF:ExposureTime#",           // raw seconds, e.g. 0.005
+        "-EXIF:ISO#",                    // raw Int, e.g. 400
+        "-EXIF:FocalLength#",            // raw mm, e.g. 50.0
+        "-EXIF:ExposureCompensation#",   // raw EV, e.g. 0.333
         "-EXIF:DateTimeOriginal",
         "-Composite:ImageSize",   // "WxH" works across HEIF + ARW
     ]
@@ -82,10 +93,10 @@ enum MetadataBatchLoader {
         guard FileManager.default.isExecutableFile(atPath: ExifToolRunner.exifToolPath) else {
             return (Result(), nil)
         }
-        // `-n` disables exiftool's pretty-printing for numeric fields so we
-        // get raw Doubles for FNumber / ExposureTime / etc. instead of
-        // strings like "f/5.6" or "1/200" that we'd then have to re-parse.
-        var args: [String] = ["-j", "-G1", "-n"]
+        // No global `-n`. Per-tag `#` (see `tagArgs`) requests raw values
+        // only for the EXIF numerics; Sony enum tags stay print-converted
+        // so the sidebar gets "DMF" / "Wide / Multi" instead of "3" / "0".
+        var args: [String] = ["-j", "-G1"]
         args.append(contentsOf: tagArgs)
         args.append("--")
         args.append(contentsOf: urls.map { $0.path })
