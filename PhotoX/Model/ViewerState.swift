@@ -253,12 +253,12 @@ final class ViewerState {
         var sonyAfSeq:          Double = 0
         var xmpSidecars:        Double = 0
 
-        // Weights based on the new wall-time ratios: Sony dominates
-        // (card IO bound), thumbs+EXIF and XMP each ~5 s on a 5k-pair
-        // shoot. 0.10 / 0.80 / 0.10 sums to 1.0 so `total` tracks the
-        // actual indexing wall-time fraction.
-        static let thumbsAndBasicExifWeight: Double = 0.10
-        static let sonyAfSeqWeight:          Double = 0.80
+        // Weights from measured wall times on a 4695-pair CFExpress
+        // shoot: thumbs+EXIF 6 s, Sony 28 s, XMP 3 s (≈37 s total).
+        // 0.15 / 0.75 / 0.10 ≈ those ratios and sums to 1.0 so `total`
+        // tracks the actual indexing wall-time fraction.
+        static let thumbsAndBasicExifWeight: Double = 0.15
+        static let sonyAfSeqWeight:          Double = 0.75
         static let xmpSidecarsWeight:        Double = 0.10
 
         var total: Double {
