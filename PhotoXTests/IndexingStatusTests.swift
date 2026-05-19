@@ -51,6 +51,45 @@ final class IndexingStatusTests: XCTestCase {
                        "reIndex without a shoot must not flip status")
     }
 
+    // MARK: PipelineTiming
+
+    func test_pipelineTiming_eta_isNil_beforeAnyProgress() {
+        let t = ViewerState.PipelineTiming(startedAt: 1000.0)
+        XCTAssertNil(t.eta(progress: 0,    now: 1001.0))
+        XCTAssertNil(t.eta(progress: 0.005, now: 1001.0))
+        XCTAssertNil(t.eta(progress: 1.0,  now: 1001.0),
+                     "at 100% there's nothing left to estimate")
+    }
+
+    func test_pipelineTiming_eta_isNil_inFirstHalfSecond() {
+        // Too noisy to estimate from <500 ms of signal.
+        let t = ViewerState.PipelineTiming(startedAt: 1000.0)
+        XCTAssertNil(t.eta(progress: 0.10, now: 1000.3))
+    }
+
+    func test_pipelineTiming_eta_isElapsedTimesRemainingOverProgress() {
+        // After 10 s at 25% progress, ETA = 10 × (0.75 / 0.25) = 30 s.
+        let t = ViewerState.PipelineTiming(startedAt: 1000.0)
+        let eta = t.eta(progress: 0.25, now: 1010.0)
+        XCTAssertEqual(eta ?? 0, 30.0, accuracy: 0.001)
+    }
+
+    func test_pipelineTiming_eta_returnsNil_oncefinishedAtSet() {
+        var t = ViewerState.PipelineTiming(startedAt: 1000.0)
+        t.finishedAt = 1018.0
+        XCTAssertNil(t.eta(progress: 0.5, now: 1010.0),
+                     "no ETA once the pipeline has finished")
+    }
+
+    func test_pipelineTiming_duration_isFinishedMinusStarted() {
+        var t = ViewerState.PipelineTiming(startedAt: 1000.0)
+        XCTAssertNil(t.duration, "no duration until finishedAt is set")
+        t.finishedAt = 1018.5
+        XCTAssertEqual(t.duration ?? 0, 18.5, accuracy: 0.001)
+    }
+
+    // MARK: reIndex
+
     func test_reIndex_clearsCachesAndRestarts() {
         let state = makeState(stems: ["A", "B"])
         state.pairExif       = ["A": ExifSummary()]

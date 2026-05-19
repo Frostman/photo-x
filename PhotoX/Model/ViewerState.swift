@@ -260,6 +260,41 @@ final class ViewerState {
     }
     var indexingProgress: IndexingProgress = .init()
 
+    /// Per-pipeline wall-time tracking for the popover's "ETA Ns" while
+    /// in flight and "took Ns" once finished. Wall time via
+    /// `CFAbsoluteTimeGetCurrent` (no monotonic-clock subscription needed
+    /// for second-precision UI).
+    struct PipelineTiming: Hashable, Sendable {
+        var startedAt:  Double?
+        var finishedAt: Double?
+
+        /// Estimated remaining seconds given current progress (0 ... 1).
+        /// Returns nil for the first ~500 ms (not enough signal yet),
+        /// when progress is at zero, or once the pipeline is finished.
+        func eta(progress: Double, now: Double) -> TimeInterval? {
+            guard let startedAt,
+                  finishedAt == nil,
+                  progress > 0.01,
+                  progress < 1.0 else { return nil }
+            let elapsed = now - startedAt
+            guard elapsed > 0.5 else { return nil }
+            return elapsed * (1.0 - progress) / progress
+        }
+
+        /// Total wall time of the pipeline (nil until finished).
+        var duration: TimeInterval? {
+            guard let startedAt, let finishedAt else { return nil }
+            return finishedAt - startedAt
+        }
+    }
+
+    struct PipelineTimings: Hashable, Sendable {
+        var exif:  PipelineTiming = .init()
+        var xmp:   PipelineTiming = .init()
+        var thumb: PipelineTiming = .init()
+    }
+    var indexingTimings: PipelineTimings = .init()
+
     private var indexingTask: Task<Void, Never>?
     private var batchQueues: (exif: BatchQueue, xmp: BatchQueue, thumb: BatchQueue)?
     /// Stem → batch id for the exif + xmp pipelines (50-pair batches).
@@ -362,6 +397,7 @@ final class ViewerState {
         burstSizesByID.removeAll()
         indexingStatus = .idle
         indexingProgress = .init()
+        indexingTimings = .init()
 
         // 4) Reset per-pair UI state.
         currentIndex = 0
@@ -426,6 +462,13 @@ final class ViewerState {
         batchQueues = queues
 
         indexingStatus = .indexing(percent: 0)
+        indexingProgress = .init()
+        let startTime = CFAbsoluteTimeGetCurrent()
+        indexingTimings = PipelineTimings(
+            exif:  PipelineTiming(startedAt: startTime),
+            xmp:   PipelineTiming(startedAt: startTime),
+            thumb: PipelineTiming(startedAt: startTime)
+        )
         Log.app.notice("Indexing \(shoot.pairs.count, privacy: .public) pairs: \(exifCount, privacy: .public) exif/xmp batches × \(Self.exifBatchSize, privacy: .public), \(thumbCount, privacy: .public) thumb batches × \(Self.thumbBatchSize, privacy: .public)")
 
         indexingTask = Task(priority: .utility) { [weak self] in
@@ -472,6 +515,7 @@ final class ViewerState {
         burstIDByStem.removeAll()
         burstSizesByID.removeAll()
         indexingProgress = .init()
+        indexingTimings = .init()
         batchQueues = nil
         // pairBatches + stemToBatchID will be rebuilt by startIndexing.
         startIndexing()
@@ -647,21 +691,43 @@ final class ViewerState {
                 xmp:   exifBatchCount  == 0 ? 1 : Double(xmpDone)   / Double(exifBatchCount),
                 thumb: thumbBatchCount == 0 ? 1 : Double(thumbDone) / Double(thumbBatchCount)
             )
-            setIndexingProgress(p, generation: gen)
-            if exifDone >= exifBatchCount,
-               xmpDone  >= exifBatchCount,
-               thumbDone >= thumbBatchCount { return }
+            let exifDoneNow  = exifDone  >= exifBatchCount
+            let xmpDoneNow   = xmpDone   >= exifBatchCount
+            let thumbDoneNow = thumbDone >= thumbBatchCount
+            setIndexingProgress(p,
+                                exifFinished:  exifDoneNow,
+                                xmpFinished:   xmpDoneNow,
+                                thumbFinished: thumbDoneNow,
+                                generation: gen)
+            if exifDoneNow, xmpDoneNow, thumbDoneNow { return }
             try? await Task.sleep(for: .milliseconds(100))
         }
     }
 
-    private func setIndexingProgress(_ p: IndexingProgress, generation: Int) {
+    private func setIndexingProgress(_ p: IndexingProgress,
+                                     exifFinished: Bool,
+                                     xmpFinished: Bool,
+                                     thumbFinished: Bool,
+                                     generation: Int) {
         guard shootGeneration == generation else { return }
         // Don't downgrade a terminal status.
         if case .done = indexingStatus { return }
         if case .cancelled = indexingStatus { return }
         indexingProgress = p
         indexingStatus = .indexing(percent: min(max(p.total, 0), 1))
+        // Record per-pipeline completion timestamps on the transition.
+        // Latches once set so subsequent ticks don't keep moving the
+        // "took Ns" target.
+        let now = CFAbsoluteTimeGetCurrent()
+        if exifFinished, indexingTimings.exif.finishedAt == nil {
+            indexingTimings.exif.finishedAt = now
+        }
+        if xmpFinished, indexingTimings.xmp.finishedAt == nil {
+            indexingTimings.xmp.finishedAt = now
+        }
+        if thumbFinished, indexingTimings.thumb.finishedAt == nil {
+            indexingTimings.thumb.finishedAt = now
+        }
     }
 
     private func finishIndexing(generation: Int) {

@@ -54,7 +54,8 @@ struct StatusBarView: View {
             .buttonStyle(.plain)
             .help("Click for per-pipeline breakdown")
             .popover(isPresented: $showIndexingDetails, arrowEdge: .bottom) {
-                IndexingProgressPopover(progress: state.indexingProgress)
+                IndexingProgressPopover(progress: state.indexingProgress,
+                                        timings: state.indexingTimings)
                     .padding(14)
             }
         case .done, .cancelled:
@@ -187,11 +188,14 @@ struct StatusBarView: View {
 }
 
 /// Click-through breakdown of indexing progress, one row per pipeline.
-/// Tracks `state.indexingProgress` live so the bars climb while the
-/// popover stays open. Compact (~280 pt wide) — the user just needs to
-/// see which pipeline is the bottleneck, not interact with anything.
+/// Tracks `state.indexingProgress` + `state.indexingTimings` live so the
+/// bars and ETAs update while the popover stays open. Once a pipeline
+/// hits 100 %, its ETA is replaced by a static "took Ns" reading.
+/// Compact (~300 pt wide) — the user just needs to see which pipeline is
+/// the bottleneck, not interact with anything.
 private struct IndexingProgressPopover: View {
     let progress: ViewerState.IndexingProgress
+    let timings: ViewerState.PipelineTimings
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -199,18 +203,24 @@ private struct IndexingProgressPopover: View {
                 .font(.subheadline.bold())
             row("EXIF · AF · sequence",
                 value: progress.exif,
+                timing: timings.exif,
                 icon: "doc.text.magnifyingglass")
             row("XMP sidecars",
                 value: progress.xmp,
+                timing: timings.xmp,
                 icon: "tag")
             row("Thumbnails",
                 value: progress.thumb,
+                timing: timings.thumb,
                 icon: "photo.on.rectangle.angled")
         }
-        .frame(minWidth: 260)
+        .frame(minWidth: 300)
     }
 
-    private func row(_ label: String, value: Double, icon: String) -> some View {
+    private func row(_ label: String,
+                     value: Double,
+                     timing: ViewerState.PipelineTiming,
+                     icon: String) -> some View {
         HStack(spacing: 8) {
             Image(systemName: icon)
                 .frame(width: 18)
@@ -225,6 +235,25 @@ private struct IndexingProgressPopover: View {
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
                 .frame(width: 34, alignment: .trailing)
+            Text(timingLabel(value: value, timing: timing))
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 64, alignment: .trailing)
         }
+    }
+
+    /// "took 18s" once the pipeline has marked finishedAt; "ETA Ns" while
+    /// in flight (after at least 500 ms of signal); empty string otherwise
+    /// (just spawned, or zero-batch pipeline).
+    private func timingLabel(value: Double,
+                             timing: ViewerState.PipelineTiming) -> String {
+        if let d = timing.duration {
+            return "took \(formattedDuration(d))"
+        }
+        let now = CFAbsoluteTimeGetCurrent()
+        if let eta = timing.eta(progress: value, now: now) {
+            return "ETA \(formattedDuration(eta))"
+        }
+        return ""
     }
 }
