@@ -213,9 +213,101 @@ final class TIFFEXIFParserTests: XCTestCase {
         XCTAssertEqual(summary.shutterSpeed, oracle.shutterSpeed)
         XCTAssertEqual(summary.iso, oracle.iso)
         XCTAssertEqual(summary.focalLength, oracle.focalLength)
-        XCTAssertEqual(summary.orientation, oracle.orientation)
+        // ImageIO synthesizes Orientation=1 when the tag is absent;
+        // TIFFEXIFParser leaves it nil. Coalesce on our side for the
+        // ImageIO oracle so the legacy comparison still passes — the
+        // canonical exiftool parity test does not coalesce.
+        XCTAssertEqual(summary.orientation ?? 1, oracle.orientation)
         // PixelXDimension / PixelYDimension also covered.
         XCTAssertEqual(summary.pixelWidth,  oracle.pixelWidth)
         XCTAssertEqual(summary.pixelHeight, oracle.pixelHeight)
+    }
+
+    // MARK: - integration: parity with exiftool across the whole sample/
+
+    /// For every HIF in `sample/`: extract Exif bytes via HEIF parser,
+    /// parse them with `TIFFEXIFParser`, run exiftool one-shot on the
+    /// same file, route both through `ExifSummary` and compare every
+    /// field. Catches regressions in the TIFF parser against the
+    /// canonical oracle (exiftool). Skipped if the sample folder or
+    /// exiftool isn't available in the dev environment.
+    func test_parityWithExiftool_acrossSampleHIFs() throws {
+        let sampleDir = URL(fileURLWithPath:
+            "/Users/frostman/workspace/personal/photo-x/sample")
+        let hifs: [URL]
+        do {
+            hifs = try FileManager.default
+                .contentsOfDirectory(at: sampleDir,
+                                     includingPropertiesForKeys: nil)
+                .filter { $0.pathExtension.uppercased() == "HIF" }
+                .sorted { $0.lastPathComponent < $1.lastPathComponent }
+        } catch {
+            throw XCTSkip("sample/ not available: \(error)")
+        }
+        guard !hifs.isEmpty else { throw XCTSkip("no HIFs in sample/") }
+        guard FileManager.default.isExecutableFile(
+            atPath: ExifToolRunner.exifToolPath
+        ) else {
+            throw XCTSkip("exiftool not available")
+        }
+
+        for url in hifs {
+            let name = url.lastPathComponent
+
+            // Our path: HEIF box parse → TIFF parser → ExifSummary
+            guard let extracted = try HEIFEmbeddedThumbnail.extract(from: url),
+                  let exifBytes = extracted.exifBytes,
+                  let ours = TIFFEXIFParser.parse(exifBytes) else {
+                XCTFail("\(name): TIFFEXIFParser path produced no summary")
+                continue
+            }
+
+            // Oracle: one-shot exiftool → ExifSummary.from(exiftoolDict:)
+            guard let dict = exiftoolDict(for: url) else {
+                XCTFail("\(name): exiftool produced no parseable JSON")
+                continue
+            }
+            let oracle = ExifSummary.from(exiftoolDict: dict)
+
+            XCTAssertEqual(ours.camera,               oracle.camera,               "\(name): camera mismatch")
+            XCTAssertEqual(ours.lens,                 oracle.lens,                 "\(name): lens mismatch")
+            XCTAssertEqual(ours.aperture,             oracle.aperture,             "\(name): aperture mismatch")
+            XCTAssertEqual(ours.shutterSpeed,         oracle.shutterSpeed,         "\(name): shutter speed mismatch")
+            XCTAssertEqual(ours.iso,                  oracle.iso,                  "\(name): ISO mismatch")
+            XCTAssertEqual(ours.focalLength,          oracle.focalLength,          "\(name): focal length mismatch")
+            XCTAssertEqual(ours.exposureCompensation, oracle.exposureCompensation, "\(name): exposure comp mismatch")
+            XCTAssertEqual(ours.orientation,          oracle.orientation,          "\(name): orientation mismatch")
+            XCTAssertEqual(ours.pixelWidth,           oracle.pixelWidth,           "\(name): pixelWidth mismatch")
+            XCTAssertEqual(ours.pixelHeight,          oracle.pixelHeight,          "\(name): pixelHeight mismatch")
+            XCTAssertEqual(ours.dateTime,             oracle.dateTime,             "\(name): dateTime mismatch")
+        }
+    }
+
+    /// Run one-shot exiftool requesting exactly the tags our TIFF parser
+    /// covers. `-G1` group prefixes match `ExifSummary.from(exiftoolDict:)`'s
+    /// lookup keys; `-n` returns raw numeric values so doubles parse
+    /// without locale dance.
+    private func exiftoolDict(for url: URL) -> [String: Any]? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: ExifToolRunner.exifToolPath)
+        process.arguments = [
+            "-j", "-G1", "-n",
+            "-EXIF:Make", "-EXIF:Model",
+            "-EXIF:LensModel", "-ExifIFD:LensModel",
+            "-EXIF:FNumber", "-EXIF:ExposureTime", "-EXIF:ISO",
+            "-EXIF:FocalLength", "-EXIF:ExposureCompensation",
+            "-EXIF:DateTimeOriginal",
+            "-IFD0:Orientation", "-EXIF:Orientation",
+            "-Composite:ImageSize",
+            "--", url.path,
+        ]
+        let out = Pipe()
+        process.standardOutput = out
+        process.standardError = Pipe()
+        guard (try? process.run()) != nil else { return nil }
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        let arr = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]]
+        return arr?.first
     }
 }

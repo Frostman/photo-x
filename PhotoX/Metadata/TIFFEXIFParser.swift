@@ -106,10 +106,13 @@ enum TIFFEXIFParser {
             f.timeZone = .current
             s.dateTime = f.date(from: dateStr)
         }
-        // EXIF spec defaults orientation to 1 (normal) when the tag is
-        // absent. ImageIO follows the same convention, so we mirror it
-        // for parity with the rest of the indexer pipeline.
-        s.orientation = Int(values[0x0112]?.asUInt32() ?? 1)
+        // Leave orientation nil when the tag is genuinely absent
+        // (mirrors exiftool's view; some Sony HIFs ship with no IFD0
+        // Orientation entry). Callers that want the EXIF-spec default
+        // of 1 can coalesce.
+        if let o = values[0x0112]?.asUInt32() {
+            s.orientation = Int(o)
+        }
         // PixelXDimension / PixelYDimension live in ExifIFD; they're
         // reliable for HEIF where TIFF's ImageWidth/Length are usually
         // unset (the real image is HEVC, not TIFF).
