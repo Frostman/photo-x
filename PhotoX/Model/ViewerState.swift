@@ -295,6 +295,11 @@ final class ViewerState {
     }
     var indexingTimings: PipelineTimings = .init()
 
+    /// Wall-clock timestamp of when the whole indexing run last finished
+    /// (`.done`). Used by the popover's "Indexed Xm ago" header. Reset
+    /// when a new indexing run starts or a shoot is closed.
+    var indexingCompletedAt: Date?
+
     private var indexingTask: Task<Void, Never>?
     private var batchQueues: (exif: BatchQueue, xmp: BatchQueue, thumb: BatchQueue)?
     /// Stem → batch id for the exif + xmp pipelines (50-pair batches).
@@ -398,6 +403,7 @@ final class ViewerState {
         indexingStatus = .idle
         indexingProgress = .init()
         indexingTimings = .init()
+        indexingCompletedAt = nil
 
         // 4) Reset per-pair UI state.
         currentIndex = 0
@@ -516,6 +522,7 @@ final class ViewerState {
         burstSizesByID.removeAll()
         indexingProgress = .init()
         indexingTimings = .init()
+        indexingCompletedAt = nil
         batchQueues = nil
         // pairBatches + stemToBatchID will be rebuilt by startIndexing.
         startIndexing()
@@ -749,6 +756,7 @@ final class ViewerState {
     private func finishIndexing(generation: Int) {
         guard shootGeneration == generation else { return }
         indexingStatus = .done
+        indexingCompletedAt = Date()
         Log.app.notice("Indexing complete")
     }
 

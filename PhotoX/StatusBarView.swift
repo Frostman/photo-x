@@ -27,47 +27,58 @@ struct StatusBarView: View {
     }
 
     /// Indexer status: hidden when there's no shoot, circular spinner +
-    /// percent during indexing, "Re-index" button once everything is in
-    /// memory. Sits between the stats and the sort menu so the user can
-    /// see exactly when navigation will be cache-only.
+    /// "Indexing N%" during indexing, green-check "Indexed" once finished.
+    /// Either state opens the same popover; the popover hosts the
+    /// per-pipeline breakdown plus the Re-index button + "Xm ago" label.
+    /// Button + popover identity is preserved across status transitions
+    /// so the popover stays open through Re-index / Done flips.
     @ViewBuilder
     private var indexingChip: some View {
+        if case .idle = state.indexingStatus {
+            EmptyView()
+        } else {
+            Button {
+                showIndexingDetails.toggle()
+            } label: {
+                indexingChipContent
+            }
+            .buttonStyle(.plain)
+            .help("Click for indexing details")
+            .popover(isPresented: $showIndexingDetails, arrowEdge: .bottom) {
+                IndexingProgressPopover(
+                    progress: state.indexingProgress,
+                    timings: state.indexingTimings,
+                    completedAt: state.indexingCompletedAt,
+                    onReindex: { state.reIndex() }
+                )
+                .padding(14)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var indexingChipContent: some View {
         switch state.indexingStatus {
         case .idle:
             EmptyView()
         case .indexing(let pct):
-            // Click to reveal per-pipeline breakdown. `.plain` button style
-            // preserves the chip's visual look (no border/highlight) while
-            // making the whole thing a tappable region.
-            Button {
-                showIndexingDetails.toggle()
-            } label: {
-                HStack(spacing: 4) {
-                    ProgressView(value: pct)
-                        .progressViewStyle(.circular)
-                        .controlSize(.mini)
-                    Text("Indexing \(Int(pct * 100))%")
-                        .font(.caption.monospacedDigit().bold())
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .buttonStyle(.plain)
-            .help("Click for per-pipeline breakdown")
-            .popover(isPresented: $showIndexingDetails, arrowEdge: .bottom) {
-                IndexingProgressPopover(progress: state.indexingProgress,
-                                        timings: state.indexingTimings)
-                    .padding(14)
+            HStack(spacing: 4) {
+                ProgressView(value: pct)
+                    .progressViewStyle(.circular)
+                    .controlSize(.mini)
+                Text("Indexing \(Int(pct * 100))%")
+                    .font(.caption.monospacedDigit().bold())
+                    .foregroundStyle(.secondary)
             }
         case .done, .cancelled:
-            Button {
-                state.reIndex()
-            } label: {
-                Label("Re-index", systemImage: "arrow.clockwise")
+            HStack(spacing: 4) {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                    .font(.caption)
+                Text("Indexed")
                     .font(.caption.bold())
-                    .labelStyle(.titleAndIcon)
+                    .foregroundStyle(.secondary)
             }
-            .buttonStyle(.borderless)
-            .help("Re-read EXIF, AF data, XMP sidecars and thumbnails from disk")
         }
     }
 
@@ -191,16 +202,34 @@ struct StatusBarView: View {
 /// Tracks `state.indexingProgress` + `state.indexingTimings` live so the
 /// bars and ETAs update while the popover stays open. Once a pipeline
 /// hits 100 %, its ETA is replaced by a static "took Ns" reading.
-/// Compact (~300 pt wide) — the user just needs to see which pipeline is
-/// the bottleneck, not interact with anything.
+///
+/// When `completedAt != nil` the popover also shows an "Indexed Xm ago"
+/// header (TimelineView-driven so it ticks) and a Re-index button at
+/// the bottom. The host (StatusBarView) keeps these on the same
+/// popover identity across status transitions so it stays open through
+/// a Re-index click.
 private struct IndexingProgressPopover: View {
     let progress: ViewerState.IndexingProgress
     let timings: ViewerState.PipelineTimings
+    let completedAt: Date?
+    let onReindex: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Indexing progress")
-                .font(.subheadline.bold())
+            HStack(alignment: .firstTextBaseline) {
+                Text("Indexing progress")
+                    .font(.subheadline.bold())
+                Spacer()
+                if let completedAt {
+                    // Tick the "X ago" once a minute. agoString is
+                    // minute-precision so faster updates would be wasted.
+                    TimelineView(.periodic(from: .now, by: 60)) { ctx in
+                        Text("Indexed \(agoString(from: completedAt, now: ctx.date))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
             row("EXIF · AF · sequence",
                 value: progress.exif,
                 timing: timings.exif,
@@ -213,8 +242,23 @@ private struct IndexingProgressPopover: View {
                 value: progress.thumb,
                 timing: timings.thumb,
                 icon: "photo.on.rectangle.angled")
+            if completedAt != nil {
+                Divider().padding(.vertical, 2)
+                HStack {
+                    Spacer()
+                    Button {
+                        onReindex()
+                    } label: {
+                        Label("Re-index", systemImage: "arrow.clockwise")
+                            .font(.caption.bold())
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .help("Re-read EXIF, AF data, XMP sidecars and thumbnails from disk")
+                }
+            }
         }
-        .frame(minWidth: 300)
+        .frame(minWidth: 320)
     }
 
     private func row(_ label: String,
