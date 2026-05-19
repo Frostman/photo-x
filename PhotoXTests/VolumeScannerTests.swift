@@ -152,6 +152,37 @@ final class VolumeScannerTests: XCTestCase {
         XCTAssertTrue(found.isEmpty)
     }
 
+    // MARK: ViewerState.isCardShootPath (matches whichever paths get
+    // skipped from RecentShoots)
+
+    @MainActor
+    func test_isCardShootPath_acceptsCanonicalCardLayout() {
+        XCTAssertTrue(ViewerState.isCardShootPath(
+            URL(fileURLWithPath: "/Volumes/Untitled/DCIM/100MSDCF")))
+        XCTAssertTrue(ViewerState.isCardShootPath(
+            URL(fileURLWithPath: "/Volumes/MyCard/DCIM/101MSDCF")))
+        XCTAssertTrue(ViewerState.isCardShootPath(
+            URL(fileURLWithPath: "/Volumes/SD/DCIM/100APPLE")))
+    }
+
+    @MainActor
+    func test_isCardShootPath_rejectsRegularPaths() {
+        XCTAssertFalse(ViewerState.isCardShootPath(
+            URL(fileURLWithPath: "/Users/me/Pictures/2026-05-18")))
+        XCTAssertFalse(ViewerState.isCardShootPath(
+            URL(fileURLWithPath: "/Users/me/Pictures/DCIM/100MSDCF")),
+            "DCIM at non-/Volumes location is NOT a card path")
+        XCTAssertFalse(ViewerState.isCardShootPath(
+            URL(fileURLWithPath: "/Volumes/Untitled/DCIM/MISC")),
+            "MISC isn't a DCIM-convention folder")
+        XCTAssertFalse(ViewerState.isCardShootPath(
+            URL(fileURLWithPath: "/Volumes/Untitled/Photos/100MSDCF")),
+            "second-to-last segment must be DCIM")
+        XCTAssertFalse(ViewerState.isCardShootPath(
+            URL(fileURLWithPath: "/Volumes/Untitled")),
+            "card root isn't a shoot")
+    }
+
     // MARK: VolumeWatcher lifecycle (idempotency)
 
     @MainActor

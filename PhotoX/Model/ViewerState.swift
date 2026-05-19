@@ -370,9 +370,31 @@ final class ViewerState {
         resetForShootSwitch()
         self.shoot = shoot
         self.currentIndex = shoot.index(of: focus) ?? 0
-        RecentShoots.shared.add(shoot.folderURL.path)
+        // Skip Recents for card paths — they're either still mounted
+        // (already surfaced by VolumeWatcher in the Cards section) or
+        // gone (the SD/CFExpress card was pulled out and the path is
+        // permanently missing). Either way no value in cluttering
+        // Recents with `/Volumes/<NAME>/DCIM/<folder>` entries.
+        if !Self.isCardShootPath(shoot.folderURL) {
+            RecentShoots.shared.add(shoot.folderURL.path)
+        }
         startIndexing()
         await applyCurrentPair(resetViewport: true)
+    }
+
+    /// True iff the URL looks like a DCIM shoot folder mounted under
+    /// `/Volumes/<NAME>/DCIM/<100MSDCF-style>`. Reuses the same DCIM-
+    /// name check VolumeScanner uses to populate the Cards section, so
+    /// the "is this from a card?" definition stays single-sourced.
+    static func isCardShootPath(_ url: URL) -> Bool {
+        let comps = url.pathComponents
+        guard comps.count >= 5,
+              comps[1] == "Volumes",
+              comps[comps.count - 2] == "DCIM",
+              let leaf = comps.last,
+              VolumeScanner.isDCIMConventionName(leaf)
+        else { return false }
+        return true
     }
 
     /// Drop the current shoot and return to the empty starter state.
