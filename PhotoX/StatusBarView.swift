@@ -5,6 +5,7 @@ import SwiftUI
 /// compact unified titlebar (~30 pt).
 struct StatusBarView: View {
     @Bindable var state: ViewerState
+    @State private var showIndexingDetails = false
 
     static let height: CGFloat = 30
 
@@ -35,15 +36,27 @@ struct StatusBarView: View {
         case .idle:
             EmptyView()
         case .indexing(let pct):
-            HStack(spacing: 4) {
-                ProgressView(value: pct)
-                    .progressViewStyle(.circular)
-                    .controlSize(.mini)
-                Text("Indexing \(Int(pct * 100))%")
-                    .font(.caption.monospacedDigit().bold())
-                    .foregroundStyle(.secondary)
+            // Click to reveal per-pipeline breakdown. `.plain` button style
+            // preserves the chip's visual look (no border/highlight) while
+            // making the whole thing a tappable region.
+            Button {
+                showIndexingDetails.toggle()
+            } label: {
+                HStack(spacing: 4) {
+                    ProgressView(value: pct)
+                        .progressViewStyle(.circular)
+                        .controlSize(.mini)
+                    Text("Indexing \(Int(pct * 100))%")
+                        .font(.caption.monospacedDigit().bold())
+                        .foregroundStyle(.secondary)
+                }
             }
-            .help("Loading EXIF, AF data, XMP sidecars and thumbnails into memory")
+            .buttonStyle(.plain)
+            .help("Click for per-pipeline breakdown")
+            .popover(isPresented: $showIndexingDetails, arrowEdge: .bottom) {
+                IndexingProgressPopover(progress: state.indexingProgress)
+                    .padding(14)
+            }
         case .done, .cancelled:
             Button {
                 state.reIndex()
@@ -169,6 +182,49 @@ struct StatusBarView: View {
             Image(systemName: "star.fill")
             Text("\(stars)")
                 .font(.caption2.monospacedDigit().bold())
+        }
+    }
+}
+
+/// Click-through breakdown of indexing progress, one row per pipeline.
+/// Tracks `state.indexingProgress` live so the bars climb while the
+/// popover stays open. Compact (~280 pt wide) — the user just needs to
+/// see which pipeline is the bottleneck, not interact with anything.
+private struct IndexingProgressPopover: View {
+    let progress: ViewerState.IndexingProgress
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Indexing progress")
+                .font(.subheadline.bold())
+            row("EXIF · AF · sequence",
+                value: progress.exif,
+                icon: "doc.text.magnifyingglass")
+            row("XMP sidecars",
+                value: progress.xmp,
+                icon: "tag")
+            row("Thumbnails",
+                value: progress.thumb,
+                icon: "photo.on.rectangle.angled")
+        }
+        .frame(minWidth: 260)
+    }
+
+    private func row(_ label: String, value: Double, icon: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+                .frame(width: 18)
+                .foregroundStyle(.secondary)
+            Text(label)
+                .font(.caption)
+            Spacer()
+            ProgressView(value: value)
+                .progressViewStyle(.linear)
+                .frame(width: 80)
+            Text("\(Int(value * 100))%")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 34, alignment: .trailing)
         }
     }
 }

@@ -247,6 +247,19 @@ final class ViewerState {
     }
     var indexingStatus: IndexingStatus = .idle
 
+    /// Per-pipeline progress, surfaced by the click-through popover so the
+    /// user can see which pipeline is the bottleneck. Each value is the
+    /// fraction of batches that pipeline has marked `.done` (0 ... 1).
+    struct IndexingProgress: Hashable, Sendable {
+        var exif:  Double = 0
+        var xmp:   Double = 0
+        var thumb: Double = 0
+        /// Mean of the three. The status-bar chip displays this; the
+        /// popover shows the breakdown.
+        var total: Double { (exif + xmp + thumb) / 3 }
+    }
+    var indexingProgress: IndexingProgress = .init()
+
     private var indexingTask: Task<Void, Never>?
     private var batchQueues: (exif: BatchQueue, xmp: BatchQueue, thumb: BatchQueue)?
     private var stemToBatchID: [String: Int] = [:]
@@ -331,6 +344,7 @@ final class ViewerState {
         burstIDByStem.removeAll()
         burstSizesByID.removeAll()
         indexingStatus = .idle
+        indexingProgress = .init()
 
         // 4) Reset per-pair UI state.
         currentIndex = 0
@@ -402,7 +416,7 @@ final class ViewerState {
                 }
                 group.addTask { [weak self] in
                     await self?.progressTicker(queues: queues,
-                                               total: count * 3,
+                                               batchCount: count,
                                                gen: gen)
                 }
             }
@@ -431,6 +445,7 @@ final class ViewerState {
         pairExif.removeAll()
         burstIDByStem.removeAll()
         burstSizesByID.removeAll()
+        indexingProgress = .init()
         batchQueues = nil
         // pairBatches + stemToBatchID will be rebuilt by startIndexing.
         startIndexing()
@@ -572,26 +587,30 @@ final class ViewerState {
     // MARK: progress
 
     private func progressTicker(queues: (exif: BatchQueue, xmp: BatchQueue, thumb: BatchQueue),
-                                total: Int,
+                                batchCount: Int,
                                 gen: Int) async {
         while !Task.isCancelled, shootGeneration == gen {
             let exifDone  = await queues.exif.snapshotDoneCount()
             let xmpDone   = await queues.xmp.snapshotDoneCount()
             let thumbDone = await queues.thumb.snapshotDoneCount()
-            let done = exifDone + xmpDone + thumbDone
-            let pct = total == 0 ? 1.0 : Double(done) / Double(total)
-            setIndexingPercent(pct, generation: gen)
-            if done >= total { return }
+            let p = IndexingProgress(
+                exif:  batchCount == 0 ? 1 : Double(exifDone)  / Double(batchCount),
+                xmp:   batchCount == 0 ? 1 : Double(xmpDone)   / Double(batchCount),
+                thumb: batchCount == 0 ? 1 : Double(thumbDone) / Double(batchCount)
+            )
+            setIndexingProgress(p, generation: gen)
+            if exifDone + xmpDone + thumbDone >= batchCount * 3 { return }
             try? await Task.sleep(for: .milliseconds(100))
         }
     }
 
-    private func setIndexingPercent(_ pct: Double, generation: Int) {
+    private func setIndexingProgress(_ p: IndexingProgress, generation: Int) {
         guard shootGeneration == generation else { return }
         // Don't downgrade a terminal status.
         if case .done = indexingStatus { return }
         if case .cancelled = indexingStatus { return }
-        indexingStatus = .indexing(percent: min(max(pct, 0), 1))
+        indexingProgress = p
+        indexingStatus = .indexing(percent: min(max(p.total, 0), 1))
     }
 
     private func finishIndexing(generation: Int) {
