@@ -171,6 +171,13 @@ struct FilmstripThumbnailView: View {
         Text(pair.stem)
             .font(.caption2.monospaced())
             .foregroundStyle(.white.opacity(0.85))
+            // Single line always; on narrow (portrait) thumbs truncate
+            // the FRONT so the unique numeric tail stays visible —
+            // "DSC04207" → "…04207". The constant "DSC" prefix is
+            // expendable; the digits are how the user identifies the
+            // frame.
+            .lineLimit(1)
+            .truncationMode(.head)
             .padding(.horizontal, 4)
             .padding(.vertical, 1)
             .background(.black.opacity(0.7), in: Capsule())
