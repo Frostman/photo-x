@@ -13,16 +13,16 @@ nobody enjoys: looking at every frame after a shoot and deciding what
 to keep. Open a folder (or a CFExpress / SD card straight out of the
 camera) and you're culling within seconds — no import, no catalog, no
 proprietary database. Your ratings live in plain XMP sidecar files
-next to the originals, so Lightroom (or anything else that reads XMP)
-picks them up later.
+next to the originals, so Lightroom, Photomator (or anything else
+that reads XMP) picks them up later.
 
 ## Why PhotoX
 
-The mainstream tools — Lightroom, Capture One, Photo Mechanic — are
+The mainstream tools — Lightroom, Photomator, Capture One, Photo Mechanic — are
 built around catalogs and asset management. They're great at organising
 the work, slow at the part where you just need to look at a frame, hit
 a number, and move on. PhotoX is a culling-first app: instant
-navigation, GPU-accelerated viewer, Lightroom-compatible ratings,
+navigation, GPU-accelerated viewer, Lightroom / Photomator-compatible ratings,
 zero setup. After culling, your decisions follow your files wherever
 they go next.
 
@@ -32,8 +32,8 @@ they go next.
   the keep/reject decision are written to a `<stem>.xmp` sidecar file
   next to the RAW. PhotoX *never* modifies the original `.ARW`,
   `.HIF`, or their embedded EXIF. The sidecar format matches what
-  Lightroom writes — you can cull in PhotoX, then open the same
-  folder in Lightroom and the ratings are there waiting.
+  Lightroom and Photomator write — you can cull in PhotoX, then
+  open the same folder in either and the ratings are there waiting.
 - **No catalog, no import.** Point PhotoX at a folder and start. No
   database. No "import" wizard. No per-shoot setup. Close the window
   and the next folder is one ⌘O away.
@@ -64,7 +64,7 @@ they go next.
 - Filter the view by rating / reject / star level so you can re-cull
   a subset.
 - All decisions persist to XMP sidecar files next to the RAW.
-  Lightroom reads them; PhotoX reads what Lightroom wrote.
+  Lightroom and Photomator read them; PhotoX reads what they wrote.
 
 ### Viewer
 
