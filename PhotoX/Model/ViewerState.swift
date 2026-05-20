@@ -80,6 +80,28 @@ final class ViewerState {
     var currentXMP: XMPSidecar = .empty
     private var xmpGeneration: Int = 0
 
+    /// What's *actually on screen* right now — used by the filmstrip,
+    /// AF overlay, sidebar EXIF, and "N/M" indicator so they stay in
+    /// sync with the bound texture during rapid navigation. Lags
+    /// behind `currentIndex` by the duration of the async texture
+    /// upload (typically 40–250 ms warm). `commitDisplayed(stem:)` is
+    /// called from the canvas when a texture lands and bumps these
+    /// fields atomically.
+    var displayedIndex: Int = 0
+    var displayedExif: ExifSummary?
+    var displayedAFRegions: [AFRegion] = []
+    var displayedAFSettings: AFSettings = AFSettings()
+    var displayedXMP: XMPSidecar = .empty
+
+    /// Pair that's currently rendered on the canvas — derived from
+    /// `displayedIndex`. Differs from `pair` (derived from `currentIndex`)
+    /// only briefly while a navigation's texture is still loading.
+    var displayedPair: PhotoPair? {
+        let pairs = sortedPairs
+        guard pairs.indices.contains(displayedIndex) else { return nil }
+        return pairs[displayedIndex]
+    }
+
     /// Bumped on every shoot teardown (closeShoot, loadShoot). Any background
     /// task that might write into per-shoot state (thumbnails, pairXMPs,
     /// pairAFData) captures this at spawn time and checks it before applying
@@ -377,6 +399,10 @@ final class ViewerState {
         resetForShootSwitch()
         self.shoot = shoot
         self.currentIndex = shoot.index(of: focus) ?? 0
+        // displayedIndex mirrors currentIndex on shoot load — the first
+        // texture upload will fire commitDisplayed and keep it in sync
+        // from there.
+        self.displayedIndex = self.currentIndex
         // Skip Recents for card paths — they're either still mounted
         // (already surfaced by VolumeWatcher in the Cards section) or
         // gone (the SD/CFExpress card was pulled out and the path is
@@ -455,6 +481,11 @@ final class ViewerState {
         currentAFRegions = []
         currentAFSettings = AFSettings()
         currentPairFiles = .none
+        displayedIndex = 0
+        displayedExif = nil
+        displayedAFRegions = []
+        displayedAFSettings = AFSettings()
+        displayedXMP = .empty
         errorMessage = nil
         isDecoding = false
         viewport = .identity
@@ -724,12 +755,17 @@ final class ViewerState {
         // flush boundary keeps the main thread responsive — the cost
         // is paid once per batch, not per SwiftUI render.
         if !seq.isEmpty { recomputeBurstIDs() }
-        // If the just-arrived batch covers the currently-displayed
-        // pair, refresh AF view-state so the overlay updates without
-        // a navigation event.
+        // If the just-arrived batch covers the currently-navigated
+        // pair, refresh the canvas-overlay state. Same update for the
+        // displayed pair (matches the AF overlay the user actually
+        // sees) — different pair during rapid nav, often the same.
         if let stem = pair?.stem, let v = af[stem] {
             self.currentAFRegions = v.regions
             self.currentAFSettings = v.settings
+        }
+        if let stem = displayedPair?.stem, let v = af[stem] {
+            self.displayedAFRegions = v.regions
+            self.displayedAFSettings = v.settings
         }
     }
 
@@ -745,6 +781,10 @@ final class ViewerState {
            self.currentXMP == .empty {
             self.currentXMP = xmp
         }
+        if let stem = displayedPair?.stem, let xmp = items.first(where: { $0.stem == stem })?.xmp,
+           self.displayedXMP == .empty {
+            self.displayedXMP = xmp
+        }
     }
 
     /// Basic-EXIF + thumbs pipeline flush. Publishes BOTH the thumbnails
@@ -757,12 +797,34 @@ final class ViewerState {
         guard shootGeneration == generation else { return }
         for (stem, img) in thumbs { thumbnails[stem] = img }
         for (stem, ex)  in exifs  { pairExif[stem]   = ex }
-        // Refresh the currently-displayed pair's sidebar EXIF if it
-        // happens to be in this batch.
+        // Refresh the navigated pair's sidebar EXIF if it landed in
+        // this batch. Mirror for the displayed pair (lags during
+        // rapid nav — the sidebar reads displayedExif).
         if let stem = pair?.stem,
            let ex = exifs.first(where: { $0.0 == stem })?.1 {
             self.currentExif = ex
         }
+        if let stem = displayedPair?.stem,
+           let ex = exifs.first(where: { $0.0 == stem })?.1 {
+            self.displayedExif = ex
+        }
+    }
+
+    /// Called by the canvas when a texture for `stem` has been bound
+    /// and the new pixels are now visible. Atomically commits the
+    /// filmstrip-selection / AF-overlay / sidebar-EXIF state so they
+    /// match what the user actually sees. Drops the call if the stem
+    /// no longer maps to any pair in the current shoot (rare race
+    /// with shoot teardown).
+    func commitDisplayed(stem: String) {
+        let pairs = sortedPairs
+        guard let idx = pairs.firstIndex(where: { $0.stem == stem }) else { return }
+        displayedIndex = idx
+        displayedExif = pairExif[stem]
+        let af = pairAFData[stem]
+        displayedAFRegions = af?.regions ?? []
+        displayedAFSettings = af?.settings ?? AFSettings()
+        displayedXMP = pairXMPs[stem] ?? .empty
     }
 
     // MARK: progress

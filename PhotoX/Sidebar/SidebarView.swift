@@ -18,15 +18,15 @@ struct SidebarView: View {
                             .frame(height: 140)
                     }
 
-                    if let exif = state.currentExif {
+                    if let exif = state.displayedExif {
                         section(title: "EXIF") {
                             ExifPanelView(summary: exif)
                         }
                     }
 
-                    if !state.currentAFSettings.isEmpty {
+                    if !state.displayedAFSettings.isEmpty {
                         section(title: "Autofocus") {
-                            AFSettingsPanelView(settings: state.currentAFSettings)
+                            AFSettingsPanelView(settings: state.displayedAFSettings)
                         }
                     }
                 }

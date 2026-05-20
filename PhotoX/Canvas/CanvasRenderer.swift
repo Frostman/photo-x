@@ -17,17 +17,27 @@ final class CanvasRenderer {
     private var showPeaking: Bool = false
     private var peakingThreshold: Float = 0.15
 
-    /// Generation counter for the async texture loader. Bumped on every
-    /// `setImage`; completions whose captured gen ≠ current are dropped
-    /// so a fast burst of nav events doesn't see stale frames.
+    /// Monotonic generation counter — bumped on every `setImage`. Each
+    /// detached load captures its own gen; completions display only
+    /// when their gen is newer than what's already on screen. This way
+    /// a fast burst of nav events (← held down) doesn't drop every
+    /// intermediate frame — the canvas catches up as each load
+    /// completes instead of looking frozen until the user stops.
     private var loadGeneration: Int = 0
 
+    /// The highest generation that has been committed to `baseTexture`.
+    /// Out-of-order completions older than this are dropped (the canvas
+    /// already shows something newer).
+    private var displayedGeneration: Int = 0
+
     /// Called on the main actor after an async texture load completes
-    /// and `baseTexture` has been updated. Payload is the pixel size of
-    /// the newly-loaded image so the NSView can update its own
-    /// imagePixelSize in lock-step (avoids a glitch frame where the
-    /// previous image is drawn at the new image's dimensions).
-    var onTextureReady: ((CGSize) -> Void)?
+    /// and `baseTexture` has been updated. Payload is:
+    /// - `token`: the opaque string the caller passed to `setImage`
+    ///   (PhotoX uses the pair's stem, so it can update its own
+    ///   "displayed pair" state in lock-step with the bound texture).
+    /// - `pixelSize`: the new image's pixel dimensions so the NSView
+    ///   can update its own imagePixelSize without a glitch frame.
+    var onTextureReady: ((_ token: String, _ pixelSize: CGSize) -> Void)?
 
     private struct FragmentUniforms {
         var showClipping: Int32
@@ -71,7 +81,7 @@ final class CanvasRenderer {
     /// Reads to follow up:
     /// `onTextureReady` fires on the main actor when `baseTexture` has
     /// been updated.
-    func setImage(_ cgImage: CGImage) {
+    func setImage(_ cgImage: CGImage, token: String) {
         PerfTracker.mark("CanvasRenderer.setImage entered")
         loadGeneration += 1
         let gen = loadGeneration
@@ -102,20 +112,21 @@ final class CanvasRenderer {
 
             await MainActor.run { [weak self] in
                 guard let self else { return }
-                guard self.loadGeneration == gen else {
-                    // A newer setImage was issued — drop this stale load.
-                    return
-                }
+                // Only drop if a strictly newer load has already been
+                // committed. Intermediate completions during fast nav
+                // still render so the canvas keeps up with the user's
+                // arrow-key bursts instead of staying frozen until
+                // they stop.
+                guard gen > self.displayedGeneration else { return }
                 guard let texture else {
                     Log.canvas.error("setImage: texture creation returned nil for \(Int(pixelSize.width))x\(Int(pixelSize.height))")
-                    self.baseTexture = nil
-                    self.imagePixelSize = .zero
                     return
                 }
+                self.displayedGeneration = gen
                 self.baseTexture = texture
                 self.imagePixelSize = pixelSize
                 PerfTracker.mark("CanvasRenderer.setImage done (async)")
-                self.onTextureReady?(pixelSize)
+                self.onTextureReady?(token, pixelSize)
             }
         }
     }

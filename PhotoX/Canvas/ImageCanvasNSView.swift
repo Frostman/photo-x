@@ -13,6 +13,13 @@ final class ImageCanvasNSView: NSView {
     private var imagePixelSize: CGSize = .zero
 
     var onViewportChange: ((CanvasViewport, CGFloat) -> Void)?
+    /// Fires when a setImage() upload has bound the new texture (i.e.
+    /// the user actually sees the new image). The payload is the token
+    /// the caller passed to setImage — PhotoX uses the pair stem so
+    /// it can commit displayed* state in lock-step with the bound
+    /// texture.
+    var onImageDisplayed: ((String) -> Void)?
+    private var pendingToken: String = ""
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -54,15 +61,19 @@ final class ImageCanvasNSView: NSView {
                 // imagePixelSize from the callback (not from setImage)
                 // so geometry stays in lock-step with what's actually
                 // bound — the OLD image keeps rendering at its OLD
-                // size during the load window, no glitch frame.
-                renderer.onTextureReady = { [weak self] pixelSize in
+                // size during the load window, no glitch frame. Token
+                // is forwarded to onImageDisplayed so the model can
+                // sync its displayed-pair state with the texture that
+                // just landed.
+                renderer.onTextureReady = { [weak self] token, pixelSize in
                     guard let self else { return }
                     self.imagePixelSize = pixelSize
                     self.scheduleDraw()
+                    self.onImageDisplayed?(token)
                 }
             }
             if let pendingImage {
-                renderer?.setImage(pendingImage)
+                renderer?.setImage(pendingImage, token: pendingToken)
                 self.pendingImage = nil
             }
             renderer?.setViewport(viewport)
@@ -101,15 +112,16 @@ final class ImageCanvasNSView: NSView {
         }
     }
 
-    func setImage(_ cgImage: CGImage) {
+    func setImage(_ cgImage: CGImage, token: String) {
         PerfTracker.mark("ImageCanvasNSView.setImage entered")
         if let renderer {
             // Async path: renderer.setImage kicks off the upload off
             // the main actor. The OLD baseTexture (+ OLD imagePixelSize)
             // stay bound until onTextureReady fires, which keeps the
             // previous frame on screen instead of flashing black during
-            // the ~100 ms upload window.
-            renderer.setImage(cgImage)
+            // the upload window. Token rides along so onImageDisplayed
+            // can fire with it later.
+            renderer.setImage(cgImage, token: token)
         } else {
             // Renderer hasn't been built yet (viewDidMoveToWindow runs
             // shortly after init). Stash the image and pre-set the
@@ -117,6 +129,7 @@ final class ImageCanvasNSView: NSView {
             // load completes has the right geometry — there's no old
             // image to worry about glitching against.
             pendingImage = cgImage
+            pendingToken = token
             imagePixelSize = CGSize(width: cgImage.width, height: cgImage.height)
         }
     }

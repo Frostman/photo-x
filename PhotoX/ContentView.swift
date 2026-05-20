@@ -333,11 +333,20 @@ struct ContentView: View {
                 // still extends under, so visual continuity is preserved.
                 ImageCanvasView(
                     image: image.cgImage,
+                    // Stem of the pair the canvas is currently asked to
+                    // render (NOT the displayed one — this drives WHICH
+                    // texture upload is in flight). When the upload
+                    // lands, onImageDisplayed fires with this stem and
+                    // commitDisplayed syncs the rest of the UI to it.
+                    imageToken: state.pair?.stem ?? "",
                     viewport: state.viewport,
                     showClipping: state.overlays.clipping,
                     showPeaking: state.overlays.focusPeaking,
                     onViewportChange: { vp, pz in
                         state.updateViewportFromCanvas(vp, pixelZoom: pz)
+                    },
+                    onImageDisplayed: { stem in
+                        state.commitDisplayed(stem: stem)
                     }
                 )
                 .overlay {
@@ -345,7 +354,7 @@ struct ContentView: View {
                         AFPointOverlay(
                             imagePixelSize: image.pixelSize,
                             viewport: state.viewport,
-                            regions: state.currentAFRegions
+                            regions: state.displayedAFRegions
                         )
                         .allowsHitTesting(false)
                     }
@@ -785,7 +794,10 @@ struct ContentView: View {
             VStack {
                 Spacer()
                 HStack {
-                    if let pair = state.pair { stemPill(pair: pair) }
+                    // Use displayedPair so the pill identifies what the
+                    // user actually sees, not the (briefly different)
+                    // navigation intent during a rapid arrow burst.
+                    if let pair = state.displayedPair { stemPill(pair: pair) }
                     Spacer()
                     Text(statusText(image: image))
                         .font(.caption.monospacedDigit())
@@ -803,7 +815,7 @@ struct ContentView: View {
     private func stemPill(pair: PhotoPair) -> some View {
         HStack(spacing: 8) {
             if let shoot = state.shoot, shoot.count > 1 {
-                Text("\(state.currentIndex + 1)/\(shoot.count)")
+                Text("\(state.displayedIndex + 1)/\(shoot.count)")
                     .frame(width: indexSlotWidth(for: shoot.count), alignment: .leading)
                     .foregroundStyle(.white.opacity(0.55))
             }

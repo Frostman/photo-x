@@ -31,7 +31,7 @@ struct FilmstripView: View {
                             let sortedIdx = visibleSortedIndices[vIdx]
                             FilmstripThumbnailView(
                                 pair: pair,
-                                isSelected: sortedIdx == state.currentIndex,
+                                isSelected: sortedIdx == state.displayedIndex,
                                 thumbnail: state.thumbnails[pair.stem],
                                 xmp: state.pairXMPs[pair.stem] ?? .empty,
                                 burstSegment: useBrackets
@@ -56,9 +56,9 @@ struct FilmstripView: View {
                 Rectangle().fill(Color(nsColor: .separatorColor)).frame(height: 1)
             }
             .onAppear {
-                proxy.scrollTo(state.currentIndex, anchor: .center)
+                proxy.scrollTo(state.displayedIndex, anchor: .center)
             }
-            .onChange(of: state.currentIndex) { _, newIdx in
+            .onChange(of: state.displayedIndex) { _, newIdx in
                 withAnimation(.easeInOut(duration: 0.18)) {
                     proxy.scrollTo(newIdx, anchor: .center)
                 }
