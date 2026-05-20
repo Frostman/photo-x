@@ -10,9 +10,12 @@ enum ImageVariant: String, CaseIterable, Identifiable, Hashable, Sendable {
 
     var id: String { rawValue }
 
+    /// User-facing label. Internal-comments / debug logs may say
+    /// "preview" — UI text must spell out the formats. The decoding
+    /// pill and any "Decoding X…" message reads this.
     var displayName: String {
         switch self {
-        case .preview: return "Preview"
+        case .preview: return "HIF/JPG"
         case .raw:     return "RAW"
         }
     }

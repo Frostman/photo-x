@@ -27,7 +27,7 @@ struct HelpOverlay: View {
             .init(keys: "R", label: "Reject (xmp:Rating = -1); R again un-rejects"),
         ]),
         ("Image variant", [
-            .init(keys: "Z", label: "Toggle preview ↔ RAW (HEIF or JPG → ARW, when both exist)"),
+            .init(keys: "Z", label: "Toggle HIF/JPG ↔ RAW (when both exist)"),
             .init(keys: "D", label: "Cycle decoder (ImageIO / LibRaw)"),
         ]),
         ("Navigation", [
@@ -51,7 +51,7 @@ struct HelpOverlay: View {
             .init(keys: "T", label: "Toggle filmstrip (thumbnails with star/label badges)"),
         ]),
         ("Files", [
-            .init(keys: "⌘O", label: "Open folder (ARW + HIF/JPG pairs or standalone previews)"),
+            .init(keys: "⌘O", label: "Open folder (ARW + HIF/JPG pairs or standalone HIF/JPG files)"),
             .init(keys: "Drag & drop", label: "Open files or folder"),
         ]),
         ("Help", [

@@ -859,7 +859,7 @@ struct ContentView: View {
             Text(copiedFlash ? "Copied path" : entry.stem)
                 .foregroundStyle(.white.opacity(0.85))
                 .onTapGesture { copyPath(for: entry) }
-                .help("Click to copy ARW path (preview path if ARW is missing)")
+                .help("Click to copy ARW path (HIF/JPG path if ARW is missing)")
                 .accessibilityIdentifier("canvas.stemPill.stem")
             Text(filesBadge)
                 .foregroundStyle(.white.opacity(0.45))
@@ -975,7 +975,7 @@ struct ContentView: View {
     @discardableResult
     private func handleDrop(_ urls: [URL]) -> Bool {
         guard let (shoot, focus) = ShootScanner.resolve(droppedURLs: urls) else {
-            state.errorMessage = "No ARW + HIF/JPG pair (or standalone preview) found in dropped items"
+            state.errorMessage = "No ARW + HIF/JPG pair (or standalone HIF/JPG) found in dropped items"
             return false
         }
         Task { await state.loadShoot(shoot, focus: focus) }

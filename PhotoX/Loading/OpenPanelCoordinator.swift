@@ -10,7 +10,7 @@ enum OpenPanelCoordinator {
         panel.canChooseDirectories = true
         panel.canChooseFiles = true
         panel.resolvesAliases = true
-        panel.message = "Pick a folder of ARW + HIF/JPG pairs (or any preview inside one)"
+        panel.message = "Pick a folder of ARW + HIF/JPG pairs (or any HIF/JPG file inside one)"
         panel.prompt = "Open"
         panel.canCreateDirectories = false
 
