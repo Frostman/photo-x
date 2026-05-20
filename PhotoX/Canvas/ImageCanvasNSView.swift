@@ -255,8 +255,20 @@ final class ImageCanvasNSView: NSView {
         }
     }
 
+    /// Click count of the in-flight mouseDown gesture, used to gate
+    /// `mouseDragged` so a double-click's tiny cursor jitter doesn't
+    /// pan and immediately undo the zoom we just applied. Reset on
+    /// mouseUp so a fresh click-and-drag pans normally.
+    private var inFlightClickCount: Int = 0
+
     override func mouseDown(with event: NSEvent) {
-        if event.clickCount == 2 {
+        inFlightClickCount = event.clickCount
+        // Every even-numbered click within the double-click interval
+        // toggles. Two consecutive fast double-clicks arrive as
+        // clickCount = 1, 2, 3, 4 (macOS keeps incrementing while
+        // each click lands inside the system's double-click window),
+        // so `== 2` alone misses the second toggle.
+        if event.clickCount >= 2, event.clickCount % 2 == 0 {
             // From fit → zoom to 1:1 centred on the click point so the
             // user lands on the pixel they targeted. From 1:1+ → back
             // to fit (no focal needed — fit centres the image).
@@ -265,10 +277,20 @@ final class ImageCanvasNSView: NSView {
     }
 
     override func mouseDragged(with event: NSEvent) {
+        // Multi-click gestures (double-click toggle) must not pan;
+        // tiny cursor jitter between the two clicks would otherwise
+        // get interpreted as a 1-2 px drag and immediately revert
+        // the zoom — the source of the "double-click sometimes
+        // doesn't work" bug.
+        guard inFlightClickCount <= 1 else { return }
         let scale = window?.backingScaleFactor ?? 1.0
         let dx = event.deltaX * scale
         let dy = -event.deltaY * scale  // event.deltaY uses y-down
         applyViewportFromGesture(viewport.panned(by: CGPoint(x: dx, y: dy)))
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        inFlightClickCount = 0
     }
 
     override func keyDown(with event: NSEvent) {
