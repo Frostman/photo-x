@@ -134,6 +134,23 @@ final class ExportRunner {
         }
     }
 
+    /// Wipe all per-destination + batch state so the toolbar pill
+    /// and the Export sheet go back to "no export ever ran" until
+    /// the next Run / Export-all. Called by `ViewerState.closeShoot`
+    /// so the starter screen isn't haunted by the previous shoot's
+    /// export outcome.
+    ///
+    /// No-op while an export is in flight — the caller is expected
+    /// to cancel first (see `ContentView.closeShootGuarded`).
+    func resetState() {
+        guard !isRunning && !hasQueued else { return }
+        perDestination.removeAll()
+        perDestinationCompletedAt.removeAll()
+        batchProgress = nil
+        lastBatchOutcome = nil
+        lastBatchCompletedAt = nil
+    }
+
     /// Aggregated progress across all currently-running destinations.
     /// Returns nil if nothing is running.
     var overallProgress: Progress? {

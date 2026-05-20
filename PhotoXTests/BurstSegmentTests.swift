@@ -166,8 +166,12 @@ final class BurstSegmentTests: XCTestCase {
     }
 
     func test_burstSegment_onlyOneBurstMemberVisible() {
-        // Hide B, D — but also hide A, E (leave just C visible). C has no
-        // visible burst neighbour, so no bracket to draw.
+        // Hide A, B, D, E — leave just C visible. C is still a
+        // member of a 5-frame burst (`burstSizesByID[id] == 5`);
+        // its siblings just happen to be filtered out. C renders
+        // as `.solo` (caps on both sides + short centered bar)
+        // so the user can still tell at a glance that this frame
+        // is part of a burst.
         let state = makeState(
             stems: ["A", "B", "C", "D", "E"],
             seq: ["A": 1, "B": 2, "C": 3, "D": 4, "E": 5]
@@ -181,7 +185,7 @@ final class BurstSegmentTests: XCTestCase {
         state.showRejected = false
         let visible = state.sortedEntries.filter { state.isVisible($0) }
         XCTAssertEqual(visible.map(\.stem), ["C"])
-        XCTAssertEqual(state.burstSegment(at: 0, visible: visible), .none)
+        XCTAssertEqual(state.burstSegment(at: 0, visible: visible), .solo)
     }
 
     // MARK: helpers

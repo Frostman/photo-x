@@ -215,6 +215,32 @@ struct FilmstripThumbnailView: View {
                 Spacer().frame(maxWidth: .infinity)
             }
             .offset(y: -totalHeight)
+        case .solo:
+            // Lone visible burst member: a centered short bar with
+            // caps on both sides so the user can still tell this
+            // frame belongs to a burst even though its siblings
+            // are filtered out.
+            VStack(spacing: 0) {
+                HStack(spacing: 0) {
+                    Spacer()
+                    Rectangle()
+                        .fill(Color.accentColor)
+                        .frame(width: barHeight * 4, height: barHeight)
+                    Spacer()
+                }
+                HStack(spacing: 0) {
+                    Spacer()
+                    Rectangle()
+                        .fill(Color.accentColor)
+                        .frame(width: barHeight, height: capDrop)
+                    Spacer().frame(width: barHeight * 2)
+                    Rectangle()
+                        .fill(Color.accentColor)
+                        .frame(width: barHeight, height: capDrop)
+                    Spacer()
+                }
+            }
+            .offset(y: -totalHeight)
         }
     }
 

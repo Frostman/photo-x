@@ -501,6 +501,17 @@ final class ViewerState {
         captureLastEntryToStores()
         resetForShootSwitch()
         shoot = nil
+        // Reset session-only filter + sort to defaults so the next
+        // shoot opens with a clean slate instead of inheriting the
+        // last shoot's culling state (which usually wasn't relevant).
+        showStars = [1, 2, 3, 4, 5]
+        showRejected = true
+        showUnrated = true
+        sortMode = .name
+        // Wipe export pill/sheet progress so the starter screen is
+        // clean — the runner itself guards against clearing while
+        // an export is still running.
+        ExportRunner.shared.resetState()
     }
 
     /// Shared teardown for closeShoot + loadShoot. Cancels all trackable
@@ -1058,6 +1069,11 @@ final class ViewerState {
         case start     // left cap + bar to the right edge
         case middle    // bar across the full width
         case end       // bar from the left edge + right cap
+        case solo      // both caps + short centered bar — the only
+                       // visible member of its burst (its siblings
+                       // are filtered out); still part of a burst
+                       // per `burstSizesByID`, just isolated in the
+                       // current view.
     }
 
     /// Pure helper. `visible` is the filmstrip's display-order list (after
@@ -1088,14 +1104,24 @@ final class ViewerState {
         guard let myID = ids[visible[index].stem],
               (sizes[myID] ?? 0) >= 2 else { return .none }
 
-        func sharesBurst(_ otherIdx: Int) -> Bool {
-            guard visible.indices.contains(otherIdx) else { return false }
-            return ids[visible[otherIdx].stem] == myID
+        // Walk through the visible array past non-matching frames
+        // (filtered-out siblings, singletons, members of other
+        // bursts) looking for another visible member of the same
+        // burst. This way a 9-frame burst with frames 2 and 5
+        // visible — filters hide 1, 3, 4, 6-9 — still gets a
+        // start/end bracket pair instead of two unrelated singletons.
+        func hasMatchOn(_ step: Int) -> Bool {
+            var i = index + step
+            while visible.indices.contains(i) {
+                if ids[visible[i].stem] == myID { return true }
+                i += step
+            }
+            return false
         }
-        let leftMatches  = sharesBurst(index - 1)
-        let rightMatches = sharesBurst(index + 1)
+        let leftMatches  = hasMatchOn(-1)
+        let rightMatches = hasMatchOn(+1)
         switch (leftMatches, rightMatches) {
-        case (false, false): return .none      // lone visible burst member
+        case (false, false): return .solo
         case (false, true):  return .start
         case (true,  true):  return .middle
         case (true,  false): return .end
