@@ -34,7 +34,7 @@ struct PhotoXApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView(state: viewerState)
+            ContentView(state: viewerState, updater: updater)
                 .preferredColorScheme(appearance.colorScheme)
                 .task { await bootstrap() }
                 .onChange(of: scenePhase) { _, phase in
@@ -107,6 +107,14 @@ struct PhotoXApp: App {
     }
 
     private func bootstrap() async {
+        // Sparkle-driven restart: if the previous run set a pending
+        // reopen path (in the last 10 min), prefer it over the
+        // configured default folder. `consume()` always clears the
+        // keys, fresh or stale.
+        if let reopen = PendingReopenStore.consume() {
+            await openPath(reopen.path)
+            return
+        }
         // If the user has configured a default folder and it exists with
         // pairs, auto-load it. Otherwise just leave the window in its empty
         // state — no error, no nag.

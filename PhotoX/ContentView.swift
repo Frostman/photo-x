@@ -18,6 +18,11 @@ extension View {
 
 struct ContentView: View {
     @Bindable var state: ViewerState
+    /// Optional — nil under `-photoxDisableSparkle` (DEBUG dev
+    /// builds + E2E test runs) so the toolbar pill stays hidden
+    /// regardless of any update state. Read-only here (we never
+    /// need a SwiftUI binding into it), so no @Bindable.
+    let updater: UpdaterController?
     @FocusState private var canvasFocused: Bool
     @State private var showHelp: Bool = false
     @State private var showJumpSheet: Bool = false
@@ -267,6 +272,30 @@ struct ContentView: View {
                     .help("Debug build — separate bundle ID (dev.frostman.PhotoX.debug), Sparkle disabled, settings shared with production via AppDefaults")
             }
             #endif
+
+            // Self-update pill — leftmost slot. Renders nothing
+            // when no update is staged or while Sparkle is between
+            // states. Same accent background for both .available
+            // and .readyToInstall; icon changes between them.
+            ToolbarItem(placement: .navigation) {
+                if let updater,
+                   let pill = updater.pillContent(currentShootURL: state.shoot?.folderURL) {
+                    Button(action: pill.onTap) {
+                        HStack(spacing: 4) {
+                            Image(systemName: pill.icon)
+                            Text(pill.label)
+                        }
+                        .font(.caption.bold())
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 2)
+                        .background(Color.accentColor, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .help(pill.help)
+                    .accessibilityIdentifier("toolbar.updatePill")
+                }
+            }
 
             ToolbarItem(placement: .principal) {
                 // Always populate the principal slot — when it returns
@@ -1080,5 +1109,5 @@ struct ContentView: View {
 }
 
 #Preview {
-    ContentView(state: ViewerState())
+    ContentView(state: ViewerState(), updater: nil)
 }
