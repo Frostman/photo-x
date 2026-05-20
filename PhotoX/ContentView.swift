@@ -959,6 +959,9 @@ struct ContentView: View {
 
     @ViewBuilder
     private func stemPill(entry: PhotoEntry) -> some View {
+        let _ = { PerfTracker.mark("stemPill rendering (stem=\(entry.stem))") }()
+        let burst = state.burstPosition(for: entry.stem)
+        let _ = { PerfTracker.mark("stemPill: burstPosition done") }()
         HStack(spacing: 8) {
             if let shoot = state.shoot, shoot.count > 1 {
                 Text("\(state.displayedIndex + 1)/\(shoot.count)")
@@ -974,7 +977,7 @@ struct ContentView: View {
             Text(filesBadge)
                 .foregroundStyle(.white.opacity(0.45))
                 .accessibilityIdentifier("canvas.stemPill.files")
-            if let b = state.burstPosition(for: entry.stem) {
+            if let b = burst {
                 Text("\(b.index)/\(b.total) burst")
                     .foregroundStyle(.white.opacity(0.45))
                     .accessibilityIdentifier("canvas.stemPill.burst")

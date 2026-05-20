@@ -140,10 +140,12 @@ struct StatusBarView: View {
     }
 
     private var stats: some View {
+        let _ = { PerfTracker.mark("StatusBarView.stats rendering") }()
         // shootStats is O(N over the shoot); call it ONCE and derive
         // shownCount from the same tuple instead of `state.shownCount`
         // (which walks the shoot a second time).
         let s = state.shootStats
+        let _ = { PerfTracker.mark("StatusBarView.stats: shootStats done (rated=\(s.rated) rejected=\(s.rejected) unrated=\(s.unrated))") }()
         var shown = 0
         for (stars, count) in s.stars where state.showStars.contains(stars) {
             shown += count

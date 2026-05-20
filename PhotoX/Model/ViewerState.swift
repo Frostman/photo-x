@@ -208,6 +208,7 @@ final class ViewerState {
         let currentStem = entry?.stem
         sortMode = newMode
         invalidateSortedEntriesCache()
+        invalidateShootStatsCache()
         if let stem = currentStem,
            let idx = sortedEntries.firstIndex(where: { $0.stem == stem }) {
             currentIndex = idx
@@ -243,10 +244,16 @@ final class ViewerState {
         }
     }
 
-    /// Counts across the entire shoot. O(N) per call; ok for filmstrip-scale
-    /// shoots, may want memoising if we ever go past tens of thousands.
-    /// `stars[i]` (i = 1...5) holds the per-star count; `rated` is the sum.
-    var shootStats: (rated: Int, rejected: Int, unrated: Int, stars: [Int: Int], total: Int) {
+    /// Counts across the entire shoot. Cached; invalidated on shoot switch
+    /// and on every rating mutation. The status bar reads this on every
+    /// render and the indexer flushes ~5×/sec — without the cache the
+    /// O(N over shoot) recompute crowded the main thread during indexing
+    /// (~70 ms/sec on an 8k-entry shoot). `stars[i]` (i = 1...5) holds
+    /// the per-star count; `rated` is the sum.
+    typealias ShootStats = (rated: Int, rejected: Int, unrated: Int, stars: [Int: Int], total: Int)
+
+    var shootStats: ShootStats {
+        if let cached = shootStatsCache { return cached }
         guard let shoot else { return (0, 0, 0, [:], 0) }
         var rated = 0, rejected = 0, unrated = 0
         var stars: [Int: Int] = [:]
@@ -261,7 +268,15 @@ final class ViewerState {
                 unrated += 1
             }
         }
-        return (rated, rejected, unrated, stars, shoot.entries.count)
+        let computed: ShootStats = (rated, rejected, unrated, stars, shoot.entries.count)
+        shootStatsCache = computed
+        return computed
+    }
+
+    private var shootStatsCache: ShootStats?
+
+    private func invalidateShootStatsCache() {
+        shootStatsCache = nil
     }
 
     /// How many entries the user is currently looking at (= sum of enabled
@@ -576,7 +591,9 @@ final class ViewerState {
         entryHistograms.removeAll()
         burstIDByStem.removeAll()
         burstSizesByID.removeAll()
+        burstPositionByStem.removeAll()
         sortedEntriesCache = nil
+        shootStatsCache = nil
         indexingStatus = .idle
         indexingProgress = .init()
         indexingTimings = .init()
@@ -711,7 +728,9 @@ final class ViewerState {
         entryExif.removeAll()
         burstIDByStem.removeAll()
         burstSizesByID.removeAll()
+        burstPositionByStem.removeAll()
         sortedEntriesCache = nil
+        shootStatsCache = nil
         indexingProgress = .init()
         indexingTimings = .init()
         indexingCompletedAt = nil
@@ -887,13 +906,25 @@ final class ViewerState {
     private func flushXMPSlice(_ items: [(stem: String, xmp: XMPSidecar?)],
                                generation: Int) {
         guard shootGeneration == generation else { return }
+        var stagedAny = false
         for (stem, xmp) in items {
             guard let xmp else { continue }  // file missing → leave entryXMPs untouched
             // File present on disk — record for the per-nav files badge.
             stemsWithXMPOnDisk.insert(stem)
             // Don't overwrite an optimistic user rating — see Phase 4c
             // notes; in-memory wins if the user has already touched it.
-            if entryXMPs[stem] == nil { entryXMPs[stem] = xmp }
+            if entryXMPs[stem] == nil {
+                entryXMPs[stem] = xmp
+                if xmp.hasDecision { stagedAny = true }
+            }
+        }
+        // Counts depend on per-entry ratings; the cache snapshotted the
+        // pre-indexing all-unrated state, so invalidate it whenever a
+        // batch lands actual decisions. Score-sort ordering can also
+        // shift, so drop the sorted-entries cache for the same reason.
+        if stagedAny {
+            invalidateShootStatsCache()
+            invalidateSortedEntriesCache()
         }
         if let stem = entry?.stem,
            let xmp = items.first(where: { $0.stem == stem })?.xmp ?? nil,
@@ -939,6 +970,7 @@ final class ViewerState {
     /// display dimensions — feeds the AF overlay so rects stay
     /// correctly scaled across portrait↔landscape transitions.
     func commitDisplayed(stem: String, pixelSize: CGSize) {
+        PerfTracker.mark("commitDisplayed entered (stem=\(stem))")
         let entries = sortedEntries
         guard let idx = entries.firstIndex(where: { $0.stem == stem }) else {
             // Stem isn't in the current sorted view — typically a filter
@@ -1057,6 +1089,12 @@ final class ViewerState {
     /// singleton bursts (size 1) regardless of the current filter.
     private(set) var burstSizesByID: [Int: Int] = [:]
 
+    /// Per-stem 1-based position within its burst (e.g. "3 of 5"). Rebuilt
+    /// alongside `burstIDByStem` so the canvas stem pill's burst label
+    /// reads O(1) instead of doing a per-render `firstIndex(where:)` over
+    /// the full shoot. Nil for singletons / non-burst entries.
+    private(set) var burstPositionByStem: [String: (index: Int, total: Int)] = [:]
+
     /// Recompute `burstIDByStem` + `burstSizesByID` from the current
     /// `entrySequenceNumber` cache + name-sorted entry list. Called by the
     /// indexer whenever an exif batch lands new SequenceNumber data, and
@@ -1066,8 +1104,12 @@ final class ViewerState {
         guard let shoot else {
             burstIDByStem = [:]
             burstSizesByID = [:]
+            burstPositionByStem = [:]
             return
         }
+        #if DEBUG
+        let t0 = CFAbsoluteTimeGetCurrent()
+        #endif
         var ids: [String: Int] = [:]
         var nextID = 0
         var prevSeq: Int? = nil
@@ -1086,8 +1128,26 @@ final class ViewerState {
         }
         var sizes: [Int: Int] = [:]
         for id in ids.values { sizes[id, default: 0] += 1 }
+        // Per-burst 1-based position. Bursts are contiguous in
+        // shoot.entries (name-order), so a single forward walk produces
+        // (index, total) for every member in O(N) — replaces a per-render
+        // firstIndex(where:) over the full shoot for each stem pill.
+        var positions: [String: (index: Int, total: Int)] = [:]
+        var posCursor: [Int: Int] = [:]
+        for entry in shoot.entries {
+            guard let id = ids[entry.stem],
+                  let total = sizes[id], total >= 2 else { continue }
+            let next = (posCursor[id] ?? 0) + 1
+            posCursor[id] = next
+            positions[entry.stem] = (next, total)
+        }
         burstIDByStem = ids
         burstSizesByID = sizes
+        burstPositionByStem = positions
+        #if DEBUG
+        let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
+        Log.app.notice("recomputeBurstIDs: \(shoot.entries.count, privacy: .public) entries, \(ids.count, privacy: .public) burst stems, \(sizes.count, privacy: .public) bursts in \(ms, format: .fixed(precision: 1)) ms")
+        #endif
     }
 
     /// Where this entry sits in its burst, expressed as a top-edge bracket
@@ -1162,17 +1222,7 @@ final class ViewerState {
     /// singletons. Bursts are contiguous in `shoot.entries` (name-order),
     /// so we walk backward from `stem` until the burst id changes.
     func burstPosition(for stem: String) -> (index: Int, total: Int)? {
-        guard let id = burstIDByStem[stem],
-              let size = burstSizesByID[id], size >= 2,
-              let shoot,
-              let idx = shoot.entries.firstIndex(where: { $0.stem == stem })
-        else { return nil }
-        var start = idx
-        while start > 0,
-              burstIDByStem[shoot.entries[start - 1].stem] == id {
-            start -= 1
-        }
-        return (idx - start + 1, size)
+        burstPositionByStem[stem]
     }
 
     /// Move to a new entry within the current shoot (clamped). Index is into
@@ -1432,6 +1482,7 @@ final class ViewerState {
         entryXMPs[entry.stem] = updated
         stemsWithXMPOnDisk.insert(entry.stem)
         invalidateSortedEntriesCache()
+        invalidateShootStatsCache()
         currentEntryFiles.xmp = true
         let capturedEntry = entry
 
@@ -1457,6 +1508,8 @@ final class ViewerState {
                 }
                 self.entryXMPs[capturedEntry.stem] = previous
                 if !xmpWasOnDisk { self.stemsWithXMPOnDisk.remove(capturedEntry.stem) }
+                self.invalidateSortedEntriesCache()
+                self.invalidateShootStatsCache()
                 self.errorMessage = "Failed to write XMP for \(capturedEntry.stem): \(String(describing: error))"
                 Log.app.error("XMP write FAILED: \(capturedEntry.stem, privacy: .public) — \(String(describing: error), privacy: .public)")
             }
@@ -1482,6 +1535,7 @@ final class ViewerState {
         entryXMPs[target.stem] = updated
         stemsWithXMPOnDisk.insert(target.stem)
         invalidateSortedEntriesCache()
+        invalidateShootStatsCache()
         Task {
             do {
                 try await Task.detached(priority: .userInitiated) {
@@ -1490,6 +1544,8 @@ final class ViewerState {
             } catch {
                 self.entryXMPs[target.stem] = previous
                 if !xmpWasOnDisk { self.stemsWithXMPOnDisk.remove(target.stem) }
+                self.invalidateSortedEntriesCache()
+                self.invalidateShootStatsCache()
                 self.errorMessage = "Failed to write XMP for \(target.stem): \(String(describing: error))"
                 Log.app.error("XMP write FAILED: \(target.stem, privacy: .public) — \(String(describing: error), privacy: .public)")
             }
@@ -1539,6 +1595,7 @@ final class ViewerState {
         entryXMPs[entry.stem] = updated
         stemsWithXMPOnDisk.insert(entry.stem)
         invalidateSortedEntriesCache()
+        invalidateShootStatsCache()
         currentEntryFiles.xmp = true
         let capturedEntry = entry
 
@@ -1560,6 +1617,8 @@ final class ViewerState {
                 }
                 self.entryXMPs[capturedEntry.stem] = previous
                 if !xmpWasOnDisk { self.stemsWithXMPOnDisk.remove(capturedEntry.stem) }
+                self.invalidateSortedEntriesCache()
+                self.invalidateShootStatsCache()
                 self.errorMessage = "Failed to write XMP label for \(capturedEntry.stem): \(String(describing: error))"
                 Log.app.error("XMP label write FAILED: \(capturedEntry.stem, privacy: .public) — \(String(describing: error), privacy: .public)")
             }
@@ -1632,9 +1691,13 @@ final class ViewerState {
         self.currentAFSettings  = af?.settings ?? AFSettings()
         self.currentXMP         = entryXMPs[entry.stem] ?? .empty
         self.currentEntryFiles   = entryFiles(for: entry)
+        PerfTracker.mark("applyCurrentEntry: cache reads + entryFiles done")
         prioritizeBatch(forStem: entry.stem)
+        PerfTracker.mark("applyCurrentEntry: prioritizeBatch done")
         await applyRequestedVariant()
+        PerfTracker.mark("applyCurrentEntry: applyRequestedVariant returned")
         prefetchNeighborHEIFs()
+        PerfTracker.mark("applyCurrentEntry: prefetchNeighborHEIFs spawned")
     }
 
     /// Pure-Swift derivation: zero disk reads. The arw / hif / jpg slots

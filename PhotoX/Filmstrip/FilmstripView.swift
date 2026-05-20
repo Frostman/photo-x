@@ -66,6 +66,9 @@ struct FilmstripView: View {
                             }
                             return (first, last)
                         }()
+                        let _ = {
+                            PerfTracker.mark("FilmstripView.body: visible=\(visible.count), bursts=\(firstByBurst.count), brackets=\(useBrackets)")
+                        }()
                         ForEach(visible.indices, id: \.self) { vIdx in
                             let entry = visible[vIdx]
                             let sortedIdx = visibleSortedIndices[vIdx]
