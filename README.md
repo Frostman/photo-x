@@ -47,9 +47,6 @@ they go next.
   decisions. The matching ARW is only decoded when you zoom past
   100 % or press `Z` to switch variant. RAW decode is comparatively
   expensive; PhotoX doesn't pay for it until you actually want it.
-- **Card-safe.** Files mounted under `/Volumes/<anything>` are treated
-  as strictly read-only. PhotoX won't write XMP sidecars to a card;
-  copy the shoot to disk first if you want to record decisions.
 - **GPU display.** The canvas is a Metal layer with a small texture
   cache. EXIF orientation is applied via shader UV-transform (no CPU
   rotation pass for portrait frames). Back-and-forth between two
@@ -145,9 +142,8 @@ DSC04207.xmp    ← (optional) ratings / labels — written by PhotoX
 
 The Sony A1 II writes the RAW + HEIF pair when you turn on "RAW + HEIF"
 in the file format menu. PhotoX shows the HEIF instantly and decodes
-the ARW on demand. If you want to record ratings, copy the shoot to
-a writable disk first (cards are mounted read-write but PhotoX
-refuses to modify card contents).
+the ARW on demand. XMP sidecars are written next to the RAW wherever
+the files live (writable disk, SD card, CFExpress).
 
 ## Installation
 
