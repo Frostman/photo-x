@@ -246,7 +246,10 @@ final class ImageCanvasNSView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         if event.clickCount == 2 {
-            toggleFitOneToOne()
+            // From fit → zoom to 1:1 centred on the click point so the
+            // user lands on the pixel they targeted. From 1:1+ → back
+            // to fit (no focal needed — fit centres the image).
+            toggleFitOneToOne(focal: devicePoint(forEvent: event))
         }
     }
 
@@ -262,11 +265,32 @@ final class ImageCanvasNSView: NSView {
         nextResponder?.keyDown(with: event)
     }
 
-    func toggleFitOneToOne() {
+    /// Toggle between fit and 1:1. When zooming in from fit and a
+    /// `focal` is supplied, the resulting 1:1 viewport is centred on
+    /// that focal point (so the pixel the user double-clicked stays
+    /// under the cursor). When `focal` is nil — or when zooming back
+    /// out to fit — the image is centred.
+    func toggleFitOneToOne(focal: CGPoint? = nil) {
         let pz = viewport.pixelZoom(imagePixelSize: imagePixelSize, viewPixelSize: metalLayer.drawableSize)
         let target: CanvasViewport
         if pz < 0.99 {
-            target = CanvasViewport.oneToOne(imagePixelSize: imagePixelSize, viewPixelSize: metalLayer.drawableSize)
+            if let focal {
+                // From fit, the factor that reaches 1:1 is 1/fit.
+                // Zoom from .identity around the click point so the
+                // pixel under the cursor stays put. clampedOffset (in
+                // applyViewportFromGesture) keeps the edge from
+                // showing empty space if the focal point is near the
+                // image boundary.
+                let fit = CanvasViewport.fitScale(imagePixelSize: imagePixelSize,
+                                                   viewPixelSize: metalLayer.drawableSize)
+                let factor = fit > 0 ? 1.0 / fit : 1.0
+                target = CanvasViewport.identity.zoomed(by: factor,
+                                                         around: focal,
+                                                         viewSize: metalLayer.drawableSize)
+            } else {
+                target = CanvasViewport.oneToOne(imagePixelSize: imagePixelSize,
+                                                  viewPixelSize: metalLayer.drawableSize)
+            }
         } else {
             target = .identity
         }
