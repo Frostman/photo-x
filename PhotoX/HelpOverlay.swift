@@ -69,6 +69,7 @@ struct HelpOverlay: View {
             card
         }
         .transition(.opacity)
+        .accessibilityIdentifier("help.overlay")
     }
 
     private var card: some View {

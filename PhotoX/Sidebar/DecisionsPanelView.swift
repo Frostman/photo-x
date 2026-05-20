@@ -45,6 +45,7 @@ struct DecisionsPanelView: View {
                     }
                     .buttonStyle(.plain)
                     .help("Set rating to \(value)")
+                    .accessibilityIdentifier("decisions.star.\(value)")
                 }
             }
         }
@@ -75,6 +76,7 @@ struct DecisionsPanelView: View {
             }
             .buttonStyle(.plain)
             .help("Toggle reject (xmp:Rating = -1)")
+            .accessibilityIdentifier("decisions.reject")
         }
     }
 
@@ -101,6 +103,7 @@ struct DecisionsPanelView: View {
                     }
                     .buttonStyle(.plain)
                     .help("Set color label to \(name)")
+                    .accessibilityIdentifier("decisions.label.\(name)")
                 }
             }
         }

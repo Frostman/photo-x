@@ -380,6 +380,7 @@ struct ContentView: View {
                             .background(.black.opacity(0.4), in: Circle())
                             .foregroundStyle(.white)
                             .allowsHitTesting(false)
+                            .accessibilityIdentifier("canvas.loadingIndicator")
                     }
                 }
             } else if state.isDecoding {
@@ -831,6 +832,7 @@ struct ContentView: View {
                         .padding(.horizontal, 10)
                         .padding(.vertical, 5)
                         .background(.black.opacity(0.5), in: Capsule())
+                        .accessibilityIdentifier("canvas.statusText")
                 }
                 .padding(12)
             }
@@ -844,18 +846,24 @@ struct ContentView: View {
                 Text("\(state.displayedIndex + 1)/\(shoot.count)")
                     .frame(width: indexSlotWidth(for: shoot.count), alignment: .leading)
                     .foregroundStyle(.white.opacity(0.55))
+                    .accessibilityIdentifier("canvas.stemPill.indexLabel")
             }
             Text(copiedFlash ? "Copied path" : pair.stem)
                 .foregroundStyle(.white.opacity(0.85))
                 .onTapGesture { copyPath(for: pair) }
                 .help("Click to copy ARW path (HIF if ARW is missing)")
+                .accessibilityIdentifier("canvas.stemPill.stem")
             Text(filesBadge)
                 .foregroundStyle(.white.opacity(0.45))
+                .accessibilityIdentifier("canvas.stemPill.files")
         }
         .font(.caption.monospacedDigit())
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
         .background(.black.opacity(0.5), in: Capsule())
+        // No container-level identifier: SwiftUI propagates the
+        // parent identifier to every accessibility descendant,
+        // clobbering the per-Text identifiers we need for tests.
     }
 
     private var filesBadge: String {

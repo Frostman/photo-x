@@ -99,7 +99,10 @@ build:
 test *only="":
     #!/usr/bin/env bash
     set -euo pipefail
-    ARGS=(test -scheme PhotoX -configuration Debug -destination 'platform=macOS')
+    # -only-testing:PhotoXTests pins this to the unit suite — the
+    # scheme also has PhotoXUITests under it, but those are slow and
+    # go through `just e2e` instead.
+    ARGS=(test -scheme PhotoX -configuration Debug -destination 'platform=macOS' -only-testing:PhotoXTests)
     for filter in {{only}}; do
         ARGS+=(-only-testing:"$filter")
     done
@@ -107,6 +110,22 @@ test *only="":
     # almost always means a stuck subprocess or runaway test, so we
     # fail fast instead of waiting indefinitely.
     timeout 60 xcodebuild "${ARGS[@]}"
+
+# Run the E2E (XCUITest) suite. Slower than `just test` because each
+# test launches the real app and clones the full sample/ fixture into
+# a temp dir. 10-min hard cap (anything longer is almost certainly a
+# hang — e.g. a permission dialog popped or the app deadlocked).
+#   just e2e                                            → full suite
+#   just e2e PhotoXUITests/SmokeTests                   → one class
+#   just e2e PhotoXUITests/RatingTests/test_starRating_writesXMPSidecar → one method
+e2e *only="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ARGS=(test -scheme PhotoX -configuration Debug -destination 'platform=macOS' -only-testing:PhotoXUITests)
+    for filter in {{only}}; do
+        ARGS+=(-only-testing:"$filter")
+    done
+    timeout 600 xcodebuild "${ARGS[@]}"
 
 # Regenerate the Release + Debug app iconsets via the icon generator.
 # Writes PNGs into PhotoX/Assets.xcassets/{AppIcon,AppIcon-Debug}.appiconset/.

@@ -44,6 +44,7 @@ struct FilmstripView: View {
                                 onAppear: { state.prioritizeBatch(forStem: pair.stem) }
                             )
                             .id(sortedIdx)
+                            .accessibilityIdentifier("filmstrip.thumb.\(sortedIdx)")
                         }
                     }
                 }
@@ -55,6 +56,7 @@ struct FilmstripView: View {
             .overlay(alignment: .top) {
                 Rectangle().fill(Color(nsColor: .separatorColor)).frame(height: 1)
             }
+            .accessibilityIdentifier("filmstrip.container")
             .onAppear {
                 proxy.scrollTo(state.displayedIndex, anchor: .center)
             }

@@ -5,20 +5,25 @@ struct ExifPanelView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            row("Camera", summary.camera)
-            row("Lens", summary.lens)
-            row("Shutter", summary.shutterSpeed)
-            row("Aperture", summary.aperture)
-            row("ISO", summary.iso)
-            row("Focal", summary.focalLength)
-            row("Exp Bias", summary.exposureCompensation)
-            row("Dimensions", dimensionsString)
-            row("Captured", capturedString)
+            row("Camera",     "camera",     summary.camera)
+            row("Lens",       "lens",       summary.lens)
+            row("Shutter",    "shutter",    summary.shutterSpeed)
+            row("Aperture",   "aperture",   summary.aperture)
+            row("ISO",        "iso",        summary.iso)
+            row("Focal",      "focal",      summary.focalLength)
+            row("Exp Bias",   "expBias",    summary.exposureCompensation)
+            row("Dimensions", "dimensions", dimensionsString)
+            row("Captured",   "captured",   capturedString)
         }
+        // No container-level identifier — SwiftUI would propagate it
+        // to every descendant a11y node and clobber the per-row keys.
     }
 
+    /// `key` is the stable XCUITest identifier suffix — independent of the
+    /// localised label string so renaming the user-facing text doesn't break
+    /// E2E assertions.
     @ViewBuilder
-    private func row(_ label: String, _ value: String?) -> some View {
+    private func row(_ label: String, _ key: String, _ value: String?) -> some View {
         if let value, !value.isEmpty {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(label)
@@ -30,8 +35,10 @@ struct ExifPanelView: View {
                     .foregroundStyle(.primary)
                     .lineLimit(2)
                     .truncationMode(.tail)
+                    .accessibilityIdentifier("exif.row.\(key).value")
                 Spacer(minLength: 0)
             }
+            .accessibilityIdentifier("exif.row.\(key)")
         }
     }
 

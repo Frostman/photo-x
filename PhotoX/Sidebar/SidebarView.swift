@@ -38,6 +38,7 @@ struct SidebarView: View {
         .overlay(alignment: .leading) {
             Rectangle().fill(Color(nsColor: .separatorColor)).frame(width: 1)
         }
+        .accessibilityIdentifier("sidebar.container")
     }
 
     @ViewBuilder

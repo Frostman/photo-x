@@ -2,12 +2,29 @@ import SwiftUI
 import AppKit
 import UserNotifications
 
+/// Launch-arg helpers. XCUITest passes argv via
+/// `app.launchArguments = ["-photoxDisableSparkle", "YES", ...]` —
+/// AppKit splits those into a flat list and exposes them through
+/// `ProcessInfo`. We just look for the bare flag NAME; whatever
+/// follows it (`"YES"`) is irrelevant. Defined at file scope so
+/// AppDelegate can read them too.
+enum LaunchFlags {
+    static let disableSparkle = ProcessInfo.processInfo.arguments.contains("-photoxDisableSparkle")
+    /// Suppresses one-shot first-launch UX (window-maximize side effect,
+    /// notification-permission prompt) that would interfere with
+    /// XCUITest's expectations of a default frame and a quiet session.
+    static let uiTestMode = ProcessInfo.processInfo.arguments.contains("-photoxUITestMode")
+}
+
 @main
 struct PhotoXApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var viewerState = ViewerState()
     @State private var recents = RecentShoots.shared
-    @State private var updater = UpdaterController()
+    /// Build the Sparkle updater unless E2E tests disabled it via
+    /// `-photoxDisableSparkle`. Optional so the App keeps a single
+    /// nil-safe ref instead of branching every read site.
+    @State private var updater: UpdaterController? = LaunchFlags.disableSparkle ? nil : UpdaterController()
     @AppStorage(SettingsKey.appearance, store: AppDefaults.shared) private var appearanceRaw = SettingsKey.Defaults.appearance
 
     private var appearance: AppearanceMode {
@@ -34,7 +51,9 @@ struct PhotoXApp: App {
                 }
             }
             CommandGroup(after: .appInfo) {
-                CheckForUpdatesView(controller: updater)
+                if let updater {
+                    CheckForUpdatesView(controller: updater)
+                }
             }
             CommandGroup(replacing: .newItem) {
                 Button("Open Folder…") {
@@ -146,7 +165,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
         DispatchQueue.main.async {
             guard let window = NSApplication.shared.windows.first(where: { $0.canBecomeMain })
             else { return }
-            if let screen = window.screen ?? NSScreen.main {
+            // Skip the auto-maximize under -photoxUITestMode YES so
+            // XCUITest sees a predictable default frame (the maximize
+            // races with the test's first query and can return stale
+            // coordinates).
+            if !LaunchFlags.uiTestMode,
+               let screen = window.screen ?? NSScreen.main {
                 window.setFrame(screen.visibleFrame, display: true)
             }
             // Become the window delegate so we can refuse to close while an

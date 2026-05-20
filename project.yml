@@ -145,18 +145,33 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: dev.frostman.PhotoXTests
         GENERATE_INFOPLIST_FILE: YES
 
+  PhotoXUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - path: PhotoXUITests
+    dependencies:
+      - target: PhotoX
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.frostman.PhotoXUITests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: PhotoX
+
 schemes:
   PhotoX:
     build:
       targets:
         PhotoX: all
         PhotoXTests: [test]
+        PhotoXUITests: [test]
     run:
       config: Debug
     test:
       config: Debug
       targets:
         - PhotoXTests
+        - PhotoXUITests
     profile:
       config: Release
     analyze:
