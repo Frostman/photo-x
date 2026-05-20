@@ -28,7 +28,7 @@ enum SettingsKey {
         static let autoAdvance = false
         static let autoAdvanceSidebar = false
         static let defaultFolderPath = ""  // empty = no auto-load on launch
-        static let showCanvasLoadingIndicator = true
+        static let showCanvasLoadingIndicator = false
     }
 }
 
@@ -84,6 +84,7 @@ struct SettingsView: View {
     @AppStorage(SettingsKey.autoAdvance,        store: AppDefaults.shared) private var autoAdvance         = SettingsKey.Defaults.autoAdvance
     @AppStorage(SettingsKey.autoAdvanceSidebar, store: AppDefaults.shared) private var autoAdvanceSidebar  = SettingsKey.Defaults.autoAdvanceSidebar
     @AppStorage(SettingsKey.defaultFolderPath,  store: AppDefaults.shared) private var defaultFolderPath   = SettingsKey.Defaults.defaultFolderPath
+    @AppStorage(SettingsKey.showCanvasLoadingIndicator, store: AppDefaults.shared) private var showCanvasLoadingIndicator = SettingsKey.Defaults.showCanvasLoadingIndicator
 
     var body: some View {
         Form {
@@ -130,6 +131,11 @@ struct SettingsView: View {
                 Text("Loaded automatically on launch. If empty or missing, the window opens blank and you can pick a folder with ⌘O.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+
+            Section("Advanced") {
+                Toggle("Show loading spinner on canvas during nav", isOn: $showCanvasLoadingIndicator)
+                    .help("Adds a small centred spinner over the image whenever the canvas is loading a different pair than the one you've navigated to. Off by default — most nav is fast enough that the spinner would just flash.")
             }
         }
         .formStyle(.grouped)
