@@ -137,6 +137,17 @@
         type="application/octet-stream"
         sparkle:edSignature="GuisDnzzYa4XUZcgXFbI9w+EgO8Za9DigIDR5yspvlWinyuZu9nn+/YaJqDZCtAtORl6+v4AFS2b1SY9X1dzAw==" length="11166319" />
     </item>
+    <item>
+      <title>v0.172.0-60a68e9ee</title>
+      <pubDate>Tue, 19 May 2026 17:43:37 -0700</pubDate>
+      <sparkle:version>172</sparkle:version>
+      <sparkle:shortVersionString>0.172.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <enclosure
+        url="https://github.com/Frostman/photo-x/releases/download/v0.172.0/PhotoX-v0.172.0-60a68e9ee.dmg"
+        type="application/octet-stream"
+        sparkle:edSignature="9uqk5Yzx8ShDw+Uy1uPOCNIW3lwAFY6xd8JjQ9m5cvFJuO1EqG+6FWnaVNK3MzsZE2TwrWp7MLKw6dksZM8TDg==" length="11169315" />
+    </item>
     <!-- scripts/release.sh splices new <item> entries here, just before </channel>. -->
   </channel>
 </rss>
