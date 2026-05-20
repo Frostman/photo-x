@@ -48,35 +48,35 @@ final class XMPSidecarTests: XCTestCase {
     func test_writeRating_thenRead_roundTrips() throws {
         let pair = makePair("A")
         try XMPSidecarWriter.updateRating(4, for: pair)
-        XCTAssertEqual(XMPSidecarReader.read(for: pair).rating, 4)
+        XCTAssertEqual(XMPSidecarReader.read(for: pair)?.rating, 4)
     }
 
     func test_writeReject_readsAsMinusOne() throws {
         let pair = makePair("A")
         try XMPSidecarWriter.updateRating(-1, for: pair)
         let xmp = XMPSidecarReader.read(for: pair)
-        XCTAssertEqual(xmp.rating, -1)
-        XCTAssertTrue(xmp.isReject)
+        XCTAssertEqual(xmp?.rating, -1)
+        XCTAssertEqual(xmp?.isReject, true)
     }
 
     func test_writeLabel_thenRead_roundTrips() throws {
         let pair = makePair("A")
         try XMPSidecarWriter.updateLabel("Red", for: pair)
-        XCTAssertEqual(XMPSidecarReader.read(for: pair).label, "Red")
+        XCTAssertEqual(XMPSidecarReader.read(for: pair)?.label, "Red")
     }
 
     func test_clearRating_removesTag() throws {
         let pair = makePair("A")
         try XMPSidecarWriter.updateRating(5, for: pair)
         try XMPSidecarWriter.updateRating(nil, for: pair)
-        XCTAssertNil(XMPSidecarReader.read(for: pair).rating)
+        XCTAssertNil(XMPSidecarReader.read(for: pair)?.rating)
     }
 
     func test_clearLabel_removesTag() throws {
         let pair = makePair("A")
         try XMPSidecarWriter.updateLabel("Green", for: pair)
         try XMPSidecarWriter.updateLabel(nil, for: pair)
-        XCTAssertNil(XMPSidecarReader.read(for: pair).label)
+        XCTAssertNil(XMPSidecarReader.read(for: pair)?.label)
     }
 
     // MARK: invariants
@@ -88,8 +88,8 @@ final class XMPSidecarTests: XCTestCase {
         try XMPSidecarWriter.updateRating(4, for: pair)
         try XMPSidecarWriter.updateLabel("Blue", for: pair)
         let xmp = XMPSidecarReader.read(for: pair)
-        XCTAssertEqual(xmp.rating, 4)
-        XCTAssertEqual(xmp.label, "Blue")
+        XCTAssertEqual(xmp?.rating, 4)
+        XCTAssertEqual(xmp?.label, "Blue")
     }
 
     func test_writes_preserveForeignTagsInExistingXMP() throws {
@@ -118,13 +118,13 @@ final class XMPSidecarTests: XCTestCase {
                       "Custom Lightroom tags must survive a rating update")
         XCTAssertTrue(raw.contains("Yellow"),
                       "Pre-existing label must survive a rating update")
-        XCTAssertEqual(XMPSidecarReader.read(for: pair).rating, 2)
-        XCTAssertEqual(XMPSidecarReader.read(for: pair).label, "Yellow")
+        XCTAssertEqual(XMPSidecarReader.read(for: pair)?.rating, 2)
+        XCTAssertEqual(XMPSidecarReader.read(for: pair)?.label, "Yellow")
     }
 
-    func test_reader_emptyForMissingFile() {
+    func test_reader_nilForMissingFile() {
         let pair = makePair("Z")
-        XCTAssertEqual(XMPSidecarReader.read(for: pair), .empty)
+        XCTAssertNil(XMPSidecarReader.read(for: pair))
     }
 
     func test_reader_emptyForMalformedXMP() throws {

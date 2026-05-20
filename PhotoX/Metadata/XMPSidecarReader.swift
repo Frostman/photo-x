@@ -5,15 +5,19 @@ import ImageIO
 enum XMPSidecarReader {
     /// Reads the XMP sidecar for an entry (looked up as `<stem>.xmp`
     /// next to the RAW when present, else next to the preview file —
-    /// matches Lightroom's convention). Returns `.empty` if the file
-    /// is missing, unreadable, or malformed. Read-only.
-    static func read(for entry: PhotoEntry) -> XMPSidecar {
+    /// matches Lightroom's convention). Returns `nil` when the file
+    /// is missing (the caller distinguishes "no file on disk" from
+    /// "file present but blank" — the latter returns
+    /// `XMPSidecar.empty`). Unreadable / malformed XMPs that DO
+    /// exist on disk return `.empty` so the indexer can still flag
+    /// the stem as "has-XMP" for the pill badge. Read-only.
+    static func read(for entry: PhotoEntry) -> XMPSidecar? {
         let url = entry.xmpURL
-        guard FileManager.default.fileExists(atPath: url.path),
-              let data = try? Data(contentsOf: url) else {
-            return .empty
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return nil
         }
-        guard let metadata = CGImageMetadataCreateFromXMPData(data as CFData) else {
+        guard let data = try? Data(contentsOf: url),
+              let metadata = CGImageMetadataCreateFromXMPData(data as CFData) else {
             #if DEBUG
             Log.app.notice("XMPSidecarReader: failed to parse \(url.lastPathComponent, privacy: .public)")
             #endif

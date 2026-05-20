@@ -48,6 +48,24 @@ struct FilmstripView: View {
                         }()
                         let visible = enumeratedVisible.map(\.element)
                         let visibleSortedIndices = enumeratedVisible.map(\.offset)
+                        // Precompute first/last visible index per burst id —
+                        // O(visible) once per render. Per-cell bracket lookup
+                        // is then O(1). Replaces the previous static helper
+                        // call that walked the visible array left + right per
+                        // cell (worst case O(visible²) per render — the prime
+                        // filmstrip-perf regression since v0.182.0).
+                        let (firstByBurst, lastByBurst): ([Int: Int], [Int: Int]) = {
+                            guard useBrackets else { return ([:], [:]) }
+                            var first: [Int: Int] = [:]
+                            var last:  [Int: Int] = [:]
+                            for (vIdx, entry) in visible.enumerated() {
+                                guard let id = burstIDs[entry.stem],
+                                      (burstSizes[id] ?? 0) >= 2 else { continue }
+                                if first[id] == nil { first[id] = vIdx }
+                                last[id] = vIdx
+                            }
+                            return (first, last)
+                        }()
                         ForEach(visible.indices, id: \.self) { vIdx in
                             let entry = visible[vIdx]
                             let sortedIdx = visibleSortedIndices[vIdx]
@@ -62,17 +80,25 @@ struct FilmstripView: View {
                                 else { return nil }
                                 return size
                             }()
+                            let segment: ViewerState.BurstSegment = {
+                                guard useBrackets,
+                                      let myID = burstIDs[entry.stem],
+                                      let first = firstByBurst[myID],
+                                      let last  = lastByBurst[myID]
+                                else { return .none }
+                                if first == last { return .solo }
+                                switch vIdx {
+                                case first: return .start
+                                case last:  return .end
+                                default:    return .middle
+                                }
+                            }()
                             FilmstripThumbnailView(
                                 entry: entry,
                                 isSelected: sortedIdx == state.displayedIndex,
                                 thumbnail: state.thumbnails[entry.stem],
                                 xmp: state.entryXMPs[entry.stem] ?? .empty,
-                                burstSegment: useBrackets
-                                    ? ViewerState.burstSegment(at: vIdx,
-                                                               in: visible,
-                                                               ids: burstIDs,
-                                                               sizes: burstSizes)
-                                    : .none,
+                                burstSegment: segment,
                                 collapsedBurstSize: collapsedBurstSize,
                                 onTap: { state.navigate(to: sortedIdx) },
                                 onAppear: { state.prioritizeBatch(forStem: entry.stem) }

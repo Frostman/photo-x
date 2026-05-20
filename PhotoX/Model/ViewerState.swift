@@ -156,29 +156,41 @@ final class ViewerState {
     /// does NOT remap currentIndex — always go through setSortMode.
     private(set) var sortMode: SortMode = .name
 
-    /// `shoot.entries` re-ordered per `sortMode`. Recomputed on every access;
-    /// for the largest shoots we test against (~5 k entries) that's <10 ms.
-    /// Score-mode ties break on stem so the order is deterministic.
+    /// `shoot.entries` re-ordered per `sortMode`. Cached; invalidated on
+    /// shoot switch, sort-mode change, and any rating mutation that can
+    /// change ordering. `.name` mode is O(1) anyway; score modes were
+    /// O(N log N) per access (~5–10× per nav press → a latent cliff in
+    /// score-sort modes that the cache erases).
     var sortedEntries: [PhotoEntry] {
+        if let cached = sortedEntriesCache { return cached }
         guard let shoot else { return [] }
+        let computed: [PhotoEntry]
         switch sortMode {
         case .name:
-            return shoot.entries
+            computed = shoot.entries
         case .scoreAscending:
-            return shoot.entries.sorted { a, b in
+            computed = shoot.entries.sorted { a, b in
                 let sa = sortScore(of: a)
                 let sb = sortScore(of: b)
                 if sa != sb { return sa < sb }
                 return a.stem < b.stem
             }
         case .scoreDescending:
-            return shoot.entries.sorted { a, b in
+            computed = shoot.entries.sorted { a, b in
                 let sa = sortScore(of: a)
                 let sb = sortScore(of: b)
                 if sa != sb { return sa > sb }
                 return a.stem < b.stem
             }
         }
+        sortedEntriesCache = computed
+        return computed
+    }
+
+    private var sortedEntriesCache: [PhotoEntry]?
+
+    private func invalidateSortedEntriesCache() {
+        sortedEntriesCache = nil
     }
 
     /// Numeric score for sort comparisons. Rejected (-1) sinks below unrated
@@ -195,6 +207,7 @@ final class ViewerState {
         guard newMode != sortMode else { return }
         let currentStem = entry?.stem
         sortMode = newMode
+        invalidateSortedEntriesCache()
         if let stem = currentStem,
            let idx = sortedEntries.firstIndex(where: { $0.stem == stem }) {
             currentIndex = idx
@@ -270,6 +283,13 @@ final class ViewerState {
 
     var thumbnails: [String: CGImage] = [:]
     var entryXMPs: [String: XMPSidecar] = [:]
+    /// Stems whose `.xmp` sidecar exists on disk. Populated by the
+    /// XMP indexer pipeline as it scans (the reader returns nil for
+    /// missing files), and by the rating/label/reject mutators when
+    /// a successful write creates the sidecar. Read by `entryFiles`
+    /// for the per-nav files-badge so we don't have to `stat()` the
+    /// sidecar on every arrow press. Cleared on shoot switch.
+    private(set) var stemsWithXMPOnDisk: Set<String> = []
     /// Sony `SequenceNumber` per entry stem; filter-independent (every loaded
     /// entry has its raw number). Drives `burstIDByStem` for the filmstrip
     /// bracket overlay.
@@ -549,12 +569,14 @@ final class ViewerState {
         Task { await pipeline.previewBytes.clear() }
         thumbnails.removeAll()
         entryXMPs.removeAll()
+        stemsWithXMPOnDisk.removeAll()
         entryAFData.removeAll()
         entrySequenceNumber.removeAll()
         entryExif.removeAll()
         entryHistograms.removeAll()
         burstIDByStem.removeAll()
         burstSizesByID.removeAll()
+        sortedEntriesCache = nil
         indexingStatus = .idle
         indexingProgress = .init()
         indexingTimings = .init()
@@ -683,11 +705,13 @@ final class ViewerState {
         shootGeneration &+= 1
         thumbnails.removeAll()
         entryXMPs.removeAll()
+        stemsWithXMPOnDisk.removeAll()
         entryAFData.removeAll()
         entrySequenceNumber.removeAll()
         entryExif.removeAll()
         burstIDByStem.removeAll()
         burstSizesByID.removeAll()
+        sortedEntriesCache = nil
         indexingProgress = .init()
         indexingTimings = .init()
         indexingCompletedAt = nil
@@ -765,6 +789,7 @@ final class ViewerState {
             await queue.markDone(id)
         }
     }
+
 
     /// Basic-EXIF + thumbs pipeline. One HEIF box parse per file gets
     /// us BOTH the embedded JPEG bytes (→ filmstrip thumbnail) AND the
@@ -859,19 +884,24 @@ final class ViewerState {
         }
     }
 
-    private func flushXMPSlice(_ items: [(stem: String, xmp: XMPSidecar)],
+    private func flushXMPSlice(_ items: [(stem: String, xmp: XMPSidecar?)],
                                generation: Int) {
         guard shootGeneration == generation else { return }
         for (stem, xmp) in items {
+            guard let xmp else { continue }  // file missing → leave entryXMPs untouched
+            // File present on disk — record for the per-nav files badge.
+            stemsWithXMPOnDisk.insert(stem)
             // Don't overwrite an optimistic user rating — see Phase 4c
             // notes; in-memory wins if the user has already touched it.
             if entryXMPs[stem] == nil { entryXMPs[stem] = xmp }
         }
-        if let stem = entry?.stem, let xmp = items.first(where: { $0.stem == stem })?.xmp,
+        if let stem = entry?.stem,
+           let xmp = items.first(where: { $0.stem == stem })?.xmp ?? nil,
            self.currentXMP == .empty {
             self.currentXMP = xmp
         }
-        if let stem = displayedEntry?.stem, let xmp = items.first(where: { $0.stem == stem })?.xmp,
+        if let stem = displayedEntry?.stem,
+           let xmp = items.first(where: { $0.stem == stem })?.xmp ?? nil,
            self.displayedXMP == .empty {
             self.displayedXMP = xmp
         }
@@ -1395,10 +1425,13 @@ final class ViewerState {
         guard !isLoadingDisplayedPair else { return }
         guard let entry else { return }
         let previous = currentXMP
+        let xmpWasOnDisk = stemsWithXMPOnDisk.contains(entry.stem)
         var updated = currentXMP
         updated.rating = rating
         currentXMP = updated
         entryXMPs[entry.stem] = updated
+        stemsWithXMPOnDisk.insert(entry.stem)
+        invalidateSortedEntriesCache()
         currentEntryFiles.xmp = true
         let capturedEntry = entry
 
@@ -1423,6 +1456,7 @@ final class ViewerState {
                     self.currentXMP = previous
                 }
                 self.entryXMPs[capturedEntry.stem] = previous
+                if !xmpWasOnDisk { self.stemsWithXMPOnDisk.remove(capturedEntry.stem) }
                 self.errorMessage = "Failed to write XMP for \(capturedEntry.stem): \(String(describing: error))"
                 Log.app.error("XMP write FAILED: \(capturedEntry.stem, privacy: .public) — \(String(describing: error), privacy: .public)")
             }
@@ -1442,9 +1476,12 @@ final class ViewerState {
     /// `setRating`'s optimistic + write + rollback shape.
     func setRating(_ rating: Int?, for target: PhotoEntry) {
         let previous = entryXMPs[target.stem] ?? .empty
+        let xmpWasOnDisk = stemsWithXMPOnDisk.contains(target.stem)
         var updated = previous
         updated.rating = rating
         entryXMPs[target.stem] = updated
+        stemsWithXMPOnDisk.insert(target.stem)
+        invalidateSortedEntriesCache()
         Task {
             do {
                 try await Task.detached(priority: .userInitiated) {
@@ -1452,6 +1489,7 @@ final class ViewerState {
                 }.value
             } catch {
                 self.entryXMPs[target.stem] = previous
+                if !xmpWasOnDisk { self.stemsWithXMPOnDisk.remove(target.stem) }
                 self.errorMessage = "Failed to write XMP for \(target.stem): \(String(describing: error))"
                 Log.app.error("XMP write FAILED: \(target.stem, privacy: .public) — \(String(describing: error), privacy: .public)")
             }
@@ -1494,10 +1532,13 @@ final class ViewerState {
         guard !isLoadingDisplayedPair else { return }
         guard let entry else { return }
         let previous = currentXMP
+        let xmpWasOnDisk = stemsWithXMPOnDisk.contains(entry.stem)
         var updated = currentXMP
         updated.label = label
         currentXMP = updated
         entryXMPs[entry.stem] = updated
+        stemsWithXMPOnDisk.insert(entry.stem)
+        invalidateSortedEntriesCache()
         currentEntryFiles.xmp = true
         let capturedEntry = entry
 
@@ -1518,6 +1559,7 @@ final class ViewerState {
                     self.currentXMP = previous
                 }
                 self.entryXMPs[capturedEntry.stem] = previous
+                if !xmpWasOnDisk { self.stemsWithXMPOnDisk.remove(capturedEntry.stem) }
                 self.errorMessage = "Failed to write XMP label for \(capturedEntry.stem): \(String(describing: error))"
                 Log.app.error("XMP label write FAILED: \(capturedEntry.stem, privacy: .public) — \(String(describing: error), privacy: .public)")
             }
@@ -1595,37 +1637,22 @@ final class ViewerState {
         prefetchNeighborHEIFs()
     }
 
+    /// Pure-Swift derivation: zero disk reads. The arw / hif / jpg slots
+    /// are stable for the lifetime of the entry within a shoot (cards
+    /// are read-only for PhotoX; mid-session add/remove on writable
+    /// disks would require a re-scan anyway). XMP presence comes from
+    /// `stemsWithXMPOnDisk`, populated by the XMP indexer pipeline and
+    /// by rating-mutator writes. Replaces the 12 `fileExists` probes
+    /// the per-nav badge computation used to do — the prime cause of
+    /// the nav-perf regression since v0.182.0.
     private func entryFiles(for entry: PhotoEntry) -> EntryFiles {
-        let fm = FileManager.default
-        let folder = entry.previewURL.deletingLastPathComponent()
-        // .hif covers HIF/HEIF/HEIC; .jpg covers JPG/JPEG. We probe
-        // both regardless of which one is the active previewURL, so
-        // the pill badge can honestly report what's on disk.
+        let ext = entry.previewURL.pathExtension.lowercased()
         return EntryFiles(
-            arw: entry.rawURL.map { fm.fileExists(atPath: $0.path) } ?? false,
-            hif: fileExistsCaseInsensitiveAny(at: folder, stem: entry.stem,
-                                              exts: ["HIF", "HEIF", "HEIC"]),
-            jpg: fileExistsCaseInsensitiveAny(at: folder, stem: entry.stem,
-                                              exts: ["JPG", "JPEG"]),
-            xmp: fm.fileExists(atPath: entry.xmpURL.path)
+            arw: entry.rawURL != nil,
+            hif: ext == "hif" || ext == "heif" || ext == "heic",
+            jpg: ext == "jpg" || ext == "jpeg",
+            xmp: stemsWithXMPOnDisk.contains(entry.stem)
         )
-    }
-
-    /// Existence probe that tries each extension in both upper and
-    /// lower case (`.HIF` and `.hif`). macOS default APFS is case-
-    /// insensitive but a card formatted exFAT can be sensitive.
-    private func fileExistsCaseInsensitiveAny(at folder: URL, stem: String,
-                                               exts: [String]) -> Bool {
-        let fm = FileManager.default
-        for ext in exts {
-            if fm.fileExists(atPath: folder.appendingPathComponent("\(stem).\(ext)").path) {
-                return true
-            }
-            if fm.fileExists(atPath: folder.appendingPathComponent("\(stem).\(ext.lowercased())").path) {
-                return true
-            }
-        }
-        return false
     }
 
     /// Warm the MTLTextureCache for neighbours of `currentIndex` so the
