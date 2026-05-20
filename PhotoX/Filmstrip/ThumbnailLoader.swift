@@ -14,28 +14,39 @@ enum ThumbnailLoader {
     }
 
     /// Extract a small CGImage suitable for the filmstrip + the standard
-    /// EXIF that sits alongside it in the HEIF, along with per-step
-    /// timings. One file read powers both outputs.
+    /// EXIF that sits alongside it in the source preview file, along
+    /// with per-step timings. One file read powers both outputs.
     ///
-    /// FAST PATH: HEIFs from camera cards carry an embedded JPEG
-    /// thumbnail (Sony A1 II: ~160×120, 8 KB) AND an Exif item (TIFF
-    /// block with Make/Model/Lens/exposure/etc.). Both live in the
-    /// first ~256 KB of the file. Reading those bytes once and parsing
+    /// FAST PATH (HIF / HEIF / HEIC): HEIFs from camera cards carry an
+    /// embedded JPEG thumbnail (Sony A1 II: ~160×120, 8 KB) AND an
+    /// Exif item (TIFF block with Make/Model/Lens/exposure/etc.). Both
+    /// live in the first ~256 KB of the file. Parsing those bytes
     /// in-process (~5 ms total) gives us thumb + ExifSummary without
     /// any subprocess spawn or ImageIO call.
     ///
-    /// FALLBACK: if the HEIF parser can't find a JPEG item (e.g.
-    /// non-Sony HEICs), revert to `Data(contentsOf:)` + CGImageSource
-    /// thumbnail extraction. ExifSummary stays nil in that case —
-    /// caller (the indexer) leaves `pairExif` empty for that file
-    /// (sidebar shows no metadata; fine since it's a rare fallback).
-    /// Returns `(nil, nil, nil)` only if both paths fail.
+    /// FAST PATH (JPG / JPEG): camera JPGs carry the same kind of
+    /// IFD1 thumbnail inside their APP1 EXIF segment, with the same
+    /// 160×120 sizing. Same in-process treatment via
+    /// `JPEGEmbeddedThumbnail` — no ImageIO call until the canvas
+    /// wants the full image.
+    ///
+    /// FALLBACK: if neither parser can produce a thumbnail (web-edited
+    /// JPGs without IFD1, non-Sony HEICs), revert to ImageIO. No
+    /// ExifSummary in that case — caller (the indexer) leaves
+    /// `entryExif` empty for that file and the sidebar shows nothing
+    /// until the advanced-EXIF pipeline catches up. Returns
+    /// `(nil, nil, nil)` only if every path fails.
     static func loadInstrumented(from url: URL, maxPixelSize: Int = 240)
         -> (image: CGImage?, exif: ExifSummary?, stats: Stats?)
     {
-        // FAST PATH: embedded JPEG + Exif item in one file read.
         let t0 = CFAbsoluteTimeGetCurrent()
-        if let extracted = try? HEIFEmbeddedThumbnail.extract(from: url),
+        let ext = url.pathExtension.lowercased()
+        // FAST PATH: embedded thumbnail + EXIF in one header read.
+        // Dispatch on extension — the parsers diverge in container
+        // shape (ISOBMFF box tree vs JPG marker chain) even though
+        // both extract a TIFF block + a tiny embedded JPG.
+        if let extracted = extractEmbedded(from: url, ext: ext),
+           extracted.jpeg.isEmpty == false,
            let raw = decode(data: extracted.jpeg, maxPixelSize: maxPixelSize) {
             // Crop FIRST in landscape (Sony letterboxes 3:2 scene into a
             // 4:3 thumb), THEN rotate — reversing the order would crop
@@ -43,9 +54,7 @@ enum ThumbnailLoader {
             let cropped = cropToCameraAspect3by2(raw)
             let img = OrientationApplier.apply(orientation: extracted.exifOrientation,
                                                to: cropped)
-            // Parse the TIFF block from the HEIF Exif item. Returns nil
-            // if the Exif item was missing OR the parser failed; caller
-            // tolerates either.
+            // Parse the TIFF block from the extracted EXIF.
             let exif: ExifSummary? = extracted.exifBytes.flatMap(TIFFEXIFParser.parse)
             let elapsed = (CFAbsoluteTimeGetCurrent() - t0) * 1000.0
             return (img, exif, Stats(
@@ -54,8 +63,9 @@ enum ThumbnailLoader {
                 decodeMS:  elapsed
             ))
         }
-        // FALLBACK: ImageIO. No ExifSummary in this path — by the time
-        // we're here the file isn't a camera HEIF we recognise.
+        // FALLBACK: ImageIO. No ExifSummary in this path — by the
+        // time we're here the file isn't a camera preview we
+        // recognise.
         let data: Data
         do {
             data = try Data(contentsOf: url)
@@ -70,6 +80,26 @@ enum ThumbnailLoader {
             readMS:    (t1 - t0) * 1000.0,
             decodeMS:  (t2 - t1) * 1000.0
         ))
+    }
+
+    /// Common shape for the HEIF and JPEG embedded-thumb paths so
+    /// the caller above stays uniform. `Extracted` is `HEIFEmbedded
+    /// Thumbnail.Extracted` because that's the type that was already
+    /// in use here — the JPEG path adapts into it.
+    private static func extractEmbedded(from url: URL, ext: String)
+        -> HEIFEmbeddedThumbnail.ExtractedThumbnail?
+    {
+        if ["hif", "heif", "heic"].contains(ext) {
+            return try? HEIFEmbeddedThumbnail.extract(from: url)
+        }
+        if ["jpg", "jpeg"].contains(ext),
+           let jpeg = try? JPEGEmbeddedThumbnail.extract(from: url)
+        {
+            return .init(jpeg: jpeg.jpeg,
+                         exifOrientation: jpeg.exifOrientation,
+                         exifBytes: jpeg.exifBytes)
+        }
+        return nil
     }
 
     /// Convenience: throw away the stats and exif. Kept for any caller

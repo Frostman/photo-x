@@ -16,15 +16,15 @@ enum SamplePathProvider {
     }
 
     /// Resolves the configured default into a (shoot, focus) tuple if the
-    /// folder exists AND has at least one pair. Returns nil otherwise so the
+    /// folder exists AND has at least one entry. Returns nil otherwise so the
     /// app can open with an empty state instead of an error.
-    static func resolveShoot() -> (shoot: Shoot, focus: PhotoPair)? {
+    static func resolveShoot() -> (shoot: Shoot, focus: PhotoEntry)? {
         guard let dir = defaultDirectory() else { return nil }
         var isDir: ObjCBool = false
         guard FileManager.default.fileExists(atPath: dir.path, isDirectory: &isDir),
               isDir.boolValue else { return nil }
         let shoot = ShootScanner.scan(folder: dir)
-        guard let first = shoot.pairs.first else { return nil }
+        guard let first = shoot.entries.first else { return nil }
         return (shoot, first)
     }
 }

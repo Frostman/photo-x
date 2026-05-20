@@ -1,20 +1,20 @@
 import XCTest
 @testable import PhotoX
 
-/// Coverage for HIFBytesCache's LRU + byte-budget semantics. The cache
+/// Coverage for PreviewBytesCache's LRU + byte-budget semantics. The cache
 /// sits in front of HEIFDecoder so culling that re-visits a frame
 /// doesn't re-touch the source card — get/set/eviction correctness is
 /// what protects that promise.
-final class HIFBytesCacheTests: XCTestCase {
+final class PreviewBytesCacheTests: XCTestCase {
 
     func test_get_missingPathReturnsNil() async {
-        let cache = HIFBytesCache(byteCapacity: 1024)
+        let cache = PreviewBytesCache(byteCapacity: 1024)
         let out = await cache.get("/does/not/exist")
         XCTAssertNil(out)
     }
 
     func test_setThenGet_returnsSameData() async {
-        let cache = HIFBytesCache(byteCapacity: 1024)
+        let cache = PreviewBytesCache(byteCapacity: 1024)
         let data = Data(repeating: 0xAA, count: 100)
         await cache.set(data, for: "/foo.HIF")
         let out = await cache.get("/foo.HIF")
@@ -22,7 +22,7 @@ final class HIFBytesCacheTests: XCTestCase {
     }
 
     func test_set_overwritesPreviousValue_andAdjustsBytesUsed() async {
-        let cache = HIFBytesCache(byteCapacity: 1024)
+        let cache = PreviewBytesCache(byteCapacity: 1024)
         await cache.set(Data(count: 100), for: "/foo.HIF")
         await cache.set(Data(count: 250), for: "/foo.HIF")
         let used = await cache.bytesUsed
@@ -34,7 +34,7 @@ final class HIFBytesCacheTests: XCTestCase {
     // MARK: byte-budget eviction
 
     func test_evictsOldestWhenOverBudget() async {
-        let cache = HIFBytesCache(byteCapacity: 250)
+        let cache = PreviewBytesCache(byteCapacity: 250)
         await cache.set(Data(count: 100), for: "/a")  // 100
         await cache.set(Data(count: 100), for: "/b")  // 200
         await cache.set(Data(count: 100), for: "/c")  // 300 → over; /a evicted
@@ -51,7 +51,7 @@ final class HIFBytesCacheTests: XCTestCase {
     func test_neverEvictsTheJustInsertedEntry() async {
         // Single entry larger than the budget — keeping it is better
         // than dropping it back to nothing.
-        let cache = HIFBytesCache(byteCapacity: 100)
+        let cache = PreviewBytesCache(byteCapacity: 100)
         await cache.set(Data(count: 500), for: "/huge")
         let out = await cache.get("/huge")
         XCTAssertNotNil(out, "single-entry over-budget cache must keep that entry")
@@ -60,7 +60,7 @@ final class HIFBytesCacheTests: XCTestCase {
     // MARK: LRU bumping
 
     func test_get_bumpsEntryToMostRecent() async {
-        let cache = HIFBytesCache(byteCapacity: 250)
+        let cache = PreviewBytesCache(byteCapacity: 250)
         await cache.set(Data(count: 100), for: "/a")
         await cache.set(Data(count: 100), for: "/b")
         // Access /a — bumps it; /b is now oldest.
@@ -76,7 +76,7 @@ final class HIFBytesCacheTests: XCTestCase {
     }
 
     func test_repeatedSet_keepsBumpingToMostRecent() async {
-        let cache = HIFBytesCache(byteCapacity: 250)
+        let cache = PreviewBytesCache(byteCapacity: 250)
         await cache.set(Data(count: 100), for: "/a")
         await cache.set(Data(count: 100), for: "/b")
         // Re-set /a (same key) — bumps it.
@@ -93,7 +93,7 @@ final class HIFBytesCacheTests: XCTestCase {
     // MARK: clear + diagnostics
 
     func test_clear_resetsAll() async {
-        let cache = HIFBytesCache(byteCapacity: 1024)
+        let cache = PreviewBytesCache(byteCapacity: 1024)
         await cache.set(Data(count: 100), for: "/a")
         await cache.set(Data(count: 200), for: "/b")
         await cache.clear()
@@ -106,7 +106,7 @@ final class HIFBytesCacheTests: XCTestCase {
     }
 
     func test_contains_reportsPresence() async {
-        let cache = HIFBytesCache(byteCapacity: 1024)
+        let cache = PreviewBytesCache(byteCapacity: 1024)
         await cache.set(Data(count: 50), for: "/x")
         let hasX = await cache.contains("/x")
         let hasY = await cache.contains("/y")

@@ -111,7 +111,7 @@ final class MTLTextureCacheTests: XCTestCase {
     // MARK: - helpers
 
     private func key(id: String) -> DecodeKey {
-        DecodeKey(pairID: id, variant: .heif, decoder: .imageIO)
+        DecodeKey(entryID: id, variant: .preview, decoder: .imageIO)
     }
 
     /// 4×2 BGRA bitmap — minimal valid CGImage for MTKTextureLoader.

@@ -2,7 +2,7 @@ import XCTest
 @testable import PhotoX
 
 /// Pure-logic coverage for ViewerState's filter and navigation helpers.
-/// Synthesises a Shoot from temp URLs and seeds pairXMPs directly so no
+/// Synthesises a Shoot from temp URLs and seeds entryXMPs directly so no
 /// decoder, exiftool, or real file is exercised.
 @MainActor
 final class ViewerStateFilterTests: XCTestCase {
@@ -16,7 +16,7 @@ final class ViewerStateFilterTests: XCTestCase {
 
     func test_ratingCategory_classifiesByXMP() {
         let state = ViewerState()
-        state.pairXMPs = [
+        state.entryXMPs = [
             "A": XMPSidecar(rating: 5, label: nil),
             "B": XMPSidecar(rating: -1, label: nil),
             "C": XMPSidecar(rating: 0, label: nil),  // explicitly cleared = unrated
@@ -33,14 +33,14 @@ final class ViewerStateFilterTests: XCTestCase {
 
     func test_isVisible_respectsAllShowToggles() {
         let state = makeState(stems: ["A", "B", "C"])
-        state.pairXMPs = [
+        state.entryXMPs = [
             "A": XMPSidecar(rating: 5),
             "B": XMPSidecar(rating: -1),
             "C": XMPSidecar(),
         ]
-        let pairA = state.shoot!.pairs[0]
-        let pairB = state.shoot!.pairs[1]
-        let pairC = state.shoot!.pairs[2]
+        let pairA = state.shoot!.entries[0]
+        let pairB = state.shoot!.entries[1]
+        let pairC = state.shoot!.entries[2]
 
         // All on → all visible
         XCTAssertTrue(state.isVisible(pairA))
@@ -64,7 +64,7 @@ final class ViewerStateFilterTests: XCTestCase {
 
     func test_isVisible_perStarGranularity() {
         let state = makeState(stems: ["A", "B", "C", "D", "E"])
-        state.pairXMPs = [
+        state.entryXMPs = [
             "A": XMPSidecar(rating: 1),
             "B": XMPSidecar(rating: 2),
             "C": XMPSidecar(rating: 3),
@@ -72,7 +72,7 @@ final class ViewerStateFilterTests: XCTestCase {
             "E": XMPSidecar(rating: 5),
         ]
         state.showStars = [3, 5]   // only show 3★ and 5★
-        let pairs = state.shoot!.pairs
+        let pairs = state.shoot!.entries
         XCTAssertFalse(state.isVisible(pairs[0]))  // 1★
         XCTAssertFalse(state.isVisible(pairs[1]))  // 2★
         XCTAssertTrue (state.isVisible(pairs[2]))  // 3★
@@ -84,7 +84,7 @@ final class ViewerStateFilterTests: XCTestCase {
 
     func test_shootStats_countsEachCategoryCorrectly() {
         let state = makeState(stems: ["A", "B", "C", "D", "E"])
-        state.pairXMPs = [
+        state.entryXMPs = [
             "A": XMPSidecar(rating: 5),
             "B": XMPSidecar(rating: 3),
             "C": XMPSidecar(rating: -1),
@@ -102,7 +102,7 @@ final class ViewerStateFilterTests: XCTestCase {
 
     func test_shownCount_respectsPerStarToggles() {
         let state = makeState(stems: ["A", "B", "C", "D", "E"])
-        state.pairXMPs = [
+        state.entryXMPs = [
             "A": XMPSidecar(rating: 5),
             "B": XMPSidecar(rating: 3),
             "C": XMPSidecar(rating: -1),
@@ -136,7 +136,7 @@ final class ViewerStateFilterTests: XCTestCase {
 
     func test_nextPair_skipsFilteredOutCategories() {
         let state = makeState(stems: ["A", "B", "C", "D"])
-        state.pairXMPs = [
+        state.entryXMPs = [
             "B": XMPSidecar(rating: -1),
             "C": XMPSidecar(rating: -1),
         ]
@@ -149,7 +149,7 @@ final class ViewerStateFilterTests: XCTestCase {
 
     func test_previousPair_skipsFilteredOutCategories() {
         let state = makeState(stems: ["A", "B", "C", "D"])
-        state.pairXMPs = [
+        state.entryXMPs = [
             "B": XMPSidecar(rating: -1),
             "C": XMPSidecar(rating: -1),
         ]
@@ -168,7 +168,7 @@ final class ViewerStateFilterTests: XCTestCase {
 
     func test_firstAndLastPair_landOnVisibleEnds() {
         let state = makeState(stems: ["A", "B", "C", "D", "E"])
-        state.pairXMPs = [
+        state.entryXMPs = [
             "A": XMPSidecar(rating: -1),  // hidden
             "E": XMPSidecar(rating: -1),  // hidden
         ]
@@ -184,7 +184,7 @@ final class ViewerStateFilterTests: XCTestCase {
 
     func test_navigate_by_walksAcrossVisiblePairsOnly() {
         let state = makeState(stems: ["A", "B", "C", "D", "E"])
-        state.pairXMPs = ["C": XMPSidecar(rating: -1)]
+        state.entryXMPs = ["C": XMPSidecar(rating: -1)]
         state.showRejected = false
         state.currentIndex = 0
         state.navigate(by: 2)
@@ -201,14 +201,14 @@ final class ViewerStateFilterTests: XCTestCase {
         // filter/index logic, never the decoder pipeline. (loadShoot is bypassed.)
         let dir = URL(fileURLWithPath: "/tmp/photox-tests-fake")
         let pairs = stems.map { stem in
-            PhotoPair(
+            PhotoEntry(
                 rawURL: dir.appendingPathComponent("\(stem).ARW"),
-                heifURL: dir.appendingPathComponent("\(stem).HIF"),
+                previewURL: dir.appendingPathComponent("\(stem).HIF"),
                 stem: stem
             )
         }
         let state = ViewerState()
-        state.shoot = Shoot(folderURL: dir, pairs: pairs)
+        state.shoot = Shoot(folderURL: dir, entries: pairs)
         return state
     }
 }

@@ -15,31 +15,31 @@ struct FilmstripView: View {
                     if state.shoot != nil {
                         // Two parallel arrays: `visible` for display + bracket
                         // adjacency, `visibleSortedIndices` to map each thumb
-                        // back to its position in state.sortedPairs (which is
+                        // back to its position in state.sortedEntries (which is
                         // what state.currentIndex and navigate(to:) use).
-                        let allVisible = state.sortedPairs.enumerated()
+                        let allVisible = state.sortedEntries.enumerated()
                             .filter { state.isVisible($1) }
                         let useBrackets = state.sortMode == .name
                         // Hoist the burst id / size tables ONCE per render.
                         // Both are O(N over the shoot); calling the per-cell
                         // `state.burstSegment(at:visible:)` repeatedly would
                         // make filmstrip rendering O(visible × N) and beach
-                        // the main thread on 3 k+ pair shoots.
+                        // the main thread on 3 k+ entry shoots.
                         let burstIDs   = useBrackets ? state.burstIDByStem   : [:]
                         let burstSizes = useBrackets ? state.burstSizesByID  : [:]
-                        // Burst id of the focused pair — its burst auto-expands
+                        // Burst id of the focused entry — its burst auto-expands
                         // in collapsed mode so the user can step through it.
-                        let currentBurstID: Int? = state.displayedPair
+                        let currentBurstID: Int? = state.displayedEntry
                             .flatMap { burstIDs[$0.stem] }
                         // Collapse pass: keep singletons and the expanded
                         // burst; for every other burst, keep only its first
                         // visible frame. Only kicks in for .name sort, where
                         // burst frames are contiguous.
-                        let enumeratedVisible: [(offset: Int, element: PhotoPair)] = {
+                        let enumeratedVisible: [(offset: Int, element: PhotoEntry)] = {
                             guard collapseBursts, useBrackets else { return allVisible }
                             var seen: Set<Int> = []
-                            return allVisible.filter { _, pair in
-                                guard let id = burstIDs[pair.stem],
+                            return allVisible.filter { _, entry in
+                                guard let id = burstIDs[entry.stem],
                                       (burstSizes[id] ?? 0) >= 2
                                 else { return true }                  // singleton
                                 if id == currentBurstID { return true } // expanded
@@ -49,24 +49,24 @@ struct FilmstripView: View {
                         let visible = enumeratedVisible.map(\.element)
                         let visibleSortedIndices = enumeratedVisible.map(\.offset)
                         ForEach(visible.indices, id: \.self) { vIdx in
-                            let pair = visible[vIdx]
+                            let entry = visible[vIdx]
                             let sortedIdx = visibleSortedIndices[vIdx]
                             // Nx badge only on collapsed-representative thumbs:
                             // burst size ≥ 2 AND this burst isn't currently
                             // expanded AND collapse mode is on.
                             let collapsedBurstSize: Int? = {
                                 guard collapseBursts, useBrackets,
-                                      let id = burstIDs[pair.stem],
+                                      let id = burstIDs[entry.stem],
                                       id != currentBurstID,
                                       let size = burstSizes[id], size >= 2
                                 else { return nil }
                                 return size
                             }()
                             FilmstripThumbnailView(
-                                pair: pair,
+                                entry: entry,
                                 isSelected: sortedIdx == state.displayedIndex,
-                                thumbnail: state.thumbnails[pair.stem],
-                                xmp: state.pairXMPs[pair.stem] ?? .empty,
+                                thumbnail: state.thumbnails[entry.stem],
+                                xmp: state.entryXMPs[entry.stem] ?? .empty,
                                 burstSegment: useBrackets
                                     ? ViewerState.burstSegment(at: vIdx,
                                                                in: visible,
@@ -75,7 +75,7 @@ struct FilmstripView: View {
                                     : .none,
                                 collapsedBurstSize: collapsedBurstSize,
                                 onTap: { state.navigate(to: sortedIdx) },
-                                onAppear: { state.prioritizeBatch(forStem: pair.stem) }
+                                onAppear: { state.prioritizeBatch(forStem: entry.stem) }
                             )
                             .id(sortedIdx)
                             .accessibilityIdentifier("filmstrip.thumb.\(sortedIdx)")
@@ -104,7 +104,7 @@ struct FilmstripView: View {
 }
 
 struct FilmstripThumbnailView: View {
-    let pair: PhotoPair
+    let entry: PhotoEntry
     let isSelected: Bool
     let thumbnail: CGImage?
     let xmp: XMPSidecar
@@ -136,7 +136,7 @@ struct FilmstripThumbnailView: View {
             .contentShape(Rectangle())
             .onTapGesture(perform: onTap)
             .onAppear(perform: onAppear)
-            .help(pair.stem)
+            .help(entry.stem)
     }
 
     @ViewBuilder
@@ -220,7 +220,7 @@ struct FilmstripThumbnailView: View {
 
     @ViewBuilder
     private var namePill: some View {
-        Text(pair.stem)
+        Text(entry.stem)
             .font(.caption2.monospaced())
             .foregroundStyle(.white.opacity(0.85))
             // Single line always; on narrow (portrait) thumbs truncate

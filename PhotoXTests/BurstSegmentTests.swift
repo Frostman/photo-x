@@ -42,7 +42,7 @@ final class BurstSegmentTests: XCTestCase {
         // Even with all rejected (everything filtered out), burst ids are
         // still computed off the full shoot.
         let state = makeState(stems: ["A", "B", "C"], seq: ["A": 1, "B": 2, "C": 3])
-        state.pairXMPs = [
+        state.entryXMPs = [
             "A": XMPSidecar(rating: -1),
             "B": XMPSidecar(rating: -1),
             "C": XMPSidecar(rating: -1),
@@ -57,7 +57,7 @@ final class BurstSegmentTests: XCTestCase {
 
     func test_burstSegment_threeFrameBurst_allVisible() {
         let state = makeState(stems: ["A", "B", "C"], seq: ["A": 1, "B": 2, "C": 3])
-        let visible = state.sortedPairs.filter { state.isVisible($0) }
+        let visible = state.sortedEntries.filter { state.isVisible($0) }
         XCTAssertEqual(state.burstSegment(at: 0, visible: visible), .start)
         XCTAssertEqual(state.burstSegment(at: 1, visible: visible), .middle)
         XCTAssertEqual(state.burstSegment(at: 2, visible: visible), .end)
@@ -69,7 +69,7 @@ final class BurstSegmentTests: XCTestCase {
             stems: ["A", "B", "C", "D"],
             seq: ["B": 1, "C": 2]
         )
-        let visible = state.sortedPairs.filter { state.isVisible($0) }
+        let visible = state.sortedEntries.filter { state.isVisible($0) }
         XCTAssertEqual(state.burstSegment(at: 0, visible: visible), .none)
         XCTAssertEqual(state.burstSegment(at: 1, visible: visible), .start)
         XCTAssertEqual(state.burstSegment(at: 2, visible: visible), .end)
@@ -78,7 +78,7 @@ final class BurstSegmentTests: XCTestCase {
 
     func test_burstSegment_burstOfTwo() {
         let state = makeState(stems: ["A", "B"], seq: ["A": 1, "B": 2])
-        let visible = state.sortedPairs.filter { state.isVisible($0) }
+        let visible = state.sortedEntries.filter { state.isVisible($0) }
         XCTAssertEqual(state.burstSegment(at: 0, visible: visible), .start)
         XCTAssertEqual(state.burstSegment(at: 1, visible: visible), .end)
     }
@@ -87,7 +87,7 @@ final class BurstSegmentTests: XCTestCase {
         // A pair tagged with a sequence number all by itself isn't a burst —
         // the bracket would have nothing to span.
         let state = makeState(stems: ["A"], seq: ["A": 1])
-        let visible = state.sortedPairs.filter { state.isVisible($0) }
+        let visible = state.sortedEntries.filter { state.isVisible($0) }
         XCTAssertEqual(state.burstSegment(at: 0, visible: visible), .none)
     }
 
@@ -97,7 +97,7 @@ final class BurstSegmentTests: XCTestCase {
             stems: ["A", "B", "C", "D"],
             seq: ["A": 3, "B": 4, "C": 1, "D": 2]
         )
-        let visible = state.sortedPairs.filter { state.isVisible($0) }
+        let visible = state.sortedEntries.filter { state.isVisible($0) }
         XCTAssertEqual(state.burstSegment(at: 0, visible: visible), .start)
         XCTAssertEqual(state.burstSegment(at: 1, visible: visible), .end)
         XCTAssertEqual(state.burstSegment(at: 2, visible: visible), .start)
@@ -108,19 +108,19 @@ final class BurstSegmentTests: XCTestCase {
 
     func test_burstSegment_hiddenInScoreSort() {
         let state = makeState(stems: ["A", "B", "C"], seq: ["A": 1, "B": 2, "C": 3])
-        state.pairXMPs = [
+        state.entryXMPs = [
             "A": XMPSidecar(rating: 3),
             "B": XMPSidecar(rating: 5),
             "C": XMPSidecar(rating: 1),
         ]
         state.setSortMode(.scoreAscending)
-        let visible = state.sortedPairs.filter { state.isVisible($0) }
+        let visible = state.sortedEntries.filter { state.isVisible($0) }
         for i in visible.indices {
             XCTAssertEqual(state.burstSegment(at: i, visible: visible), .none,
                            "brackets must be hidden in score mode")
         }
         state.setSortMode(.scoreDescending)
-        let visibleDesc = state.sortedPairs.filter { state.isVisible($0) }
+        let visibleDesc = state.sortedEntries.filter { state.isVisible($0) }
         for i in visibleDesc.indices {
             XCTAssertEqual(state.burstSegment(at: i, visible: visibleDesc), .none)
         }
@@ -136,12 +136,12 @@ final class BurstSegmentTests: XCTestCase {
             stems: ["A", "B", "C", "D", "E"],
             seq: ["A": 1, "B": 2, "C": 3, "D": 4, "E": 5]
         )
-        state.pairXMPs = [
+        state.entryXMPs = [
             "B": XMPSidecar(rating: -1),
             "D": XMPSidecar(rating: -1),
         ]
         state.showRejected = false
-        let visible = state.sortedPairs.filter { state.isVisible($0) }
+        let visible = state.sortedEntries.filter { state.isVisible($0) }
         XCTAssertEqual(visible.map(\.stem), ["A", "C", "E"])
         XCTAssertEqual(state.burstSegment(at: 0, visible: visible), .start)
         XCTAssertEqual(state.burstSegment(at: 1, visible: visible), .middle)
@@ -156,9 +156,9 @@ final class BurstSegmentTests: XCTestCase {
             stems: ["A", "B", "C", "D"],
             seq: ["A": 1, "B": 2, "D": 4]
         )
-        state.pairXMPs = ["C": XMPSidecar(rating: -1)]
+        state.entryXMPs = ["C": XMPSidecar(rating: -1)]
         state.showRejected = false
-        let visible = state.sortedPairs.filter { state.isVisible($0) }
+        let visible = state.sortedEntries.filter { state.isVisible($0) }
         XCTAssertEqual(visible.map(\.stem), ["A", "B", "D"])
         XCTAssertEqual(state.burstSegment(at: 0, visible: visible), .start)
         XCTAssertEqual(state.burstSegment(at: 1, visible: visible), .end)
@@ -172,14 +172,14 @@ final class BurstSegmentTests: XCTestCase {
             stems: ["A", "B", "C", "D", "E"],
             seq: ["A": 1, "B": 2, "C": 3, "D": 4, "E": 5]
         )
-        state.pairXMPs = [
+        state.entryXMPs = [
             "A": XMPSidecar(rating: -1),
             "B": XMPSidecar(rating: -1),
             "D": XMPSidecar(rating: -1),
             "E": XMPSidecar(rating: -1),
         ]
         state.showRejected = false
-        let visible = state.sortedPairs.filter { state.isVisible($0) }
+        let visible = state.sortedEntries.filter { state.isVisible($0) }
         XCTAssertEqual(visible.map(\.stem), ["C"])
         XCTAssertEqual(state.burstSegment(at: 0, visible: visible), .none)
     }
@@ -189,18 +189,18 @@ final class BurstSegmentTests: XCTestCase {
     private func makeState(stems: [String], seq: [String: Int]) -> ViewerState {
         let dir = URL(fileURLWithPath: "/tmp/photox-burst-tests-fake")
         let pairs = stems.map { stem in
-            PhotoPair(
+            PhotoEntry(
                 rawURL: dir.appendingPathComponent("\(stem).ARW"),
-                heifURL: dir.appendingPathComponent("\(stem).HIF"),
+                previewURL: dir.appendingPathComponent("\(stem).HIF"),
                 stem: stem
             )
         }
         let state = ViewerState()
-        state.shoot = Shoot(folderURL: dir, pairs: pairs)
-        state.pairSequenceNumber = seq
+        state.shoot = Shoot(folderURL: dir, entries: pairs)
+        state.entrySequenceNumber = seq
         // In production the indexer flushes seq + recomputes burst ids
         // atomically (see `flushExifBatch`). Tests must do the same after
-        // seeding `pairSequenceNumber` directly, otherwise the burst-id
+        // seeding `entrySequenceNumber` directly, otherwise the burst-id
         // cache stays empty.
         state.recomputeBurstIDs()
         return state

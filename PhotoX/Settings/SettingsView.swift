@@ -114,7 +114,7 @@ struct SettingsView: View {
             }
 
             Section("Image variant") {
-                Toggle("Auto-swap HEIF → RAW when zoomed past 100 %", isOn: $autoSwapToRAW)
+                Toggle("Auto-swap preview → RAW when zoomed past 100 %", isOn: $autoSwapToRAW)
                     .help("One-way swap on the upward crossing only. Manual Z still toggles either direction.")
             }
 

@@ -1,6 +1,6 @@
 import Foundation
 
-/// Pure planning step shared by both copy modes. Given pairs + the
+/// Pure planning step shared by both copy modes. Given entries + the
 /// destination's filter/type/policy config, produces:
 ///   * the resolved output folder (with project name subfolder)
 ///   * the list of source→destination file ops to attempt
@@ -24,7 +24,11 @@ enum ExportPlanner {
         let isXMP: Bool
         let kind: Kind
 
-        enum Kind: String, Sendable, Hashable { case arw, hif, xmp }
+        /// `preview` covers HIF / HEIF / HEIC / JPG / JPEG — they
+        /// share one export toggle (`includeHIF`, displayed in the
+        /// UI as "HIF/JPG"). The actual format on disk is encoded
+        /// in `destinationURL.pathExtension`.
+        enum Kind: String, Sendable, Hashable { case arw, preview, xmp }
     }
 
     /// Builds the plan. `projectName` is appended as a subfolder under the
@@ -34,8 +38,8 @@ enum ExportPlanner {
     /// run with an empty name, but we don't enforce that here so the
     /// planner stays pure).
     static func plan(
-        pairs: [PhotoPair],
-        pairXMPs: [String: XMPSidecar],
+        entries: [PhotoEntry],
+        entryXMPs: [String: XMPSidecar],
         projectName: String,
         destination: ExportSettings.Destination
     ) -> Plan {
@@ -45,31 +49,35 @@ enum ExportPlanner {
             ? baseURL
             : baseURL.appendingPathComponent(trimmed, isDirectory: true)
 
-        let eligible = pairs.filter { matches($0, destination: destination, pairXMPs: pairXMPs) }
+        let eligible = entries.filter { matches($0, destination: destination, entryXMPs: entryXMPs) }
         let eligibleStems = Set(eligible.map(\.stem))
 
         var ops: [FileOperation] = []
         var totalBytes: Int64 = 0
         let fm = FileManager.default
 
-        for pair in eligible {
-            if destination.includeARW {
-                let dst = outputFolder.appendingPathComponent(pair.rawURL.lastPathComponent)
-                ops.append(.init(sourceURL: pair.rawURL, destinationURL: dst,
+        for entry in eligible {
+            if let raw = entry.rawURL, destination.includeARW {
+                let dst = outputFolder.appendingPathComponent(raw.lastPathComponent)
+                ops.append(.init(sourceURL: raw, destinationURL: dst,
                                  isXMP: false, kind: .arw))
-                totalBytes += sizeOf(pair.rawURL, fm: fm)
+                totalBytes += sizeOf(raw, fm: fm)
             }
+            // `includeHIF` is the persisted field name for storage
+            // compat; the UI label is "HIF/JPG" — one toggle covers
+            // whichever preview format the entry actually has.
             if destination.includeHIF {
-                let dst = outputFolder.appendingPathComponent(pair.heifURL.lastPathComponent)
-                ops.append(.init(sourceURL: pair.heifURL, destinationURL: dst,
-                                 isXMP: false, kind: .hif))
-                totalBytes += sizeOf(pair.heifURL, fm: fm)
+                let dst = outputFolder.appendingPathComponent(entry.previewURL.lastPathComponent)
+                ops.append(.init(sourceURL: entry.previewURL, destinationURL: dst,
+                                 isXMP: false, kind: .preview))
+                totalBytes += sizeOf(entry.previewURL, fm: fm)
             }
             if destination.includeXMP {
-                let xmpSrc = xmpURL(for: pair)
+                let xmpSrc = entry.xmpURL
                 // Only include if the source XMP actually exists on disk —
-                // empty pairs (no sidecar yet) shouldn't appear in the plan
-                // for XMP, otherwise the copy loop counts a phantom skip.
+                // empty entries (no sidecar yet) shouldn't appear in the
+                // plan for XMP, otherwise the copy loop counts a phantom
+                // skip.
                 if fm.fileExists(atPath: xmpSrc.path) {
                     let dst = outputFolder.appendingPathComponent(xmpSrc.lastPathComponent)
                     ops.append(.init(sourceURL: xmpSrc, destinationURL: dst,
@@ -86,11 +94,11 @@ enum ExportPlanner {
     /// Mirror of `ViewerState.RatingCategory` matching, duplicated here so
     /// the runner doesn't depend on ViewerState.
     private static func matches(
-        _ pair: PhotoPair,
+        _ entry: PhotoEntry,
         destination: ExportSettings.Destination,
-        pairXMPs: [String: XMPSidecar]
+        entryXMPs: [String: XMPSidecar]
     ) -> Bool {
-        let xmp = pairXMPs[pair.stem] ?? .empty
+        let xmp = entryXMPs[entry.stem] ?? .empty
         if xmp.isReject { return destination.showRejected }
         if let stars = xmp.starCount, stars > 0 {
             return destination.showStars.contains(stars)
@@ -98,9 +106,7 @@ enum ExportPlanner {
         return destination.showUnrated
     }
 
-    static func xmpURL(for pair: PhotoPair) -> URL {
-        pair.rawURL.deletingPathExtension().appendingPathExtension("xmp")
-    }
+    static func xmpURL(for entry: PhotoEntry) -> URL { entry.xmpURL }
 
     private static func sizeOf(_ url: URL, fm: FileManager) -> Int64 {
         let attrs = (try? fm.attributesOfItem(atPath: url.path)) ?? [:]

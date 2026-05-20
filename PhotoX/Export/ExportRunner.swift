@@ -8,7 +8,7 @@ import Observation
 /// progress.
 ///
 /// `ExportRunner` deliberately doesn't own a `ViewerState` or `Shoot` —
-/// callers pass `pairs` + `pairXMPs` BY VALUE at start, so the run is
+/// callers pass `entries` + `entryXMPs` BY VALUE at start, so the run is
 /// independent of subsequent navigation / shoot close.
 @MainActor
 @Observable
@@ -198,8 +198,8 @@ final class ExportRunner {
     /// destinations that want a write. Per-destination Run buttons always
     /// take the simple per-destination loop.
     func startAll(
-        pairs: [PhotoPair],
-        pairXMPs: [String: XMPSidecar],
+        entries: [PhotoEntry],
+        entryXMPs: [String: XMPSidecar],
         projectName: String,
         destinations: [ExportSettings.Destination],
         sharedRead: Bool = false,
@@ -227,7 +227,7 @@ final class ExportRunner {
             // Compute batch totals off-main (planning stats every source file).
             let plans: [ExportPlanner.Plan] = await Task.detached(priority: .userInitiated) {
                 destinations.map { dest in
-                    ExportPlanner.plan(pairs: pairs, pairXMPs: pairXMPs,
+                    ExportPlanner.plan(entries: entries, entryXMPs: entryXMPs,
                                        projectName: projectName, destination: dest)
                 }
             }.value
@@ -246,12 +246,12 @@ final class ExportRunner {
             let summaries: [(ExportSettings.Destination, Summary)]
             if sharedRead {
                 summaries = await self.runAllSharedRead(
-                    pairs: pairs, pairXMPs: pairXMPs,
+                    entries: entries, entryXMPs: entryXMPs,
                     projectName: projectName, destinations: destinations
                 )
             } else {
                 summaries = await self.runAllSequential(
-                    pairs: pairs, pairXMPs: pairXMPs,
+                    entries: entries, entryXMPs: entryXMPs,
                     projectName: projectName, destinations: destinations
                 )
             }
@@ -272,8 +272,8 @@ final class ExportRunner {
     }
 
     private func runAllSequential(
-        pairs: [PhotoPair],
-        pairXMPs: [String: XMPSidecar],
+        entries: [PhotoEntry],
+        entryXMPs: [String: XMPSidecar],
         projectName: String,
         destinations: [ExportSettings.Destination]
     ) async -> [(ExportSettings.Destination, Summary)] {
@@ -290,7 +290,7 @@ final class ExportRunner {
                 batchProgress = batch
             }
             let summary = await self.runSingle(
-                destination: dest, pairs: pairs, pairXMPs: pairXMPs,
+                destination: dest, entries: entries, entryXMPs: entryXMPs,
                 projectName: projectName
             )
             summaries.append((dest, summary))
@@ -301,8 +301,8 @@ final class ExportRunner {
     /// Run a single destination. Posts one completion notification.
     func startOne(
         _ destinationID: UUID,
-        pairs: [PhotoPair],
-        pairXMPs: [String: XMPSidecar],
+        entries: [PhotoEntry],
+        entryXMPs: [String: XMPSidecar],
         projectName: String,
         destination: ExportSettings.Destination,
         notifications: ExportNotificationsAdapter = .live
@@ -318,7 +318,7 @@ final class ExportRunner {
             // Per-row Run is a "batch" of one as far as the toolbar pill is
             // concerned. Plan upfront so batchProgress has accurate totals.
             let plan: ExportPlanner.Plan = await Task.detached(priority: .userInitiated) {
-                ExportPlanner.plan(pairs: pairs, pairXMPs: pairXMPs,
+                ExportPlanner.plan(entries: entries, entryXMPs: entryXMPs,
                                    projectName: projectName, destination: destination)
             }.value
             self.batchProgress = BatchProgress(
@@ -327,7 +327,7 @@ final class ExportRunner {
                 startedAt: Date()
             )
             let summary = await self.runSingle(
-                destination: destination, pairs: pairs, pairXMPs: pairXMPs,
+                destination: destination, entries: entries, entryXMPs: entryXMPs,
                 projectName: projectName
             )
             // Single-destination Run uses the same one-summary notification
@@ -418,13 +418,13 @@ final class ExportRunner {
     /// progresses. Caller is responsible for emitting any notification.
     private func runSingle(
         destination dest: ExportSettings.Destination,
-        pairs: [PhotoPair],
-        pairXMPs: [String: XMPSidecar],
+        entries: [PhotoEntry],
+        entryXMPs: [String: XMPSidecar],
         projectName: String
     ) async -> Summary {
         let token = cancellationTokens[dest.id] ?? CancellationToken()
         let plan = ExportPlanner.plan(
-            pairs: pairs, pairXMPs: pairXMPs,
+            entries: entries, entryXMPs: entryXMPs,
             projectName: projectName, destination: dest
         )
 
@@ -550,8 +550,8 @@ final class ExportRunner {
     /// individually, exactly the same way Mode A would have done them.
     /// Result is byte-identical to running Mode A over the same destinations.
     private func runAllSharedRead(
-        pairs: [PhotoPair],
-        pairXMPs: [String: XMPSidecar],
+        entries: [PhotoEntry],
+        entryXMPs: [String: XMPSidecar],
         projectName: String,
         destinations: [ExportSettings.Destination]
     ) async -> [(ExportSettings.Destination, Summary)] {
@@ -566,7 +566,7 @@ final class ExportRunner {
         var states: [UUID: DestState] = [:]
         for dest in destinations {
             let plan = ExportPlanner.plan(
-                pairs: pairs, pairXMPs: pairXMPs,
+                entries: entries, entryXMPs: entryXMPs,
                 projectName: projectName, destination: dest
             )
             let progress = Progress(
@@ -866,7 +866,7 @@ final class ExportRunner {
     nonisolated static func removeOrphansOffMain(
         in folder: URL, eligibleStems: Set<String>
     ) -> (deleted: Int, errors: [Summary.ErrorEntry]) {
-        let managedExtensions: Set<String> = ["arw", "hif", "heif", "heic", "xmp"]
+        let managedExtensions: Set<String> = ["arw", "hif", "heif", "heic", "jpg", "jpeg", "xmp"]
         guard let contents = try? FileManager.default.contentsOfDirectory(
             at: folder, includingPropertiesForKeys: nil,
             options: [.skipsHiddenFiles, .skipsSubdirectoryDescendants]

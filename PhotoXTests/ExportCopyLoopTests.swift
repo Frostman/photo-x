@@ -31,10 +31,10 @@ final class ExportCopyLoopTests: XCTestCase {
     // MARK: source builders
 
     /// Creates ARW/HIF/XMP files for stem with given body bytes; returns the
-    /// resulting PhotoPair.
+    /// resulting PhotoEntry.
     @discardableResult
     private func makePair(stem: String, arwBytes: Int = 1024, hifBytes: Int = 512,
-                          xmp: String? = "<xmpmeta/>") throws -> PhotoPair {
+                          xmp: String? = "<xmpmeta/>") throws -> PhotoEntry {
         let arw = sourceDir.appendingPathComponent("\(stem).ARW")
         let hif = sourceDir.appendingPathComponent("\(stem).HIF")
         try Data(repeating: 0xAB, count: arwBytes).write(to: arw)
@@ -43,7 +43,7 @@ final class ExportCopyLoopTests: XCTestCase {
             let xmpURL = sourceDir.appendingPathComponent("\(stem).xmp")
             try xmp.data(using: .utf8)!.write(to: xmpURL)
         }
-        return PhotoPair(rawURL: arw, heifURL: hif, stem: stem)
+        return PhotoEntry(rawURL: arw, previewURL: hif, stem: stem)
     }
 
     private func destination(
@@ -78,10 +78,10 @@ final class ExportCopyLoopTests: XCTestCase {
         try Data(contentsOf: url)
     }
 
-    private func run(_ dest: ExportSettings.Destination, pairs: [PhotoPair],
-                     pairXMPs: [String: XMPSidecar] = [:],
+    private func run(_ dest: ExportSettings.Destination, entries: [PhotoEntry],
+                     entryXMPs: [String: XMPSidecar] = [:],
                      project: String = "P") async {
-        runner.startOne(dest.id, pairs: pairs, pairXMPs: pairXMPs,
+        runner.startOne(dest.id, entries: entries, entryXMPs: entryXMPs,
                         projectName: project, destination: dest,
                         notifications: .silent)
         await runner.waitForCompletion()
@@ -101,7 +101,7 @@ final class ExportCopyLoopTests: XCTestCase {
         let p1 = try makePair(stem: "DSC0001")
         let p2 = try makePair(stem: "DSC0002")
         let dest = destination()
-        await run(dest, pairs: [p1, p2])
+        await run(dest, entries: [p1, p2])
 
         let out = outputFolder(project: "P")
         XCTAssertTrue(exists(out.appendingPathComponent("DSC0001.ARW")))
@@ -120,7 +120,7 @@ final class ExportCopyLoopTests: XCTestCase {
             "DSC0002": XMPSidecar(rating: 3),
         ]
         let dest = destination(showStars: [5], showRejected: false, showUnrated: false)
-        await run(dest, pairs: [p1, p2], pairXMPs: xmps)
+        await run(dest, entries: [p1, p2], entryXMPs: xmps)
         let out = outputFolder(project: "P")
         XCTAssertTrue(exists(out.appendingPathComponent("DSC0001.ARW")))
         XCTAssertFalse(exists(out.appendingPathComponent("DSC0002.ARW")))
@@ -131,7 +131,7 @@ final class ExportCopyLoopTests: XCTestCase {
         let pU = try makePair(stem: "UNR")
         let xmps: [String: XMPSidecar] = ["REJ": XMPSidecar(rating: -1)]
         let dest = destination(showStars: [], showRejected: true, showUnrated: false)
-        await run(dest, pairs: [pR, pU], pairXMPs: xmps)
+        await run(dest, entries: [pR, pU], entryXMPs: xmps)
         let out = outputFolder(project: "P")
         XCTAssertTrue(exists(out.appendingPathComponent("REJ.ARW")))
         XCTAssertFalse(exists(out.appendingPathComponent("UNR.ARW")))
@@ -140,7 +140,7 @@ final class ExportCopyLoopTests: XCTestCase {
     func test_copy_respectsTypeToggles() async throws {
         let p = try makePair(stem: "DSC0001")
         let dest = destination(includeXMP: false)
-        await run(dest, pairs: [p])
+        await run(dest, entries: [p])
         let out = outputFolder(project: "P")
         XCTAssertTrue(exists(out.appendingPathComponent("DSC0001.ARW")))
         XCTAssertTrue(exists(out.appendingPathComponent("DSC0001.HIF")))
@@ -151,14 +151,14 @@ final class ExportCopyLoopTests: XCTestCase {
     func test_copy_projectSubfolder_isCreated() async throws {
         let p = try makePair(stem: "X")
         let dest = destination()
-        await run(dest, pairs: [p], project: "Wedding 2026")
+        await run(dest, entries: [p], project: "Wedding 2026")
         XCTAssertTrue(exists(destDir.appendingPathComponent("Wedding 2026/X.ARW")))
     }
 
     func test_copy_emptyProjectName_landsInDestRoot() async throws {
         let p = try makePair(stem: "X")
         let dest = destination()
-        await run(dest, pairs: [p], project: "")
+        await run(dest, entries: [p], project: "")
         XCTAssertTrue(exists(destDir.appendingPathComponent("X.ARW")))
         XCTAssertFalse(exists(destDir.appendingPathComponent("X")),
                        "no subfolder named after the (empty) project")
@@ -167,12 +167,12 @@ final class ExportCopyLoopTests: XCTestCase {
     func test_copy_secondRun_skipsUnchanged() async throws {
         let p = try makePair(stem: "X")
         let dest = destination()
-        await run(dest, pairs: [p])
+        await run(dest, entries: [p])
         let firstSummary = summary(dest.id)!
         XCTAssertEqual(firstSummary.copied, 3)
         XCTAssertEqual(firstSummary.skipped, 0)
 
-        await run(dest, pairs: [p])
+        await run(dest, entries: [p])
         let secondSummary = summary(dest.id)!
         XCTAssertEqual(secondSummary.copied, 0)
         XCTAssertEqual(secondSummary.skipped, 3)
@@ -181,13 +181,13 @@ final class ExportCopyLoopTests: XCTestCase {
     func test_copy_diffSize_overwrites_perDefaultPolicy() async throws {
         let p = try makePair(stem: "X", arwBytes: 100)
         let dest = destination()
-        await run(dest, pairs: [p])
+        await run(dest, entries: [p])
 
         // Bigger source on a second run → must overwrite.
-        try FileManager.default.removeItem(at: p.rawURL)
-        try Data(repeating: 0xEE, count: 500).write(to: p.rawURL)
+        try FileManager.default.removeItem(at: p.rawURL!)
+        try Data(repeating: 0xEE, count: 500).write(to: p.rawURL!)
 
-        await run(dest, pairs: [p])
+        await run(dest, entries: [p])
         let bytes = try bytes(outputFolder(project: "P").appendingPathComponent("X.ARW"))
         XCTAssertEqual(bytes.count, 500)
     }
@@ -195,12 +195,12 @@ final class ExportCopyLoopTests: XCTestCase {
     func test_copy_skipIfExists_neverOverwrites() async throws {
         let p = try makePair(stem: "X", arwBytes: 100)
         let dest = destination(overwrite: .skipIfExists)
-        await run(dest, pairs: [p])
+        await run(dest, entries: [p])
 
-        try FileManager.default.removeItem(at: p.rawURL)
-        try Data(repeating: 0xEE, count: 500).write(to: p.rawURL)
+        try FileManager.default.removeItem(at: p.rawURL!)
+        try Data(repeating: 0xEE, count: 500).write(to: p.rawURL!)
 
-        await run(dest, pairs: [p])
+        await run(dest, entries: [p])
         let bytes = try bytes(outputFolder(project: "P").appendingPathComponent("X.ARW"))
         XCTAssertEqual(bytes.count, 100, "skipIfExists must keep the original 100 bytes")
         XCTAssertEqual(summary(dest.id)?.skipped, 3)
@@ -210,7 +210,7 @@ final class ExportCopyLoopTests: XCTestCase {
     func test_copy_xmp_destNewer_isNeverRegressed_evenWithAlwaysOverwrite() async throws {
         let p = try makePair(stem: "X")
         let dest = destination(overwrite: .alwaysOverwrite)
-        await run(dest, pairs: [p])
+        await run(dest, entries: [p])
 
         // Force the destination XMP to be 1 hour in the future.
         let dstXMP = outputFolder(project: "P").appendingPathComponent("X.xmp")
@@ -227,7 +227,7 @@ final class ExportCopyLoopTests: XCTestCase {
         )
 
         // Re-run the source XMP (mtime ≈ now) into the same destination.
-        await run(dest, pairs: [p])
+        await run(dest, entries: [p])
 
         let body = try String(contentsOf: dstXMP, encoding: .utf8)
         XCTAssertEqual(body, "FUTURE", "future destination XMP must not be overwritten")
@@ -238,7 +238,7 @@ final class ExportCopyLoopTests: XCTestCase {
         let pB = try makePair(stem: "B")
         // First run includes both A and B.
         let dest1 = destination(removeOrphans: false)
-        await run(dest1, pairs: [pA, pB])
+        await run(dest1, entries: [pA, pB])
         XCTAssertTrue(exists(outputFolder(project: "P").appendingPathComponent("A.ARW")))
         XCTAssertTrue(exists(outputFolder(project: "P").appendingPathComponent("B.ARW")))
 
@@ -249,7 +249,7 @@ final class ExportCopyLoopTests: XCTestCase {
         ]
         let dest2 = destination(showStars: [5], showRejected: false, showUnrated: false,
                                 removeOrphans: true)
-        await run(dest2, pairs: [pA, pB], pairXMPs: xmps)
+        await run(dest2, entries: [pA, pB], entryXMPs: xmps)
         XCTAssertTrue(exists(outputFolder(project: "P").appendingPathComponent("A.ARW")))
         XCTAssertFalse(exists(outputFolder(project: "P").appendingPathComponent("B.ARW")),
                        "orphaned B should be deleted")
@@ -266,7 +266,7 @@ final class ExportCopyLoopTests: XCTestCase {
         try "do not delete me".data(using: .utf8)!.write(to: foreign)
 
         let dest = destination(removeOrphans: true)
-        await run(dest, pairs: [pA])
+        await run(dest, entries: [pA])
         XCTAssertTrue(exists(foreign), "foreign txt file should survive orphan removal")
     }
 
@@ -274,7 +274,7 @@ final class ExportCopyLoopTests: XCTestCase {
         let p1 = try makePair(stem: "A")
         let p2 = try makePair(stem: "B")
         let dest = destination()
-        await run(dest, pairs: [p1, p2])
+        await run(dest, entries: [p1, p2])
 
         let out = outputFolder(project: "P")
         let contents = try FileManager.default.contentsOfDirectory(
@@ -288,14 +288,14 @@ final class ExportCopyLoopTests: XCTestCase {
         // Set source mtime to a known time in the past.
         let p = try makePair(stem: "X")
         let pastMtime = Date(timeIntervalSinceReferenceDate: 1_000_000)  // arbitrary past
-        for url in [p.rawURL, p.heifURL,
+        for url in [p.rawURL!, p.previewURL,
                     sourceDir.appendingPathComponent("X.xmp")] {
             try FileManager.default.setAttributes(
                 [.modificationDate: pastMtime], ofItemAtPath: url.path)
         }
 
         let dest = destination()
-        await run(dest, pairs: [p])
+        await run(dest, entries: [p])
 
         // Each copied file at the destination must carry the SOURCE mtime,
         // not "now". Without that, the universal skip-if-same-size-and-mtime
@@ -318,13 +318,13 @@ final class ExportCopyLoopTests: XCTestCase {
         // the destination absent).
         let p = try makePair(stem: "X", arwBytes: 100)
         let dest = destination()
-        await run(dest, pairs: [p])
+        await run(dest, entries: [p])
 
         // Bigger source for the second run; the existing dest will be
         // atomically replaced.
-        try FileManager.default.removeItem(at: p.rawURL)
-        try Data(repeating: 0xFA, count: 700).write(to: p.rawURL)
-        await run(dest, pairs: [p])
+        try FileManager.default.removeItem(at: p.rawURL!)
+        try Data(repeating: 0xFA, count: 700).write(to: p.rawURL!)
+        await run(dest, entries: [p])
 
         let destFile = outputFolder(project: "P").appendingPathComponent("X.ARW")
         let body = try bytes(destFile)
@@ -335,7 +335,7 @@ final class ExportCopyLoopTests: XCTestCase {
     func test_handlesMissingXMP_gracefully() async throws {
         let p = try makePair(stem: "X", xmp: nil)   // no XMP sidecar
         let dest = destination()
-        await run(dest, pairs: [p])
+        await run(dest, entries: [p])
         XCTAssertTrue(exists(outputFolder(project: "P").appendingPathComponent("X.ARW")))
         XCTAssertFalse(exists(outputFolder(project: "P").appendingPathComponent("X.xmp")))
         XCTAssertEqual(summary(dest.id)?.errors.count, 0)

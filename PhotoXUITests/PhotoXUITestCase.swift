@@ -121,10 +121,15 @@ class PhotoXUITestCase: XCTestCase {
     private static func cloneSampleFixture(into dest: URL) throws {
         let src = repoSampleURL
         let names = try FileManager.default.contentsOfDirectory(atPath: src.path)
-        // Filter to ARW/HIF/xmp pairs only — skip .DS_Store and any
-        // stray files. APFS copyItem is clone-on-write so this stays
-        // cheap even for hundreds of MB of ARW.
-        let pairExts: Set<String> = ["ARW", "HIF", "xmp"]
+        // Filter to recognised pair files (case-insensitive) — skip
+        // .DS_Store and any stray files. APFS copyItem is clone-on-
+        // write so this stays cheap even for hundreds of MB of ARW.
+        let pairExts: Set<String> = [
+            "ARW",
+            "HIF", "HEIF", "HEIC",
+            "JPG", "JPEG",
+            "xmp",
+        ]
         for name in names {
             let ext = (name as NSString).pathExtension
             guard pairExts.contains(ext) else { continue }
@@ -249,16 +254,19 @@ class PhotoXUITestCase: XCTestCase {
 
     // MARK: helpers used by tests
 
-    /// Stems of ARW+HIF pairs in the fixture, sorted. Mirrors what
-    /// the app's ShootScanner considers a pair (both files present);
-    /// orphan ARW or orphan HIF files are excluded.
+    /// Stems of all entries in the fixture, sorted. Mirrors
+    /// `EntryFinder.entries(in:)` exactly: a stem counts if it has
+    /// any preview (HIF/HEIF/HEIC or JPG/JPEG) — ARW alone is
+    /// dropped. The associated RAW is allowed but not required.
     func sortedPairStems() throws -> [String] {
         let names = try FileManager.default.contentsOfDirectory(atPath: tempFixtureURL.path)
-        let arws  = Set(names.filter { ($0 as NSString).pathExtension == "ARW" }
-                              .map    { ($0 as NSString).deletingPathExtension })
-        let hifs  = Set(names.filter { ($0 as NSString).pathExtension == "HIF" }
-                              .map    { ($0 as NSString).deletingPathExtension })
-        return arws.intersection(hifs).sorted()
+        let heifExts: Set<String> = ["HIF", "HEIF", "HEIC", "hif", "heif", "heic"]
+        let jpgExts:  Set<String> = ["JPG", "JPEG", "jpg", "jpeg"]
+        let previews = names
+            .filter { heifExts.contains(($0 as NSString).pathExtension)
+                  || jpgExts .contains(($0 as NSString).pathExtension) }
+            .map    { ($0 as NSString).deletingPathExtension }
+        return Array(Set(previews)).sorted()
     }
 
     /// URL of the XMP sidecar for a pair named `<stem>` in the

@@ -58,6 +58,9 @@ final class ExportSettings {
 
         // File types
         var includeARW: Bool = true
+        /// Covers both `.HIF` and `.JPG` previews. Kept under the
+        /// `includeHIF` name for storage compat with existing
+        /// persisted settings; the UI labels it "HIF/JPG".
         var includeHIF: Bool = true
         var includeXMP: Bool = true
 

@@ -131,19 +131,23 @@ once and the app won't ask again until a newer version is released
 
 ## File requirements
 
-PhotoX expects each photo as a pair of files in the same folder
-with matching base filenames:
+PhotoX accepts any of the following file shapes (matched by base
+filename — a "stem"):
 
 ```
-DSC04207.ARW    ← Sony RAW
-DSC04207.HIF    ← HEIF preview / display copy
-DSC04207.xmp    ← (optional) ratings / labels — written by PhotoX
+DSC04207.ARW    + DSC04207.HIF    ← Sony RAW + HEIF preview
+DSC00060.ARW    + DSC00060.JPG    ← Sony RAW + JPEG preview
+IMG_0001.HIF                       ← standalone HEIF (no RAW)
+IMG_0001.JPG                       ← standalone JPEG (no RAW)
+<stem>.xmp                         ← (optional) ratings / labels — written by PhotoX
 ```
 
-The Sony A1 II writes the RAW + HEIF pair when you turn on "RAW + HEIF"
-in the file format menu. PhotoX shows the HEIF instantly and decodes
-the ARW on demand. XMP sidecars are written next to the RAW wherever
-the files live (writable disk, SD card, CFExpress).
+When both a `.HIF` and a `.JPG` exist for the same stem, PhotoX
+prefers the `.HIF`. The Sony A1 II writes ARW + HEIF in "RAW + HEIF"
+mode and ARW + JPEG in "RAW + JPEG" mode; PhotoX handles both. XMP
+sidecars are written next to the RAW when one exists, else next to
+the preview — wherever the files live (writable disk, SD card,
+CFExpress).
 
 ## Installation
 

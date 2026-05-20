@@ -242,7 +242,7 @@ struct ContentView: View {
                 }
                 .controlSize(.small)
                 .padding(.horizontal, 5)
-                .help("Open folder of ARW + HIF pairs (⌘O)")
+                .help("Open folder of ARW + HIF/JPG pairs (⌘O)")
             }
 
             if state.shoot != nil {
@@ -347,7 +347,7 @@ struct ContentView: View {
                     // texture upload is in flight). When the upload
                     // lands, onImageDisplayed fires with this stem and
                     // commitDisplayed syncs the rest of the UI to it.
-                    imageToken: state.pair?.stem ?? "",
+                    imageToken: state.entry?.stem ?? "",
                     imageOrientation: image.orientation,
                     imageDecodeKey: key,
                     viewport: state.viewport,
@@ -428,7 +428,7 @@ struct ContentView: View {
             Text("No folder open")
                 .font(.title3)
                 .foregroundStyle(.secondary)
-            Text("Drop a folder of ARW + HIF pairs onto the window, or pick one.")
+            Text("Drop a folder of ARW + HIF/JPG pairs (or standalone HIF/JPG files) onto the window, or pick one.")
                 .font(.callout)
                 .foregroundStyle(.secondary.opacity(0.7))
             Button {
@@ -610,7 +610,7 @@ struct ContentView: View {
             .deletingLastPathComponent()   // /Volumes/<NAME>/DCIM
             .deletingLastPathComponent()   // /Volumes/<NAME>
         Task {
-            await state.pipeline.hifBytes.clear()
+            await state.pipeline.previewBytes.clear()
             do {
                 try NSWorkspace.shared.unmountAndEjectDevice(at: volumeURL)
                 // VolumeWatcher's didUnmount observer will refresh the
@@ -782,8 +782,8 @@ struct ContentView: View {
                 return
             }
             let shoot = ShootScanner.scan(folder: url)
-            guard let focus = shoot.pairs.first else {
-                state.errorMessage = "No ARW + HIF pairs found in \(url.lastPathComponent)"
+            guard let focus = shoot.entries.first else {
+                state.errorMessage = "No ARW + HIF/JPG pairs (or standalone HIF/JPG files) found in \(url.lastPathComponent)"
                 return
             }
             await state.loadShoot(shoot, focus: focus)
@@ -829,10 +829,10 @@ struct ContentView: View {
             VStack {
                 Spacer()
                 HStack {
-                    // Use displayedPair so the pill identifies what the
+                    // Use displayedEntry so the pill identifies what the
                     // user actually sees, not the (briefly different)
                     // navigation intent during a rapid arrow burst.
-                    if let pair = state.displayedPair { stemPill(pair: pair) }
+                    if let entry = state.displayedEntry { stemPill(entry: entry) }
                     Spacer()
                     Text(statusText(image: image))
                         .font(.caption.monospacedDigit())
@@ -848,7 +848,7 @@ struct ContentView: View {
     }
 
     @ViewBuilder
-    private func stemPill(pair: PhotoPair) -> some View {
+    private func stemPill(entry: PhotoEntry) -> some View {
         HStack(spacing: 8) {
             if let shoot = state.shoot, shoot.count > 1 {
                 Text("\(state.displayedIndex + 1)/\(shoot.count)")
@@ -856,15 +856,15 @@ struct ContentView: View {
                     .foregroundStyle(.white.opacity(0.55))
                     .accessibilityIdentifier("canvas.stemPill.indexLabel")
             }
-            Text(copiedFlash ? "Copied path" : pair.stem)
+            Text(copiedFlash ? "Copied path" : entry.stem)
                 .foregroundStyle(.white.opacity(0.85))
-                .onTapGesture { copyPath(for: pair) }
-                .help("Click to copy ARW path (HIF if ARW is missing)")
+                .onTapGesture { copyPath(for: entry) }
+                .help("Click to copy ARW path (preview path if ARW is missing)")
                 .accessibilityIdentifier("canvas.stemPill.stem")
             Text(filesBadge)
                 .foregroundStyle(.white.opacity(0.45))
                 .accessibilityIdentifier("canvas.stemPill.files")
-            if let b = state.burstPosition(for: pair.stem) {
+            if let b = state.burstPosition(for: entry.stem) {
                 Text("\(b.index)/\(b.total) burst")
                     .foregroundStyle(.white.opacity(0.45))
                     .accessibilityIdentifier("canvas.stemPill.burst")
@@ -879,21 +879,26 @@ struct ContentView: View {
         // clobbering the per-Text identifiers we need for tests.
     }
 
+    /// What files exist on disk for the current entry. When both HIF
+    /// and JPG are present we already prefer HIF in the model layer,
+    /// so the badge reflects that — "ARW+HIF" not "ARW+HIF+JPG".
     private var filesBadge: String {
-        let files = state.currentPairFiles
-        switch (files.arw, files.hif) {
-        case (true, true):  return "ARW+HIF"
-        case (true, false): return "ARW"
-        case (false, true): return "HIF"
-        case (false, false): return ""
+        let files = state.currentEntryFiles
+        switch (files.arw, files.hif, files.jpg) {
+        case (true,  true,  _):     return "ARW+HIF"
+        case (true,  false, true):  return "ARW+JPG"
+        case (true,  false, false): return "ARW"
+        case (false, true,  _):     return "HIF"
+        case (false, false, true):  return "JPG"
+        case (false, false, false): return ""
         }
     }
 
-    private func copyPath(for pair: PhotoPair) {
+    private func copyPath(for entry: PhotoEntry) {
         let fm = FileManager.default
         let url: URL? = {
-            if fm.fileExists(atPath: pair.rawURL.path) { return pair.rawURL }
-            if fm.fileExists(atPath: pair.heifURL.path) { return pair.heifURL }
+            if let raw = entry.rawURL, fm.fileExists(atPath: raw.path) { return raw }
+            if fm.fileExists(atPath: entry.previewURL.path) { return entry.previewURL }
             return nil
         }()
         guard let url else { return }
@@ -915,7 +920,13 @@ struct ContentView: View {
     }
 
     private func statusText(image: DecodedImage) -> String {
-        var parts: [String] = [state.displayedVariant.displayName]
+        // Format-honest preview label: "HEIF" for HIF/HEIF/HEIC,
+        // "JPEG" for JPG/JPEG. RAW stays "RAW".
+        let variantLabel: String = {
+            if state.displayedVariant == .raw { return "RAW" }
+            return (state.displayedEntry?.hasJPGPreview ?? false) ? "JPEG" : "HEIF"
+        }()
+        var parts: [String] = [variantLabel]
         if state.displayedVariant == .raw {
             parts.append(state.decoder.displayName)
         }
@@ -964,7 +975,7 @@ struct ContentView: View {
     @discardableResult
     private func handleDrop(_ urls: [URL]) -> Bool {
         guard let (shoot, focus) = ShootScanner.resolve(droppedURLs: urls) else {
-            state.errorMessage = "No ARW + HIF pair found in dropped items"
+            state.errorMessage = "No ARW + HIF/JPG pair (or standalone preview) found in dropped items"
             return false
         }
         Task { await state.loadShoot(shoot, focus: focus) }

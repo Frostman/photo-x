@@ -3,15 +3,22 @@ import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
-final class HEIFDecoder: ImageDecoder {
+/// Decodes the entry's preview file (HIF / HEIF / HEIC / JPG / JPEG)
+/// via ImageIO. Was `HEIFDecoder` historically; renamed once JPG
+/// joined HIF as a peer preview format. The ImageIO call
+/// (`CGImageSourceCreateWithData` → `CGImageSourceCreateImageAtIndex`)
+/// is format-agnostic, so the impl didn't change — only the name and
+/// the bytes-cache type it composes with.
+final class PreviewDecoder: ImageDecoder {
     /// Optional shared bytes cache. When present, the decoder serves
-    /// repeat reads of the same HIF from RAM instead of re-touching the
-    /// source media — the win for back-and-forth culling on SD/CFExpress
-    /// where every disk seek matters. nil means "always read from disk"
-    /// (used by tests + ad-hoc decoder construction).
-    let bytesCache: HIFBytesCache?
+    /// repeat reads of the same preview file from RAM instead of
+    /// re-touching the source media — the win for back-and-forth
+    /// culling on SD/CFExpress where every disk seek matters. nil
+    /// means "always read from disk" (used by tests + ad-hoc decoder
+    /// construction).
+    let bytesCache: PreviewBytesCache?
 
-    init(bytesCache: HIFBytesCache? = nil) {
+    init(bytesCache: PreviewBytesCache? = nil) {
         self.bytesCache = bytesCache
     }
 
@@ -22,14 +29,14 @@ final class HEIFDecoder: ImageDecoder {
         }.value
     }
 
-    private static func run(url: URL, bytesCache: HIFBytesCache?) async throws -> DecodedImage {
+    private static func run(url: URL, bytesCache: PreviewBytesCache?) async throws -> DecodedImage {
         let data: Data
         if let cache = bytesCache {
             if let cached = await cache.get(url.path) {
                 #if DEBUG
                 let usedMB = await cache.bytesUsed / (1024 * 1024)
                 let count  = await cache.count
-                Log.decode.notice("HIF bytes HIT: \(url.lastPathComponent, privacy: .public) (\(cached.count, privacy: .public) B, cache \(count, privacy: .public) entries / \(usedMB, privacy: .public) MB)")
+                Log.decode.notice("preview bytes HIT: \(url.lastPathComponent, privacy: .public) (\(cached.count, privacy: .public) B, cache \(count, privacy: .public) entries / \(usedMB, privacy: .public) MB)")
                 #endif
                 data = cached
             } else {
@@ -43,7 +50,7 @@ final class HEIFDecoder: ImageDecoder {
                 #if DEBUG
                 let usedMB = await cache.bytesUsed / (1024 * 1024)
                 let count  = await cache.count
-                Log.decode.notice("HIF bytes MISS: \(url.lastPathComponent, privacy: .public) read \(data.count, privacy: .public) B in \(readMS, format: .fixed(precision: 1)) ms (cache \(count, privacy: .public) entries / \(usedMB, privacy: .public) MB)")
+                Log.decode.notice("preview bytes MISS: \(url.lastPathComponent, privacy: .public) read \(data.count, privacy: .public) B in \(readMS, format: .fixed(precision: 1)) ms (cache \(count, privacy: .public) entries / \(usedMB, privacy: .public) MB)")
                 #endif
             }
         } else {

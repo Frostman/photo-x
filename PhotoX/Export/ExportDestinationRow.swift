@@ -129,9 +129,9 @@ struct ExportDestinationRow: View {
             }
             .help("Copy .ARW files")
             Toggle(isOn: boolBinding(\.includeHIF)) {
-                Text("HIF").font(.caption2.bold())
+                Text("HIF/JPG").font(.caption2.bold())
             }
-            .help("Copy .HIF files")
+            .help("Copy .HIF or .JPG files (whichever the entry has)")
             Toggle(isOn: boolBinding(\.includeXMP)) {
                 Text("XMP").font(.caption2.bold())
             }

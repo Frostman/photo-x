@@ -4,14 +4,17 @@ import XCTest
 /// pure-UI assertions — no fixture mutation involved.
 final class ViewToggleTests: PhotoXUITestCase {
 
-    func test_heifRawToggle_updatesStatusText() throws {
+    func test_previewRawToggle_updatesStatusText() throws {
         waitForShootLoaded()
         let status = app.staticTexts["canvas.statusText"]
         XCTAssertTrue(status.waitForExistence(timeout: 3),
-                      "canvas.statusText should exist once a pair is shown")
+                      "canvas.statusText should exist once an entry is shown")
         let before = (status.value as? String) ?? ""
-        XCTAssertTrue(before.contains("HEIF"),
-                      "fresh load starts on HEIF; got '\(before)'")
+        // First entry might be either preview format depending on
+        // what sorts first alphabetically in the fixture; either is
+        // a valid starting point. We just care that it's NOT RAW.
+        XCTAssertTrue(before.contains("HEIF") || before.contains("JPEG"),
+                      "fresh load starts on a preview format; got '\(before)'")
 
         pressKey("Z")
         // Status text changes its label string → predicate-wait until

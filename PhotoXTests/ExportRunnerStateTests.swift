@@ -28,12 +28,12 @@ final class ExportRunnerStateTests: XCTestCase {
         try? FileManager.default.removeItem(at: tmpRoot)
     }
 
-    private func makePair(_ stem: String, bytes: Int = 1024) throws -> PhotoPair {
+    private func makePair(_ stem: String, bytes: Int = 1024) throws -> PhotoEntry {
         let arw = sourceDir.appendingPathComponent("\(stem).ARW")
         let hif = sourceDir.appendingPathComponent("\(stem).HIF")
         try Data(repeating: 1, count: bytes).write(to: arw)
         try Data(repeating: 2, count: bytes).write(to: hif)
-        return PhotoPair(rawURL: arw, heifURL: hif, stem: stem)
+        return PhotoEntry(rawURL: arw, previewURL: hif, stem: stem)
     }
 
     private func dest(at url: URL,
@@ -45,7 +45,7 @@ final class ExportRunnerStateTests: XCTestCase {
     // MARK: tests
 
     func test_startAll_emptyDestinations_isNoOp() async {
-        runner.startAll(pairs: [], pairXMPs: [:],
+        runner.startAll(entries: [], entryXMPs: [:],
                         projectName: "P", destinations: [],
                         notifications: .silent)
         await runner.waitForCompletion()
@@ -57,7 +57,7 @@ final class ExportRunnerStateTests: XCTestCase {
         let p = try makePair("X")
         let d1 = dest(at: destDirA)
         let d2 = dest(at: destDirB)
-        runner.startOne(d1.id, pairs: [p], pairXMPs: [:],
+        runner.startOne(d1.id, entries: [p], entryXMPs: [:],
                         projectName: "P", destination: d1, notifications: .silent)
         await runner.waitForCompletion()
         XCTAssertNotNil(runner.perDestination[d1.id])
@@ -67,7 +67,7 @@ final class ExportRunnerStateTests: XCTestCase {
     func test_terminalStates_areCapturedAfterRun() async throws {
         let p = try makePair("X")
         let d = dest(at: destDirA)
-        runner.startOne(d.id, pairs: [p], pairXMPs: [:],
+        runner.startOne(d.id, entries: [p], entryXMPs: [:],
                         projectName: "P", destination: d, notifications: .silent)
         await runner.waitForCompletion()
         switch runner.perDestination[d.id] {
@@ -85,7 +85,7 @@ final class ExportRunnerStateTests: XCTestCase {
         // at least one destination should be queued or running.
         let p = try makePair("X")
         let d = dest(at: destDirA)
-        runner.startAll(pairs: [p], pairXMPs: [:],
+        runner.startAll(entries: [p], entryXMPs: [:],
                         projectName: "P", destinations: [d],
                         notifications: .silent)
         // queued counts as "in flight" for the purposes of letting the
@@ -100,7 +100,7 @@ final class ExportRunnerStateTests: XCTestCase {
         let p = try makePair("X")
         let d1 = dest(at: destDirA)
         let d2 = dest(at: destDirB)
-        runner.startAll(pairs: [p], pairXMPs: [:],
+        runner.startAll(entries: [p], entryXMPs: [:],
                         projectName: "P", destinations: [d1, d2],
                         notifications: .silent)
         await runner.waitForCompletion()
@@ -114,7 +114,7 @@ final class ExportRunnerStateTests: XCTestCase {
         let p = try makePair("X")
         let d1 = dest(at: destDirA)
         let d2 = dest(at: destDirB)
-        runner.startAll(pairs: [p], pairXMPs: [:],
+        runner.startAll(entries: [p], entryXMPs: [:],
                         projectName: "P", destinations: [d1, d2],
                         notifications: .silent)
         runner.cancelAll()
@@ -144,7 +144,7 @@ final class ExportRunnerStateTests: XCTestCase {
         // The runner acquires the assertion synchronously in startOne so
         // the moment this returns, isPreventingSleep must be true — no
         // polling, no race.
-        runner.startOne(d.id, pairs: [p], pairXMPs: [:],
+        runner.startOne(d.id, entries: [p], entryXMPs: [:],
                         projectName: "P", destination: d, notifications: .silent)
         XCTAssertTrue(runner.isPreventingSleep,
                       "assertion must be held the moment startOne returns")
@@ -158,7 +158,7 @@ final class ExportRunnerStateTests: XCTestCase {
         let p = try makePair("X")
         let d1 = dest(at: destDirA)
         let d2 = dest(at: destDirB)
-        runner.startAll(pairs: [p], pairXMPs: [:],
+        runner.startAll(entries: [p], entryXMPs: [:],
                         projectName: "P", destinations: [d1, d2],
                         sharedRead: false, notifications: .silent)
         XCTAssertTrue(runner.isPreventingSleep,
@@ -175,7 +175,7 @@ final class ExportRunnerStateTests: XCTestCase {
         let p = try makePair("X")
         let d1 = dest(at: destDirA)
         let d2 = dest(at: destDirB)
-        runner.startAll(pairs: [p], pairXMPs: [:],
+        runner.startAll(entries: [p], entryXMPs: [:],
                         projectName: "P", destinations: [d1, d2],
                         sharedRead: false, notifications: .silent)
         XCTAssertTrue(runner.isPreventingSleep)
@@ -188,7 +188,7 @@ final class ExportRunnerStateTests: XCTestCase {
     func test_sleepAssertion_isReleasedAfterCancelOne() async throws {
         let p = try makePair("X")
         let d = dest(at: destDirA)
-        runner.startOne(d.id, pairs: [p], pairXMPs: [:],
+        runner.startOne(d.id, entries: [p], entryXMPs: [:],
                         projectName: "P", destination: d, notifications: .silent)
         XCTAssertTrue(runner.isPreventingSleep)
         runner.cancel(d.id)
@@ -206,7 +206,7 @@ final class ExportRunnerStateTests: XCTestCase {
         try Data("blocked".utf8).write(to: bogus)   // path now refers to a file
         let d = dest(at: bogus.appendingPathComponent("sub"))
 
-        runner.startOne(d.id, pairs: [p], pairXMPs: [:],
+        runner.startOne(d.id, entries: [p], entryXMPs: [:],
                         projectName: "P", destination: d, notifications: .silent)
         XCTAssertTrue(runner.isPreventingSleep)
         await runner.waitForCompletion()
@@ -217,12 +217,12 @@ final class ExportRunnerStateTests: XCTestCase {
     func test_summary_recordsCopiedAndSkippedOnRerun() async throws {
         let p = try makePair("X")
         let d = dest(at: destDirA)
-        runner.startOne(d.id, pairs: [p], pairXMPs: [:],
+        runner.startOne(d.id, entries: [p], entryXMPs: [:],
                         projectName: "P", destination: d, notifications: .silent)
         await runner.waitForCompletion()
 
         // Second run — files should now be skipped.
-        runner.startOne(d.id, pairs: [p], pairXMPs: [:],
+        runner.startOne(d.id, entries: [p], entryXMPs: [:],
                         projectName: "P", destination: d, notifications: .silent)
         await runner.waitForCompletion()
         guard case .done(let s) = runner.perDestination[d.id] else {

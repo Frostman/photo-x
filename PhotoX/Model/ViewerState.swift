@@ -9,7 +9,7 @@ enum RatingInputSource {
     case sidebar
 }
 
-/// Order in which pairs appear in the filmstrip + navigation. Filmstrip is
+/// Order in which entries appear in the filmstrip + navigation. Filmstrip is
 /// horizontal, so the directional arrows on the score modes show where the
 /// higher-rated images land: → means highest-on-right, ← means highest-on-left.
 enum SortMode: String, CaseIterable, Identifiable, Hashable, Sendable {
@@ -43,16 +43,16 @@ final class ViewerState {
     var shoot: Shoot?
     var currentIndex: Int = 0
 
-    var pair: PhotoPair? {
-        let pairs = sortedPairs
-        guard pairs.indices.contains(currentIndex) else { return nil }
-        return pairs[currentIndex]
+    var entry: PhotoEntry? {
+        let entries = sortedEntries
+        guard entries.indices.contains(currentIndex) else { return nil }
+        return entries[currentIndex]
     }
 
     var decoder: DecoderChoice = .imageIO
 
-    var displayedVariant: ImageVariant = .heif
-    var requestedVariant: ImageVariant = .heif
+    var displayedVariant: ImageVariant = .preview
+    var requestedVariant: ImageVariant = .preview
     var autoSwapEnabled: Bool
 
     var overlays: OverlayToggles = .init()
@@ -80,7 +80,7 @@ final class ViewerState {
     private var afGeneration: Int = 0
     /// Per-stem AF data cache. Populated EXCLUSIVELY by the indexer's
     /// exiftool pipeline (see `runExifPipeline`). Cleared on shoot switch.
-    var pairAFData: [String: ExifToolRunner.AFData] = [:]
+    var entryAFData: [String: ExifToolRunner.AFData] = [:]
 
     var currentXMP: XMPSidecar = .empty
     private var xmpGeneration: Int = 0
@@ -106,44 +106,45 @@ final class ViewerState {
     var displayedPixelSize: CGSize = .zero
 
     /// Pair that's currently rendered on the canvas — derived from
-    /// `displayedIndex`. Differs from `pair` (derived from `currentIndex`)
+    /// `displayedIndex`. Differs from `entry` (derived from `currentIndex`)
     /// only briefly while a navigation's texture is still loading.
-    var displayedPair: PhotoPair? {
-        let pairs = sortedPairs
-        guard pairs.indices.contains(displayedIndex) else { return nil }
-        return pairs[displayedIndex]
+    var displayedEntry: PhotoEntry? {
+        let entries = sortedEntries
+        guard entries.indices.contains(displayedIndex) else { return nil }
+        return entries[displayedIndex]
     }
 
-    /// True when the user has navigated to a pair whose texture isn't
+    /// True when the user has navigated to a entry whose texture isn't
     /// yet on screen — drives the centred loading indicator over the
     /// canvas and the "block rating/reject during nav lag" guard.
     /// Two cases:
-    /// 1. **Navigation in flight**: the navigation-intent pair (`pair`)
-    ///    differs from the displayed pair — the new texture is being
+    /// 1. **Navigation in flight**: the navigation-intent entry (`entry`)
+    ///    differs from the displayed entry — the new texture is being
     ///    decoded + uploaded.
     /// 2. **First-frame load**: `currentImage` is still nil because
     ///    the initial decode hasn't completed yet.
     /// Returns false when no shoot is loaded (nothing to load).
     var isLoadingDisplayedPair: Bool {
-        guard let currentStem = pair?.stem else { return false }
+        guard let currentStem = entry?.stem else { return false }
         if currentImage == nil { return true }
-        return currentStem != displayedPair?.stem
+        return currentStem != displayedEntry?.stem
     }
 
     /// Bumped on every shoot teardown (closeShoot, loadShoot). Any background
-    /// task that might write into per-shoot state (thumbnails, pairXMPs,
-    /// pairAFData) captures this at spawn time and checks it before applying
+    /// task that might write into per-shoot state (thumbnails, entryXMPs,
+    /// entryAFData) captures this at spawn time and checks it before applying
     /// its result. This drops stale writes from tasks that finish after the
     /// user closed the shoot or switched folders.
     private var shootGeneration: Int = 0
 
-    var currentPairFiles: PairFiles = .none
+    var currentEntryFiles: EntryFiles = .none
 
-    struct PairFiles: Hashable, Sendable {
+    struct EntryFiles: Hashable, Sendable {
         var arw: Bool = false
         var hif: Bool = false
+        var jpg: Bool = false
         var xmp: Bool = false
-        static let none = PairFiles()
+        static let none = EntryFiles()
     }
 
     // Filmstrip
@@ -151,27 +152,27 @@ final class ViewerState {
 
     /// Sort order for the filmstrip + navigation. Session-only (not persisted).
     /// Mutating this through `setSortMode(_:)` preserves the currently-focused
-    /// pair across the reorder. Direct assignment (e.g. via a Picker binding)
+    /// entry across the reorder. Direct assignment (e.g. via a Picker binding)
     /// does NOT remap currentIndex — always go through setSortMode.
     private(set) var sortMode: SortMode = .name
 
-    /// `shoot.pairs` re-ordered per `sortMode`. Recomputed on every access;
-    /// for the largest shoots we test against (~5 k pairs) that's <10 ms.
+    /// `shoot.entries` re-ordered per `sortMode`. Recomputed on every access;
+    /// for the largest shoots we test against (~5 k entries) that's <10 ms.
     /// Score-mode ties break on stem so the order is deterministic.
-    var sortedPairs: [PhotoPair] {
+    var sortedEntries: [PhotoEntry] {
         guard let shoot else { return [] }
         switch sortMode {
         case .name:
-            return shoot.pairs
+            return shoot.entries
         case .scoreAscending:
-            return shoot.pairs.sorted { a, b in
+            return shoot.entries.sorted { a, b in
                 let sa = sortScore(of: a)
                 let sb = sortScore(of: b)
                 if sa != sb { return sa < sb }
                 return a.stem < b.stem
             }
         case .scoreDescending:
-            return shoot.pairs.sorted { a, b in
+            return shoot.entries.sorted { a, b in
                 let sa = sortScore(of: a)
                 let sb = sortScore(of: b)
                 if sa != sb { return sa > sb }
@@ -182,20 +183,20 @@ final class ViewerState {
 
     /// Numeric score for sort comparisons. Rejected (-1) sinks below unrated
     /// (0) in asc mode and stays at the bottom in desc mode by sort symmetry.
-    private func sortScore(of pair: PhotoPair) -> Int {
-        pairXMPs[pair.stem]?.rating ?? 0
+    private func sortScore(of entry: PhotoEntry) -> Int {
+        entryXMPs[entry.stem]?.rating ?? 0
     }
 
-    /// Change the sort mode while preserving which pair is currently focused.
+    /// Change the sort mode while preserving which entry is currently focused.
     /// Use this instead of writing to `sortMode` directly — otherwise the
-    /// pair under `currentIndex` will shift to whatever pair happens to land
+    /// entry under `currentIndex` will shift to whatever entry happens to land
     /// at that index in the new order.
     func setSortMode(_ newMode: SortMode) {
         guard newMode != sortMode else { return }
-        let currentStem = pair?.stem
+        let currentStem = entry?.stem
         sortMode = newMode
         if let stem = currentStem,
-           let idx = sortedPairs.firstIndex(where: { $0.stem == stem }) {
+           let idx = sortedEntries.firstIndex(where: { $0.stem == stem }) {
             currentIndex = idx
         }
     }
@@ -215,14 +216,14 @@ final class ViewerState {
     }
 
     func ratingCategory(for stem: String) -> RatingCategory {
-        let xmp = pairXMPs[stem] ?? .empty
+        let xmp = entryXMPs[stem] ?? .empty
         if xmp.isReject { return .rejected }
         if let stars = xmp.starCount, stars > 0 { return .rated(stars: stars) }
         return .unrated
     }
 
-    func isVisible(_ pair: PhotoPair) -> Bool {
-        switch ratingCategory(for: pair.stem) {
+    func isVisible(_ entry: PhotoEntry) -> Bool {
+        switch ratingCategory(for: entry.stem) {
         case .rejected:           return showRejected
         case .rated(let stars):   return showStars.contains(stars)
         case .unrated:            return showUnrated
@@ -236,8 +237,8 @@ final class ViewerState {
         guard let shoot else { return (0, 0, 0, [:], 0) }
         var rated = 0, rejected = 0, unrated = 0
         var stars: [Int: Int] = [:]
-        for pair in shoot.pairs {
-            switch ratingCategory(for: pair.stem) {
+        for entry in shoot.entries {
+            switch ratingCategory(for: entry.stem) {
             case .rated(let n):
                 rated += 1
                 stars[n, default: 0] += 1
@@ -247,10 +248,10 @@ final class ViewerState {
                 unrated += 1
             }
         }
-        return (rated, rejected, unrated, stars, shoot.pairs.count)
+        return (rated, rejected, unrated, stars, shoot.entries.count)
     }
 
-    /// How many pairs the user is currently looking at (= sum of enabled
+    /// How many entries the user is currently looking at (= sum of enabled
     /// categories). Derived from shootStats + show-* toggles.
     var shownCount: Int {
         let s = shootStats
@@ -263,27 +264,27 @@ final class ViewerState {
     // MARK: - Indexer-populated caches
     //
     // The indexer (see `startIndexing`) is the SOLE writer for these — no
-    // per-pair lazy fetches anywhere. `applyCurrentPair` reads them
+    // per-entry lazy fetches anywhere. `applyCurrentEntry` reads them
     // synchronously; SwiftUI re-renders when the flush methods publish a
     // batch's results to the cache.
 
     var thumbnails: [String: CGImage] = [:]
-    var pairXMPs: [String: XMPSidecar] = [:]
-    /// Sony `SequenceNumber` per pair stem; filter-independent (every loaded
-    /// pair has its raw number). Drives `burstIDByStem` for the filmstrip
+    var entryXMPs: [String: XMPSidecar] = [:]
+    /// Sony `SequenceNumber` per entry stem; filter-independent (every loaded
+    /// entry has its raw number). Drives `burstIDByStem` for the filmstrip
     /// bracket overlay.
-    var pairSequenceNumber: [String: Int] = [:]
+    var entrySequenceNumber: [String: Int] = [:]
     /// EXIF summary for the sidebar, indexed eagerly via the exiftool batch
     /// loader. Replaces the per-navigation ImageIO read.
-    var pairExif: [String: ExifSummary] = [:]
+    var entryExif: [String: ExifSummary] = [:]
 
-    /// Per-shoot cache of computed histograms, keyed by pair stem.
+    /// Per-shoot cache of computed histograms, keyed by entry stem.
     /// A `Histogram` is small (~3 KB: 256 bins × 3 channels × 4 B);
-    /// even a 5 000-pair shoot is ~15 MB — no need to cap. Cleared in
+    /// even a 5 000-entry shoot is ~15 MB — no need to cap. Cleared in
     /// `resetForShootSwitch`. Eliminates the histogram-recompute
     /// spike on revisit (texture cache hit is now matched by
     /// histogram cache hit — sidebar updates instantly).
-    var pairHistograms: [String: Histogram] = [:]
+    var entryHistograms: [String: Histogram] = [:]
 
     // MARK: - Indexing state
 
@@ -305,13 +306,13 @@ final class ViewerState {
     /// - `advancedExif`: one-shot exiftool per batch for proprietary
     ///   Sony tags (AF, FaceN, SequenceNumber, CameraOrientation).
     ///   ~11 ms / file on a CFExpress card, dominated by card IO.
-    /// - `xmpSidecars`: per-pair XMP file read. ~1 ms / file.
+    /// - `xmpSidecars`: per-entry XMP file read. ~1 ms / file.
     struct IndexingProgress: Hashable, Sendable {
         var basicExifAndThumbs: Double = 0
         var advancedExif:       Double = 0
         var xmpSidecars:        Double = 0
 
-        // Weights from measured wall times on a 4695-pair CFExpress
+        // Weights from measured wall times on a 4695-entry CFExpress
         // shoot: basic 6 s, advanced 28 s, XMP 3 s (≈37 s total).
         // 0.15 / 0.75 / 0.10 ≈ those ratios and sums to 1.0 so `total`
         // tracks the actual indexing wall-time fraction.
@@ -369,31 +370,31 @@ final class ViewerState {
 
     private var indexingTask: Task<Void, Never>?
     /// Per-neighbour prefetch tasks (warm decode + texture upload),
-    /// keyed by pair stem. Cancelled when the stem leaves the
+    /// keyed by entry stem. Cancelled when the stem leaves the
     /// neighbour set OR on shoot switch.
     private var prefetchTasks: [String: Task<Void, Never>] = [:]
     /// The task spawned by the most recent `navigate(to:)` — running
-    /// `applyCurrentPair` → `applyRequestedVariant`. Cancelled by the
+    /// `applyCurrentEntry` → `applyRequestedVariant`. Cancelled by the
     /// next navigate so intermediate decode results never reach the
     /// canvas during a fast arrow burst.
     private var currentApplyTask: Task<Void, Never>?
     private var batchQueues: (advancedExif: BatchQueue,
                               xmp: BatchQueue,
                               basicExif: BatchQueue)?
-    /// Stem → batch id for the advanced-EXIF + XMP pipelines (50-pair
+    /// Stem → batch id for the advanced-EXIF + XMP pipelines (50-entry
     /// batches).
     private var stemToAdvancedExifBatchID: [String: Int] = [:]
-    /// Stem → batch id for the basic-EXIF + thumbs pipeline (5-pair
+    /// Stem → batch id for the basic-EXIF + thumbs pipeline (5-entry
     /// batches). Kept separate so signal prioritisation maps to the
     /// right id per queue.
     private var stemToBasicExifBatchID: [String: Int] = [:]
-    /// 50-pair batches shared by the advanced-EXIF + XMP pipelines.
-    private var advancedExifBatches: [[PhotoPair]] = []
-    /// 5-pair batches used by the basic-EXIF + thumbs pipeline —
+    /// 50-entry batches shared by the advanced-EXIF + XMP pipelines.
+    private var advancedExifBatches: [[PhotoEntry]] = []
+    /// 5-entry batches used by the basic-EXIF + thumbs pipeline —
     /// smaller so a navigation signal bumps a tighter slice of work to
     /// the head, keeping user-visible thumbnails appearing fast even
     /// on big shoots.
-    private var basicExifBatches: [[PhotoPair]] = []
+    private var basicExifBatches: [[PhotoEntry]] = []
 
     /// Advanced-EXIF + XMP share this batch size. 50 keeps argv
     /// lengths and JSON parse cost reasonable while amortising
@@ -436,11 +437,11 @@ final class ViewerState {
         self.overlays = initialOverlays
     }
 
-    /// Loads a shoot and focuses on a specific pair within it. Replaces the
-    /// previous single-pair flow. Kicks off indexing BEFORE the first image
-    /// decode so the focus pair's metadata batch is already in flight by
+    /// Loads a shoot and focuses on a specific entry within it. Replaces the
+    /// previous single-entry flow. Kicks off indexing BEFORE the first image
+    /// decode so the focus entry's metadata batch is already in flight by
     /// the time the HEIF preview lands on-screen.
-    func loadShoot(_ shoot: Shoot, focus: PhotoPair) async {
+    func loadShoot(_ shoot: Shoot, focus: PhotoEntry) async {
         resetForShootSwitch()
         self.shoot = shoot
         self.currentIndex = shoot.index(of: focus) ?? 0
@@ -457,7 +458,7 @@ final class ViewerState {
             RecentShoots.shared.add(shoot.folderURL.path)
         }
         startIndexing()
-        await applyCurrentPair(resetViewport: true)
+        await applyCurrentEntry(resetViewport: true)
     }
 
     /// True iff the URL looks like a DCIM shoot folder mounted under
@@ -513,13 +514,13 @@ final class ViewerState {
         for (_, task) in prefetchTasks { task.cancel() }
         prefetchTasks.removeAll()
         MTLTextureCache.shared.clear()
-        Task { await pipeline.hifBytes.clear() }
+        Task { await pipeline.previewBytes.clear() }
         thumbnails.removeAll()
-        pairXMPs.removeAll()
-        pairAFData.removeAll()
-        pairSequenceNumber.removeAll()
-        pairExif.removeAll()
-        pairHistograms.removeAll()
+        entryXMPs.removeAll()
+        entryAFData.removeAll()
+        entrySequenceNumber.removeAll()
+        entryExif.removeAll()
+        entryHistograms.removeAll()
         burstIDByStem.removeAll()
         burstSizesByID.removeAll()
         indexingStatus = .idle
@@ -527,7 +528,7 @@ final class ViewerState {
         indexingTimings = .init()
         indexingCompletedAt = nil
 
-        // 4) Reset per-pair UI state.
+        // 4) Reset per-entry UI state.
         currentIndex = 0
         currentImage = nil
         currentImageKey = nil
@@ -536,7 +537,7 @@ final class ViewerState {
         currentHistogram = nil
         currentAFRegions = []
         currentAFSettings = AFSettings()
-        currentPairFiles = .none
+        currentEntryFiles = .none
         displayedIndex = 0
         displayedExif = nil
         displayedAFRegions = []
@@ -547,8 +548,8 @@ final class ViewerState {
         isDecoding = false
         viewport = .identity
         currentPixelZoom = 1.0
-        displayedVariant = .heif
-        requestedVariant = .heif
+        displayedVariant = .preview
+        requestedVariant = .preview
     }
 
     func toggleFilmstrip() {
@@ -557,30 +558,30 @@ final class ViewerState {
 
     // MARK: - Indexer (sole loader for EXIF / AF / XMP / SequenceNumber / thumbnails)
     //
-    // The shoot is sliced into 50-pair batches at start. Three independent
+    // The shoot is sliced into 50-entry batches at start. Three independent
     // pipeline workers (exiftool, XMP, thumbnails) pull batches off their
     // own priority queue. Each pipeline guarantees a batch is processed at
-    // most once. `prioritizeBatch(forStem:)` bumps a pair's batch to the
-    // head of all three queues so the focus pair's data lands fast even
+    // most once. `prioritizeBatch(forStem:)` bumps a entry's batch to the
+    // head of all three queues so the focus entry's data lands fast even
     // mid-indexing.
 
     func startIndexing() {
         guard let shoot else { return }
         let gen = shootGeneration
 
-        advancedExifBatches = stride(from: 0, to: shoot.pairs.count, by: Self.advancedExifBatchSize).map {
-            Array(shoot.pairs[$0 ..< min($0 + Self.advancedExifBatchSize, shoot.pairs.count)])
+        advancedExifBatches = stride(from: 0, to: shoot.entries.count, by: Self.advancedExifBatchSize).map {
+            Array(shoot.entries[$0 ..< min($0 + Self.advancedExifBatchSize, shoot.entries.count)])
         }
-        basicExifBatches = stride(from: 0, to: shoot.pairs.count, by: Self.basicExifBatchSize).map {
-            Array(shoot.pairs[$0 ..< min($0 + Self.basicExifBatchSize, shoot.pairs.count)])
+        basicExifBatches = stride(from: 0, to: shoot.entries.count, by: Self.basicExifBatchSize).map {
+            Array(shoot.entries[$0 ..< min($0 + Self.basicExifBatchSize, shoot.entries.count)])
         }
         stemToAdvancedExifBatchID.removeAll(keepingCapacity: true)
         stemToBasicExifBatchID.removeAll(keepingCapacity: true)
         for (id, batch) in advancedExifBatches.enumerated() {
-            for pair in batch { stemToAdvancedExifBatchID[pair.stem] = id }
+            for entry in batch { stemToAdvancedExifBatchID[entry.stem] = id }
         }
         for (id, batch) in basicExifBatches.enumerated() {
-            for pair in batch { stemToBasicExifBatchID[pair.stem] = id }
+            for entry in batch { stemToBasicExifBatchID[entry.stem] = id }
         }
 
         let advancedExifCount = advancedExifBatches.count
@@ -604,7 +605,7 @@ final class ViewerState {
             xmpSidecars:        PipelineTiming(startedAt: startTime)
         )
         #if DEBUG
-        Log.app.notice("Indexing \(shoot.pairs.count, privacy: .public) pairs: \(advancedExifCount, privacy: .public) advanced exif/xmp batches × \(Self.advancedExifBatchSize, privacy: .public), \(basicExifCount, privacy: .public) basic exif + thumbs batches × \(Self.basicExifBatchSize, privacy: .public), \(Self.advancedExifWorkerCount, privacy: .public) advanced exif workers")
+        Log.app.notice("Indexing \(shoot.entries.count, privacy: .public) entries: \(advancedExifCount, privacy: .public) advanced exif/xmp batches × \(Self.advancedExifBatchSize, privacy: .public), \(basicExifCount, privacy: .public) basic exif + thumbs batches × \(Self.basicExifBatchSize, privacy: .public), \(Self.advancedExifWorkerCount, privacy: .public) advanced exif workers")
         #endif
 
         indexingTask = Task(priority: .utility) { [weak self] in
@@ -633,8 +634,8 @@ final class ViewerState {
             self?.finishIndexing(generation: gen)
         }
 
-        // Make sure the pair the user is looking at gets indexed first.
-        if let stem = pair?.stem {
+        // Make sure the entry the user is looking at gets indexed first.
+        if let stem = entry?.stem {
             prioritizeBatch(forStem: stem)
         }
     }
@@ -649,10 +650,10 @@ final class ViewerState {
         indexingTask = nil
         shootGeneration &+= 1
         thumbnails.removeAll()
-        pairXMPs.removeAll()
-        pairAFData.removeAll()
-        pairSequenceNumber.removeAll()
-        pairExif.removeAll()
+        entryXMPs.removeAll()
+        entryAFData.removeAll()
+        entrySequenceNumber.removeAll()
+        entryExif.removeAll()
         burstIDByStem.removeAll()
         burstSizesByID.removeAll()
         indexingProgress = .init()
@@ -664,10 +665,10 @@ final class ViewerState {
         startIndexing()
     }
 
-    /// Signal the indexer to bump a pair's batch to the head of every
+    /// Signal the indexer to bump a entry's batch to the head of every
     /// pipeline. Resolves the stem to each pipeline's own batch id
-    /// (advanced-EXIF + XMP use 50-pair batches, basic-EXIF + thumbs
-    /// uses 5-pair). No-op if the batch is already in progress or done.
+    /// (advanced-EXIF + XMP use 50-entry batches, basic-EXIF + thumbs
+    /// uses 5-entry). No-op if the batch is already in progress or done.
     func prioritizeBatch(forStem stem: String) {
         guard let queues = batchQueues else { return }
         let advancedID = stemToAdvancedExifBatchID[stem]
@@ -695,13 +696,13 @@ final class ViewerState {
         while let id = await queue.popNext() {
             if Task.isCancelled || shootGeneration != gen { return }
             let batch = advancedExifBatches[id]
-            let urls = batch.map(\.heifURL)
+            let urls = batch.map(\.previewURL)
             let (result, stats) = await MetadataBatchLoader.readInstrumented(urls)
             var afByStem:  [String: ExifToolRunner.AFData] = [:]
             var seqByStem: [String: Int] = [:]
-            for pair in batch {
-                if let v = result.af [pair.heifURL.path] { afByStem [pair.stem] = v }
-                if let v = result.seq[pair.heifURL.path] { seqByStem[pair.stem] = v }
+            for entry in batch {
+                if let v = result.af [entry.previewURL.path] { afByStem [entry.stem] = v }
+                if let v = result.seq[entry.previewURL.path] { seqByStem[entry.stem] = v }
             }
             flushAdvancedExifBatch(af: afByStem, seq: seqByStem, generation: gen)
             logAdvancedExifBatchStats(id: id, stats: stats)
@@ -748,9 +749,9 @@ final class ViewerState {
                                 stats: ThumbnailLoader.Stats?)
             let results: [Result] = await withTaskGroup(of: Result.self,
                                                         returning: [Result].self) { group in
-                for pair in batch {
-                    let url = pair.heifURL
-                    let stem = pair.stem
+                for entry in batch {
+                    let url = entry.previewURL
+                    let stem = entry.stem
                     group.addTask {
                         let (img, exif, stats) = await Task.detached(priority: .utility) {
                             ThumbnailLoader.loadInstrumented(from: url)
@@ -805,22 +806,22 @@ final class ViewerState {
                                         seq: [String: Int],
                                         generation: Int) {
         guard shootGeneration == generation else { return }
-        for (stem, v) in af   { pairAFData[stem]          = v }
-        for (stem, v) in seq  { pairSequenceNumber[stem]  = v }
+        for (stem, v) in af   { entryAFData[stem]          = v }
+        for (stem, v) in seq  { entrySequenceNumber[stem]  = v }
         // Roll the burst-id table forward so the filmstrip's bracket
         // overlay can read it as an O(1) lookup. Doing it here at the
         // flush boundary keeps the main thread responsive — the cost
         // is paid once per batch, not per SwiftUI render.
         if !seq.isEmpty { recomputeBurstIDs() }
         // If the just-arrived batch covers the currently-navigated
-        // pair, refresh the canvas-overlay state. Same update for the
-        // displayed pair (matches the AF overlay the user actually
-        // sees) — different pair during rapid nav, often the same.
-        if let stem = pair?.stem, let v = af[stem] {
+        // entry, refresh the canvas-overlay state. Same update for the
+        // displayed entry (matches the AF overlay the user actually
+        // sees) — different entry during rapid nav, often the same.
+        if let stem = entry?.stem, let v = af[stem] {
             self.currentAFRegions = v.regions
             self.currentAFSettings = v.settings
         }
-        if let stem = displayedPair?.stem, let v = af[stem] {
+        if let stem = displayedEntry?.stem, let v = af[stem] {
             self.displayedAFRegions = v.regions
             self.displayedAFSettings = v.settings
         }
@@ -832,13 +833,13 @@ final class ViewerState {
         for (stem, xmp) in items {
             // Don't overwrite an optimistic user rating — see Phase 4c
             // notes; in-memory wins if the user has already touched it.
-            if pairXMPs[stem] == nil { pairXMPs[stem] = xmp }
+            if entryXMPs[stem] == nil { entryXMPs[stem] = xmp }
         }
-        if let stem = pair?.stem, let xmp = items.first(where: { $0.stem == stem })?.xmp,
+        if let stem = entry?.stem, let xmp = items.first(where: { $0.stem == stem })?.xmp,
            self.currentXMP == .empty {
             self.currentXMP = xmp
         }
-        if let stem = displayedPair?.stem, let xmp = items.first(where: { $0.stem == stem })?.xmp,
+        if let stem = displayedEntry?.stem, let xmp = items.first(where: { $0.stem == stem })?.xmp,
            self.displayedXMP == .empty {
             self.displayedXMP = xmp
         }
@@ -853,15 +854,15 @@ final class ViewerState {
                                               generation: Int) {
         guard shootGeneration == generation else { return }
         for (stem, img) in thumbs { thumbnails[stem] = img }
-        for (stem, ex)  in exifs  { pairExif[stem]   = ex }
-        // Refresh the navigated pair's sidebar EXIF if it landed in
-        // this batch. Mirror for the displayed pair (lags during
+        for (stem, ex)  in exifs  { entryExif[stem]   = ex }
+        // Refresh the navigated entry's sidebar EXIF if it landed in
+        // this batch. Mirror for the displayed entry (lags during
         // rapid nav — the sidebar reads displayedExif).
-        if let stem = pair?.stem,
+        if let stem = entry?.stem,
            let ex = exifs.first(where: { $0.0 == stem })?.1 {
             self.currentExif = ex
         }
-        if let stem = displayedPair?.stem,
+        if let stem = displayedEntry?.stem,
            let ex = exifs.first(where: { $0.0 == stem })?.1 {
             self.displayedExif = ex
         }
@@ -871,22 +872,22 @@ final class ViewerState {
     /// and the new pixels are now visible. Atomically commits the
     /// filmstrip-selection / AF-overlay / sidebar-EXIF state so they
     /// match what the user actually sees. Drops the call if the stem
-    /// no longer maps to any pair in the current shoot (rare race
+    /// no longer maps to any entry in the current shoot (rare race
     /// with shoot teardown). `pixelSize` is the bound texture's
     /// display dimensions — feeds the AF overlay so rects stay
     /// correctly scaled across portrait↔landscape transitions.
     func commitDisplayed(stem: String, pixelSize: CGSize) {
-        let pairs = sortedPairs
-        guard let idx = pairs.firstIndex(where: { $0.stem == stem }) else {
+        let entries = sortedEntries
+        guard let idx = entries.firstIndex(where: { $0.stem == stem }) else {
             // Stem isn't in the current sorted view — typically a filter
-            // toggle (rejects/unrated/star levels) hid the pair while
+            // toggle (rejects/unrated/star levels) hid the entry while
             // its texture was still loading. Clear the displayed* fields
             // so the AF overlay / sidebar / loading indicator don't
-            // mis-attribute to a now-hidden pair. Clamp displayedIndex
+            // mis-attribute to a now-hidden entry. Clamp displayedIndex
             // into range so the filmstrip doesn't try to highlight an
             // out-of-bounds slot.
-            if !pairs.indices.contains(displayedIndex) {
-                displayedIndex = max(0, min(displayedIndex, pairs.count - 1))
+            if !entries.indices.contains(displayedIndex) {
+                displayedIndex = max(0, min(displayedIndex, entries.count - 1))
             }
             displayedExif = nil
             displayedAFRegions = []
@@ -896,11 +897,11 @@ final class ViewerState {
             return
         }
         displayedIndex = idx
-        displayedExif = pairExif[stem]
-        let af = pairAFData[stem]
+        displayedExif = entryExif[stem]
+        let af = entryAFData[stem]
         displayedAFRegions = af?.regions ?? []
         displayedAFSettings = af?.settings ?? AFSettings()
-        displayedXMP = pairXMPs[stem] ?? .empty
+        displayedXMP = entryXMPs[stem] ?? .empty
         displayedPixelSize = pixelSize
     }
 
@@ -966,21 +967,21 @@ final class ViewerState {
         indexingCompletedAt = Date()
 
         // One production summary line per indexing run — has everything
-        // needed to diagnose performance later: pair count + per-pipeline
+        // needed to diagnose performance later: entry count + per-pipeline
         // wall times. The three pipelines run in parallel so the total
         // wall time is the max, not the sum.
-        let pairs = shoot?.pairs.count ?? 0
+        let entries = shoot?.entries.count ?? 0
         let advancedDur = indexingTimings.advancedExif.duration       ?? 0
         let xmpDur      = indexingTimings.xmpSidecars.duration        ?? 0
         let basicDur    = indexingTimings.basicExifAndThumbs.duration ?? 0
         let total = max(advancedDur, max(xmpDur, basicDur))
-        Log.app.notice("Indexing complete: \(pairs, privacy: .public) pairs in \(formattedDuration(total), privacy: .public) (basic \(formattedDuration(basicDur), privacy: .public), advanced \(formattedDuration(advancedDur), privacy: .public), xmp \(formattedDuration(xmpDur), privacy: .public))")
+        Log.app.notice("Indexing complete: \(entries, privacy: .public) entries in \(formattedDuration(total), privacy: .public) (basic \(formattedDuration(basicDur), privacy: .public), advanced \(formattedDuration(advancedDur), privacy: .public), xmp \(formattedDuration(xmpDur), privacy: .public))")
     }
 
     // MARK: - Burst detection (filmstrip bracket overlay)
 
-    /// Burst id per pair stem. Pairs whose `Sony:SequenceNumber` is one
-    /// greater than the previous (name-sorted) pair's share an id. Frames
+    /// Burst id per entry stem. Pairs whose `Sony:SequenceNumber` is one
+    /// greater than the previous (name-sorted) entry's share an id. Frames
     /// without a sequence number break any in-progress run. Computed
     /// against the whole shoot — never the filtered/sorted view — so
     /// filter toggles can't break up a burst's grouping.
@@ -995,9 +996,9 @@ final class ViewerState {
     private(set) var burstSizesByID: [Int: Int] = [:]
 
     /// Recompute `burstIDByStem` + `burstSizesByID` from the current
-    /// `pairSequenceNumber` cache + name-sorted pair list. Called by the
+    /// `entrySequenceNumber` cache + name-sorted entry list. Called by the
     /// indexer whenever an exif batch lands new SequenceNumber data, and
-    /// by tests that seed `pairSequenceNumber` directly. O(N over the
+    /// by tests that seed `entrySequenceNumber` directly. O(N over the
     /// shoot); safe to call on MainActor.
     func recomputeBurstIDs() {
         guard let shoot else {
@@ -1008,16 +1009,16 @@ final class ViewerState {
         var ids: [String: Int] = [:]
         var nextID = 0
         var prevSeq: Int? = nil
-        for pair in shoot.pairs {
-            guard let seq = pairSequenceNumber[pair.stem] else {
+        for entry in shoot.entries {
+            guard let seq = entrySequenceNumber[entry.stem] else {
                 prevSeq = nil
                 continue
             }
             if let prev = prevSeq, seq == prev + 1 {
-                ids[pair.stem] = nextID
+                ids[entry.stem] = nextID
             } else {
                 nextID += 1
-                ids[pair.stem] = nextID
+                ids[entry.stem] = nextID
             }
             prevSeq = seq
         }
@@ -1027,7 +1028,7 @@ final class ViewerState {
         burstSizesByID = sizes
     }
 
-    /// Where this pair sits in its burst, expressed as a top-edge bracket
+    /// Where this entry sits in its burst, expressed as a top-edge bracket
     /// segment for the filmstrip. The shape depends on whether the
     /// immediate visible neighbours share its burst id — so a burst stays
     /// visually grouped even when filters hide some of its frames.
@@ -1039,7 +1040,7 @@ final class ViewerState {
     }
 
     /// Pure helper. `visible` is the filmstrip's display-order list (after
-    /// sort + filter). Returns `.none` unless sort == .name AND the pair
+    /// sort + filter). Returns `.none` unless sort == .name AND the entry
     /// belongs to a multi-frame burst AND at least one VISIBLE neighbour
     /// shares its burst id.
     ///
@@ -1048,7 +1049,7 @@ final class ViewerState {
     /// per-cell render loop** — use `Self.burstSegment(at:in:ids:sizes:)`
     /// with hoisted ids/sizes so the cost stays O(visible) per render
     /// instead of O(visible × N).
-    func burstSegment(at index: Int, visible: [PhotoPair]) -> BurstSegment {
+    func burstSegment(at index: Int, visible: [PhotoEntry]) -> BurstSegment {
         guard sortMode == .name else { return .none }
         return Self.burstSegment(at: index, in: visible,
                                  ids: burstIDByStem,
@@ -1059,7 +1060,7 @@ final class ViewerState {
     /// dicts. Caller (FilmstripView) reads `burstIDByStem` / `burstSizesByID`
     /// ONCE at the top of its body and passes them through so this loop
     /// stays O(1) per cell.
-    static func burstSegment(at index: Int, in visible: [PhotoPair],
+    static func burstSegment(at index: Int, in visible: [PhotoEntry],
                              ids: [String: Int],
                              sizes: [Int: Int]) -> BurstSegment {
         guard visible.indices.contains(index) else { return .none }
@@ -1080,42 +1081,42 @@ final class ViewerState {
         }
     }
 
-    /// 1-based position + total for a pair inside its burst, or nil for
-    /// singletons. Bursts are contiguous in `shoot.pairs` (name-order),
+    /// 1-based position + total for a entry inside its burst, or nil for
+    /// singletons. Bursts are contiguous in `shoot.entries` (name-order),
     /// so we walk backward from `stem` until the burst id changes.
     func burstPosition(for stem: String) -> (index: Int, total: Int)? {
         guard let id = burstIDByStem[stem],
               let size = burstSizesByID[id], size >= 2,
               let shoot,
-              let idx = shoot.pairs.firstIndex(where: { $0.stem == stem })
+              let idx = shoot.entries.firstIndex(where: { $0.stem == stem })
         else { return nil }
         var start = idx
         while start > 0,
-              burstIDByStem[shoot.pairs[start - 1].stem] == id {
+              burstIDByStem[shoot.entries[start - 1].stem] == id {
             start -= 1
         }
         return (idx - start + 1, size)
     }
 
-    /// Move to a new pair within the current shoot (clamped). Index is into
-    /// `sortedPairs`, i.e. display order.
+    /// Move to a new entry within the current shoot (clamped). Index is into
+    /// `sortedEntries`, i.e. display order.
     ///
     /// Cancels any prior in-flight apply-task so a fast burst doesn't
     /// commit intermediate results. The pipeline's decoded image may
-    /// still finish in the background (HEIFDecoder/ImageIO don't honour
+    /// still finish in the background (PreviewDecoder/ImageIO don't honour
     /// granular cancellation), but its result is dropped before
     /// reaching `currentImage` — no SwiftUI re-render, no texture
     /// upload, no histogram compute.
     func navigate(to index: Int) {
-        let pairs = sortedPairs
-        guard !pairs.isEmpty else { return }
-        let clamped = max(0, min(index, pairs.count - 1))
+        let entries = sortedEntries
+        guard !entries.isEmpty else { return }
+        let clamped = max(0, min(index, entries.count - 1))
         guard clamped != currentIndex else { return }
         currentIndex = clamped
         PerfTracker.mark("ViewerState.navigate → spawning task")
         currentApplyTask?.cancel()
         currentApplyTask = Task { [weak self] in
-            await self?.applyCurrentPair(resetViewport: false)
+            await self?.applyCurrentEntry(resetViewport: false)
         }
     }
 
@@ -1138,27 +1139,27 @@ final class ViewerState {
         }
     }
     func lastPair() {
-        let pairs = sortedPairs
-        guard !pairs.isEmpty else { return }
-        if let idx = nextVisibleIndex(from: pairs.count, direction: -1) {
+        let entries = sortedEntries
+        guard !entries.isEmpty else { return }
+        if let idx = nextVisibleIndex(from: entries.count, direction: -1) {
             navigate(to: idx)
         }
     }
 
-    /// Walk from `from` in `direction` (±1), skipping pairs filtered out by
-    /// the current show-* toggles. Walks `sortedPairs` (display order).
-    /// Returns nil if no visible pair lies in that direction.
+    /// Walk from `from` in `direction` (±1), skipping entries filtered out by
+    /// the current show-* toggles. Walks `sortedEntries` (display order).
+    /// Returns nil if no visible entry lies in that direction.
     private func nextVisibleIndex(from: Int, direction: Int) -> Int? {
-        let pairs = sortedPairs
+        let entries = sortedEntries
         var i = from + direction
-        while pairs.indices.contains(i) {
-            if isVisible(pairs[i]) { return i }
+        while entries.indices.contains(i) {
+            if isVisible(entries[i]) { return i }
             i += direction
         }
         return nil
     }
 
-    /// Walk `steps` visible pairs (sign = direction). Used by ⌥+arrow.
+    /// Walk `steps` visible entries (sign = direction). Used by ⌥+arrow.
     func navigate(by steps: Int) {
         guard steps != 0 else { return }
         let direction = steps > 0 ? 1 : -1
@@ -1184,17 +1185,17 @@ final class ViewerState {
     func navigateByBurst(direction: Int) {
         guard direction != 0 else { return }
         guard sortMode == .name,
-              sortedPairs.indices.contains(currentIndex) else {
+              sortedEntries.indices.contains(currentIndex) else {
             navigate(by: direction > 0 ? 1 : -1)
             return
         }
-        let startID = burstIDByStem[sortedPairs[currentIndex].stem]
+        let startID = burstIDByStem[sortedEntries[currentIndex].stem]
         // Step 1: find the first frame in `direction` whose burst id
         // differs from where we started.
         var boundary: Int?
         var idx = currentIndex
         while let next = nextVisibleIndex(from: idx, direction: direction) {
-            if burstIDByStem[sortedPairs[next].stem] != startID {
+            if burstIDByStem[sortedEntries[next].stem] != startID {
                 boundary = next
                 break
             }
@@ -1210,11 +1211,11 @@ final class ViewerState {
         }
         // Backward: boundary is the LAST frame of the previous burst.
         // Walk back to its first frame.
-        let prevID = burstIDByStem[sortedPairs[boundary].stem]
+        let prevID = burstIDByStem[sortedEntries[boundary].stem]
         var firstOfPrev = boundary
         idx = boundary
         while let prev = nextVisibleIndex(from: idx, direction: -1) {
-            if burstIDByStem[sortedPairs[prev].stem] != prevID { break }
+            if burstIDByStem[sortedEntries[prev].stem] != prevID { break }
             firstOfPrev = prev
             idx = prev
         }
@@ -1222,8 +1223,10 @@ final class ViewerState {
     }
 
     func toggleRequestedVariant() {
-        guard pair != nil else { return }
-        requestedVariant = (requestedVariant == .heif) ? .raw : .heif
+        // No RAW for this entry (standalone HIF / JPG) → no-op.
+        // Pressing Z on a preview-only entry has nothing to swap to.
+        guard let entry, entry.rawURL != nil else { return }
+        requestedVariant = (requestedVariant == .preview) ? .raw : .preview
         Task { await applyRequestedVariant() }
     }
 
@@ -1247,26 +1250,26 @@ final class ViewerState {
     /// Updates UI optimistically; rolls back if the XMP write fails.
     // MARK: - rating / reject / label mutations
     //
-    // Every user-action that writes to currentXMP / pairXMPs starts
+    // Every user-action that writes to currentXMP / entryXMPs starts
     // with `guard !isLoadingDisplayedPair` so the action targets the
-    // pair the user actually SEES. Rationale: during a fast nav burst
+    // entry the user actually SEES. Rationale: during a fast nav burst
     // the canvas can lag the navigation intent by ~50–200 ms; a key
     // press in that window would otherwise rate the not-yet-visible
-    // pair. Dropping the press is unambiguous — user re-presses once
+    // entry. Dropping the press is unambiguous — user re-presses once
     // the new image lands. Sidebar buttons that wrap these methods
     // disable themselves on `isLoadingDisplayedPair` so the user can
     // see why their click might not have acted.
 
     func setRating(_ rating: Int?, source: RatingInputSource = .keyboard) {
         guard !isLoadingDisplayedPair else { return }
-        guard let pair else { return }
+        guard let entry else { return }
         let previous = currentXMP
         var updated = currentXMP
         updated.rating = rating
         currentXMP = updated
-        pairXMPs[pair.stem] = updated
-        currentPairFiles.xmp = true
-        let capturedPair = pair
+        entryXMPs[entry.stem] = updated
+        currentEntryFiles.xmp = true
+        let capturedEntry = entry
 
         // Auto-advance only on SET (non-nil) — clearing is usually a "fix
         // this mistake" action, not a decision worth moving past.
@@ -1277,20 +1280,20 @@ final class ViewerState {
         Task {
             do {
                 try await Task.detached(priority: .userInitiated) {
-                    try XMPSidecarWriter.updateRating(rating, for: capturedPair)
+                    try XMPSidecarWriter.updateRating(rating, for: capturedEntry)
                 }.value
                 #if DEBUG
-                Log.app.notice("XMP write OK: \(capturedPair.stem, privacy: .public) rating=\(rating.map(String.init) ?? "nil", privacy: .public)")
+                Log.app.notice("XMP write OK: \(capturedEntry.stem, privacy: .public) rating=\(rating.map(String.init) ?? "nil", privacy: .public)")
                 #endif
             } catch {
                 // Rollback. Only touch currentXMP if the user hasn't navigated
                 // away — otherwise we'd clobber unrelated state.
-                if self.pair?.id == capturedPair.id {
+                if self.entry?.id == capturedEntry.id {
                     self.currentXMP = previous
                 }
-                self.pairXMPs[capturedPair.stem] = previous
-                self.errorMessage = "Failed to write XMP for \(capturedPair.stem): \(String(describing: error))"
-                Log.app.error("XMP write FAILED: \(capturedPair.stem, privacy: .public) — \(String(describing: error), privacy: .public)")
+                self.entryXMPs[capturedEntry.stem] = previous
+                self.errorMessage = "Failed to write XMP for \(capturedEntry.stem): \(String(describing: error))"
+                Log.app.error("XMP write FAILED: \(capturedEntry.stem, privacy: .public) — \(String(describing: error), privacy: .public)")
             }
         }
     }
@@ -1311,14 +1314,14 @@ final class ViewerState {
     /// Sets the XMP color label, or clears it (nil). Optimistic with rollback.
     func setLabel(_ label: String?, source: RatingInputSource = .keyboard) {
         guard !isLoadingDisplayedPair else { return }
-        guard let pair else { return }
+        guard let entry else { return }
         let previous = currentXMP
         var updated = currentXMP
         updated.label = label
         currentXMP = updated
-        pairXMPs[pair.stem] = updated
-        currentPairFiles.xmp = true
-        let capturedPair = pair
+        entryXMPs[entry.stem] = updated
+        currentEntryFiles.xmp = true
+        let capturedEntry = entry
 
         if label != nil, autoAdvanceAfterRating(source: source) {
             nextPair()
@@ -1327,18 +1330,18 @@ final class ViewerState {
         Task {
             do {
                 try await Task.detached(priority: .userInitiated) {
-                    try XMPSidecarWriter.updateLabel(label, for: capturedPair)
+                    try XMPSidecarWriter.updateLabel(label, for: capturedEntry)
                 }.value
                 #if DEBUG
-                Log.app.notice("XMP label write OK: \(capturedPair.stem, privacy: .public) label=\(label ?? "nil", privacy: .public)")
+                Log.app.notice("XMP label write OK: \(capturedEntry.stem, privacy: .public) label=\(label ?? "nil", privacy: .public)")
                 #endif
             } catch {
-                if self.pair?.id == capturedPair.id {
+                if self.entry?.id == capturedEntry.id {
                     self.currentXMP = previous
                 }
-                self.pairXMPs[capturedPair.stem] = previous
-                self.errorMessage = "Failed to write XMP label for \(capturedPair.stem): \(String(describing: error))"
-                Log.app.error("XMP label write FAILED: \(capturedPair.stem, privacy: .public) — \(String(describing: error), privacy: .public)")
+                self.entryXMPs[capturedEntry.stem] = previous
+                self.errorMessage = "Failed to write XMP label for \(capturedEntry.stem): \(String(describing: error))"
+                Log.app.error("XMP label write FAILED: \(capturedEntry.stem, privacy: .public) — \(String(describing: error), privacy: .public)")
             }
         }
     }
@@ -1349,7 +1352,7 @@ final class ViewerState {
     }
 
     func cycleDecoder() {
-        guard pair != nil else { return }
+        guard entry != nil else { return }
         decoder = (decoder == .imageIO) ? .libRaw : .imageIO
         if requestedVariant == .raw {
             Task { await applyRequestedVariant() }
@@ -1373,54 +1376,78 @@ final class ViewerState {
         let curr = currentPixelZoom
         lastAutoSwapPixelZoom = curr
 
-        guard autoSwapEnabled, pair != nil else { return }
-        if curr >= 1.0 && prev < 1.0 && requestedVariant == .heif {
+        // Skip when there's no RAW to swap to (standalone HIF / JPG).
+        guard autoSwapEnabled, let entry, entry.rawURL != nil else { return }
+        if curr >= 1.0 && prev < 1.0 && requestedVariant == .preview {
             #if DEBUG
-            Log.app.notice("auto-swap: HEIF → RAW (pz \(prev, format: .fixed(precision: 2)) → \(curr, format: .fixed(precision: 2)))")
+            Log.app.notice("auto-swap: preview → RAW (pz \(prev, format: .fixed(precision: 2)) → \(curr, format: .fixed(precision: 2)))")
             #endif
             requestedVariant = .raw
             await applyRequestedVariant()
         }
     }
 
-    /// Apply everything for the current pair. Metadata (EXIF, AF, XMP,
+    /// Apply everything for the current entry. Metadata (EXIF, AF, XMP,
     /// thumbnails, SequenceNumber) comes from the indexer's caches — this
     /// method does NOT spawn any metadata Task. If the cache is cold for
-    /// the pair, the view shows empty/placeholder state and we signal the
+    /// the entry, the view shows empty/placeholder state and we signal the
     /// indexer to bump that batch to the head of every pipeline; the flush
     /// methods will fill `currentXxx` when the batch lands.
-    private func applyCurrentPair(resetViewport: Bool) async {
-        guard let pair else { return }
-        PerfTracker.mark("applyCurrentPair entered")
+    private func applyCurrentEntry(resetViewport: Bool) async {
+        guard let entry else { return }
+        PerfTracker.mark("applyCurrentEntry entered")
         // Keep currentImage as-is so the previous frame stays on screen until
         // the new one decodes — avoids a flash to ProgressView (which would
         // tear down the ImageCanvasView and lose SwiftUI focus).
         self.errorMessage = nil
-        self.displayedVariant = .heif
-        self.requestedVariant = .heif
+        self.displayedVariant = .preview
+        self.requestedVariant = .preview
         if resetViewport {
             self.viewport = .identity
             self.currentPixelZoom = 1.0
         }
-        let af = pairAFData[pair.stem]
-        self.currentExif        = pairExif[pair.stem]
+        let af = entryAFData[entry.stem]
+        self.currentExif        = entryExif[entry.stem]
         self.currentAFRegions   = af?.regions ?? []
         self.currentAFSettings  = af?.settings ?? AFSettings()
-        self.currentXMP         = pairXMPs[pair.stem] ?? .empty
-        self.currentPairFiles   = pairFiles(for: pair)
-        prioritizeBatch(forStem: pair.stem)
+        self.currentXMP         = entryXMPs[entry.stem] ?? .empty
+        self.currentEntryFiles   = entryFiles(for: entry)
+        prioritizeBatch(forStem: entry.stem)
         await applyRequestedVariant()
         prefetchNeighborHEIFs()
     }
 
-    private func pairFiles(for pair: PhotoPair) -> PairFiles {
+    private func entryFiles(for entry: PhotoEntry) -> EntryFiles {
         let fm = FileManager.default
-        let xmpURL = pair.rawURL.deletingPathExtension().appendingPathExtension("xmp")
-        return PairFiles(
-            arw: fm.fileExists(atPath: pair.rawURL.path),
-            hif: fm.fileExists(atPath: pair.heifURL.path),
-            xmp: fm.fileExists(atPath: xmpURL.path)
+        let folder = entry.previewURL.deletingLastPathComponent()
+        // .hif covers HIF/HEIF/HEIC; .jpg covers JPG/JPEG. We probe
+        // both regardless of which one is the active previewURL, so
+        // the pill badge can honestly report what's on disk.
+        return EntryFiles(
+            arw: entry.rawURL.map { fm.fileExists(atPath: $0.path) } ?? false,
+            hif: fileExistsCaseInsensitiveAny(at: folder, stem: entry.stem,
+                                              exts: ["HIF", "HEIF", "HEIC"]),
+            jpg: fileExistsCaseInsensitiveAny(at: folder, stem: entry.stem,
+                                              exts: ["JPG", "JPEG"]),
+            xmp: fm.fileExists(atPath: entry.xmpURL.path)
         )
+    }
+
+    /// Existence probe that tries each extension in both upper and
+    /// lower case (`.HIF` and `.hif`). macOS default APFS is case-
+    /// insensitive but a card formatted exFAT can be sensitive.
+    private func fileExistsCaseInsensitiveAny(at folder: URL, stem: String,
+                                               exts: [String]) -> Bool {
+        let fm = FileManager.default
+        for ext in exts {
+            if fm.fileExists(atPath: folder.appendingPathComponent("\(stem).\(ext)").path) {
+                return true
+            }
+            if fm.fileExists(atPath: folder.appendingPathComponent("\(stem).\(ext.lowercased())").path) {
+                return true
+            }
+        }
+        return false
     }
 
     /// Warm the MTLTextureCache for neighbours of `currentIndex` so the
@@ -1438,12 +1465,12 @@ final class ViewerState {
     /// (~600 ms per nav was observed at ±2). Keep it tight so user nav
     /// gets the GPU first.
     private func prefetchNeighborHEIFs() {
-        let pairs = sortedPairs
+        let entries = sortedEntries
         let neighborOffsets = [-1, 1]
         let neighborIndices = neighborOffsets
             .map { currentIndex + $0 }
-            .filter { pairs.indices.contains($0) }
-        let neighborStems = Set(neighborIndices.map { pairs[$0].stem })
+            .filter { entries.indices.contains($0) }
+        let neighborStems = Set(neighborIndices.map { entries[$0].stem })
 
         // Drop any prefetches for stems no longer in the neighbour set.
         for (stem, task) in prefetchTasks where !neighborStems.contains(stem) {
@@ -1453,17 +1480,17 @@ final class ViewerState {
 
         // Spawn / dedupe prefetches for the current neighbours.
         for idx in neighborIndices {
-            let neighbor = pairs[idx]
+            let neighbor = entries[idx]
             let stem = neighbor.stem
             if prefetchTasks[stem] != nil { continue }
-            let key = DecodeKey(pairID: neighbor.id, variant: .heif, decoder: .imageIO)
+            let key = DecodeKey(entryID: neighbor.id, variant: .preview, decoder: .imageIO)
             prefetchTasks[stem] = Task { [weak self] in
                 guard let self else { return }
                 if Task.isCancelled { return }
                 let decoded: DecodedImage?
                 do {
                     decoded = try await self.pipeline.decode(
-                        pair: neighbor, variant: .heif, decoder: .imageIO
+                        entry: neighbor, variant: .preview, decoder: .imageIO
                     )
                 } catch {
                     decoded = nil
@@ -1486,11 +1513,11 @@ final class ViewerState {
     }
 
     private func kickOffHistogramCompute(for image: DecodedImage) {
-        guard let stem = pair?.stem else { return }
+        guard let stem = entry?.stem else { return }
         histogramGeneration += 1
         let gen = histogramGeneration
         // Cache hit — surface instantly, no Task spawn.
-        if let cached = pairHistograms[stem] {
+        if let cached = entryHistograms[stem] {
             currentHistogram = cached
             return
         }
@@ -1502,37 +1529,37 @@ final class ViewerState {
             guard let self else { return }
             guard self.histogramGeneration == gen else { return }
             self.currentHistogram = h
-            self.pairHistograms[stem] = h
+            self.entryHistograms[stem] = h
         }
     }
 
     private func applyRequestedVariant() async {
-        guard let pair else { return }
+        guard let entry else { return }
         let variant = requestedVariant
         let chosenDecoder = decoder
         // HEIF always goes through the imageIO decoder slot — match
         // DecodePipeline.decode's keyDecoder normalisation so the
         // canvas's MTLTextureCache key lines up with whatever the
         // pipeline produced.
-        let keyDecoder: DecoderChoice = (variant == .heif) ? .imageIO : chosenDecoder
-        let key = DecodeKey(pairID: pair.id, variant: variant, decoder: keyDecoder)
+        let keyDecoder: DecoderChoice = (variant == .preview) ? .imageIO : chosenDecoder
+        let key = DecodeKey(entryID: entry.id, variant: variant, decoder: keyDecoder)
         self.errorMessage = nil
         self.isDecoding = true
         defer { isDecoding = false }
 
         // FAST PATH — both texture and histogram caches hit. Skip
         // pipeline.decode entirely (saves ~100 ms per revisit on a
-        // Sony A1 II HEIF — even with HIFBytesCache hit, ImageIO's
+        // Sony A1 II HEIF — even with PreviewBytesCache hit, ImageIO's
         // re-decode is the bottleneck on A↔B↔A↔B nav). The canvas's
         // `ImageCanvasView` is wired to call `setImage` on key change
         // even when the CGImage instance is the same, so the cached
         // texture binds correctly. `currentImage` stays pointing at
-        // whatever pair the canvas LAST decoded — its `cgImage` is
+        // whatever entry the canvas LAST decoded — its `cgImage` is
         // unused by the cache-hit setImage path; readers of pixelSize
         // already moved to `displayedPixelSize`.
         if !Task.isCancelled,
            MTLTextureCache.shared.get(key) != nil,
-           let cachedHist = pairHistograms[pair.stem]
+           let cachedHist = entryHistograms[entry.stem]
         {
             PerfTracker.mark("applyRequestedVariant fast-path (texture + histogram cached)")
             self.currentImageKey = key
@@ -1543,7 +1570,7 @@ final class ViewerState {
 
         do {
             PerfTracker.mark("about to await pipeline.decode")
-            let decoded = try await pipeline.decode(pair: pair, variant: variant, decoder: chosenDecoder)
+            let decoded = try await pipeline.decode(entry: entry, variant: variant, decoder: chosenDecoder)
             PerfTracker.mark("pipeline.decode returned")
             // Drop the result if the user navigated past or switched
             // variant/decoder while the decode was in flight. The

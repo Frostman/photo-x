@@ -50,12 +50,12 @@ final class ExportNotificationsTests: XCTestCase {
         try? FileManager.default.removeItem(at: tmpRoot)
     }
 
-    private func makePair() throws -> PhotoPair {
+    private func makePair() throws -> PhotoEntry {
         let arw = sourceDir.appendingPathComponent("X.ARW")
         let hif = sourceDir.appendingPathComponent("X.HIF")
         try Data([1, 2, 3]).write(to: arw)
         try Data([4, 5, 6]).write(to: hif)
-        return PhotoPair(rawURL: arw, heifURL: hif, stem: "X")
+        return PhotoEntry(rawURL: arw, previewURL: hif, stem: "X")
     }
 
     // MARK: tests
@@ -64,7 +64,7 @@ final class ExportNotificationsTests: XCTestCase {
         let p = try makePair()
         let d = ExportSettings.Destination(path: dest1.path)
         let recorder = Recorder()
-        runner.startOne(d.id, pairs: [p], pairXMPs: [:],
+        runner.startOne(d.id, entries: [p], entryXMPs: [:],
                         projectName: "P", destination: d,
                         notifications: recorder.adapter())
         await runner.waitForCompletion()
@@ -81,7 +81,7 @@ final class ExportNotificationsTests: XCTestCase {
         let d2 = ExportSettings.Destination(path: dest2.path)
         let d3 = ExportSettings.Destination(path: dest3.path)
         let recorder = Recorder()
-        runner.startAll(pairs: [p], pairXMPs: [:],
+        runner.startAll(entries: [p], entryXMPs: [:],
                         projectName: "P", destinations: [d1, d2, d3],
                         sharedRead: false, notifications: recorder.adapter())
         await runner.waitForCompletion()
@@ -97,7 +97,7 @@ final class ExportNotificationsTests: XCTestCase {
         let d1 = ExportSettings.Destination(path: dest1.path)
         let d2 = ExportSettings.Destination(path: dest2.path)
         let recorder = Recorder()
-        runner.startAll(pairs: [p], pairXMPs: [:],
+        runner.startAll(entries: [p], entryXMPs: [:],
                         projectName: "P", destinations: [d1, d2],
                         sharedRead: true, notifications: recorder.adapter())
         await runner.waitForCompletion()

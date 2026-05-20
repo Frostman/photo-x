@@ -1,56 +1,68 @@
 import Foundation
 
-/// Orchestrates HEIF + RAW decoding. No longer caches `DecodedImage`
+/// Orchestrates preview + RAW decoding. No longer caches `DecodedImage`
 /// results — that role moved downstream to `MTLTextureCache`, which
 /// stores the GPU artifact (the form actually used for display).
 /// Single-flight dedup is kept so concurrent decodes of the same key
 /// share one underlying decode Task; this prevents redundant CPU work
-/// when both the user-facing nav and a prefetch ask for the same pair
+/// when both the user-facing nav and a prefetch ask for the same entry
 /// at the same instant.
 ///
-/// HEIF bytes are still cached via `HIFBytesCache` (sits in front of
-/// the HEIF decoder); the byte cache is now cleared on shoot switch so
-/// stale shoots' data doesn't outlive the session.
+/// Preview-file bytes (HIF / HEIF / HEIC / JPG / JPEG) are still cached
+/// via `PreviewBytesCache` (sits in front of `PreviewDecoder`); the
+/// byte cache is now cleared on shoot switch so stale shoots' data
+/// doesn't outlive the session.
 @MainActor
 final class DecodePipeline {
-    /// Raw-byte cache for HIFs: 2 GB ≈ ~200+ HIFs in RAM. Sits in
-    /// front of the HEIF decoder so back-and-forth culling never
-    /// re-reads from the source card. Cleared on shoot switch by
-    /// ViewerState.resetForShootSwitch.
-    let hifBytes: HIFBytesCache
+    /// Raw-byte cache for preview files: 2 GB ≈ ~200+ HIFs in RAM.
+    /// Sits in front of `PreviewDecoder` so back-and-forth culling
+    /// never re-reads from the source card. Cleared on shoot switch
+    /// by `ViewerState.resetForShootSwitch`.
+    let previewBytes: PreviewBytesCache
 
-    private let heifDecoder: any ImageDecoder
+    private let previewDecoder: any ImageDecoder
     private let rawImageIODecoder: any ImageDecoder = RAWImageIODecoder()
     private let rawLibRawDecoder: any ImageDecoder = RAWLibRawDecoder()
 
     private var inflight: [DecodeKey: Task<DecodedImage, Error>] = [:]
 
-    init(hifBytesCapacity: Int = 2 * 1024 * 1024 * 1024) {
-        self.hifBytes = HIFBytesCache(byteCapacity: hifBytesCapacity)
-        self.heifDecoder = HEIFDecoder(bytesCache: self.hifBytes)
+    init(previewBytesCapacity: Int = 2 * 1024 * 1024 * 1024) {
+        self.previewBytes = PreviewBytesCache(byteCapacity: previewBytesCapacity)
+        self.previewDecoder = PreviewDecoder(bytesCache: self.previewBytes)
     }
 
-    /// Decode `pair.variant` into a `DecodedImage`. Single-flight per
+    /// Decode `entry.variant` into a `DecodedImage`. Single-flight per
     /// `DecodeKey`: concurrent callers share one decode. The result is
     /// NOT cached on this side — caller is expected to consume the
     /// CGImage inline (upload to `MTLTextureCache.warm`, compute the
     /// histogram, etc.) and let the value drop.
-    func decode(pair: PhotoPair, variant: ImageVariant, decoder: DecoderChoice) async throws -> DecodedImage {
-        // Decoder is a RAW-only concern: HEIF always goes through HEIFDecoder.
-        // Normalize the dedup key so HEIF nav doesn't accidentally fan out
-        // across different decoder slots.
-        let keyDecoder: DecoderChoice = (variant == .heif) ? .imageIO : decoder
-        let key = DecodeKey(pairID: pair.id, variant: variant, decoder: keyDecoder)
+    ///
+    /// `.raw` request on an entry with no `rawURL` (standalone HIF /
+    /// JPG) silently falls back to `.preview` rather than failing.
+    func decode(entry: PhotoEntry, variant: ImageVariant, decoder: DecoderChoice) async throws -> DecodedImage {
+        // Resolve the effective variant: .raw without a RAW falls back
+        // to .preview. This keeps shortcut keys / auto-swap callers
+        // from needing the same guard themselves.
+        let effectiveVariant: ImageVariant = (variant == .raw && entry.rawURL == nil)
+            ? .preview : variant
+
+        // Decoder is a RAW-only concern: .preview always goes through
+        // PreviewDecoder. Normalise the dedup key so preview nav doesn't
+        // accidentally fan out across different decoder slots.
+        let keyDecoder: DecoderChoice = (effectiveVariant == .preview) ? .imageIO : decoder
+        let key = DecodeKey(entryID: entry.id, variant: effectiveVariant, decoder: keyDecoder)
 
         if let existing = inflight[key] {
             return try await existing.value
         }
 
-        let decoderImpl = decoderFor(variant: variant, choice: decoder)
-        let url = (variant == .heif) ? pair.heifURL : pair.rawURL
+        let decoderImpl = decoderFor(variant: effectiveVariant, choice: decoder)
+        // `.preview` URL is always present; `.raw` only when rawURL is
+        // non-nil (we forced fallback above).
+        let url: URL = (effectiveVariant == .preview) ? entry.previewURL : entry.rawURL!
 
         #if DEBUG
-        Log.decode.notice("start: \(key.pairID, privacy: .public) \(key.variant.rawValue, privacy: .public)/\(key.decoder.rawValue, privacy: .public) → \(url.lastPathComponent, privacy: .public)")
+        Log.decode.notice("start: \(key.entryID, privacy: .public) \(key.variant.rawValue, privacy: .public)/\(key.decoder.rawValue, privacy: .public) → \(url.lastPathComponent, privacy: .public)")
         #endif
         let task = Task<DecodedImage, Error> {
             try await decoderImpl.decode(url: url)
@@ -60,15 +72,15 @@ final class DecodePipeline {
 
         let result = try await task.value
         #if DEBUG
-        Log.decode.notice("done: \(key.pairID, privacy: .public) \(key.variant.rawValue, privacy: .public)/\(key.decoder.rawValue, privacy: .public) in \(result.decodeMS, format: .fixed(precision: 1)) ms")
+        Log.decode.notice("done: \(key.entryID, privacy: .public) \(key.variant.rawValue, privacy: .public)/\(key.decoder.rawValue, privacy: .public) in \(result.decodeMS, format: .fixed(precision: 1)) ms")
         #endif
         return result
     }
 
     private func decoderFor(variant: ImageVariant, choice: DecoderChoice) -> any ImageDecoder {
         switch variant {
-        case .heif:
-            return heifDecoder
+        case .preview:
+            return previewDecoder
         case .raw:
             switch choice {
             case .imageIO: return rawImageIODecoder

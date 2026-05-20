@@ -135,15 +135,15 @@ final class XMPSidecarTests: XCTestCase {
 
     // MARK: helpers
 
-    private func makePair(_ stem: String) -> PhotoPair {
-        PhotoPair(
+    private func makePair(_ stem: String) -> PhotoEntry {
+        PhotoEntry(
             rawURL: tmp.appendingPathComponent("\(stem).ARW"),
-            heifURL: tmp.appendingPathComponent("\(stem).HIF"),
+            previewURL: tmp.appendingPathComponent("\(stem).HIF"),
             stem: stem
         )
     }
 
-    private func xmpURL(for pair: PhotoPair) -> URL {
-        pair.rawURL.deletingPathExtension().appendingPathExtension("xmp")
+    private func xmpURL(for entry: PhotoEntry) -> URL {
+        entry.xmpURL
     }
 }

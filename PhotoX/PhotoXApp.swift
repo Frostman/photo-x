@@ -113,8 +113,8 @@ struct PhotoXApp: App {
             return
         }
         let shoot = ShootScanner.scan(folder: url)
-        guard let focus = shoot.pairs.first else {
-            viewerState.errorMessage = "No ARW + HIF pairs found in \(url.lastPathComponent)"
+        guard let focus = shoot.entries.first else {
+            viewerState.errorMessage = "No ARW + HIF/JPG pairs (or standalone HIF/JPG files) found in \(url.lastPathComponent)"
             return
         }
         await viewerState.loadShoot(shoot, focus: focus)

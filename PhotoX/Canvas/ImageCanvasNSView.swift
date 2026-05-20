@@ -27,8 +27,8 @@ final class ImageCanvasNSView: NSView {
     /// it's built in `viewDidMoveToWindow`. Sentinel default for the
     /// before-first-setImage window; never read in that case because
     /// `pendingImage` is also nil.
-    private var pendingKey: DecodeKey = DecodeKey(pairID: "",
-                                                   variant: .heif,
+    private var pendingKey: DecodeKey = DecodeKey(entryID: "",
+                                                   variant: .preview,
                                                    decoder: .imageIO)
 
     override init(frame frameRect: NSRect) {

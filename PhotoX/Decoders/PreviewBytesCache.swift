@@ -1,16 +1,18 @@
 import Foundation
 
-/// LRU cache for raw HIF file bytes, bounded by total size. Sits in
-/// front of the HEIF decoder so revisiting a frame during back-and-forth
-/// culling doesn't re-read it from slow source media (SD card, USB stick).
-/// At ~3-15 MB per Sony A1 II HIF a 2 GB budget holds ~200+ frames,
-/// dwarfing the decoded-pixel cache (20 entries × ~200 MB) — different
-/// granularities for different cost tiers.
+/// LRU cache for the raw bytes of an entry's preview file (HIF, HEIF,
+/// HEIC, JPG or JPEG). Sits in front of `PreviewDecoder` so revisiting
+/// a frame during back-and-forth culling doesn't re-read it from slow
+/// source media (SD card, USB stick). At ~3-15 MB per Sony A1 II HIF
+/// a 2 GB budget holds ~200+ frames, dwarfing the decoded-pixel cache
+/// (20 entries × ~200 MB) — different granularities for different
+/// cost tiers.
 ///
-/// The cache persists across shoot switches: paths are unique per shoot
-/// (folder-rooted), so old entries never collide with new shoots' files
-/// and the LRU policy naturally trims as a new shoot fills the budget.
-actor HIFBytesCache {
+/// The cache persists across shoot switches: paths are unique per
+/// shoot (folder-rooted), so old entries never collide with new
+/// shoots' files and the LRU policy naturally trims as a new shoot
+/// fills the budget.
+actor PreviewBytesCache {
     private var entries: [String: Data] = [:]
     /// Most-recently-used at the END; eviction pops from the FRONT.
     private var order: [String] = []

@@ -44,14 +44,17 @@ final class FolderStats {
     // Read by the `nonisolated` compute(for:) below, so they must not
     // inherit the enclosing class's @MainActor isolation. Immutable Set
     // literals are trivially Sendable, so nonisolated is safe.
-    nonisolated private static let rawExtensions: Set<String> = ["arw"]
+    nonisolated private static let rawExtensions:  Set<String> = ["arw"]
     nonisolated private static let heifExtensions: Set<String> = ["hif", "heif", "heic"]
+    nonisolated private static let jpgExtensions:  Set<String> = ["jpg", "jpeg"]
 
-    /// Pure function. Reads directory contents in one shot; counts stems with
-    /// both an ARW and a HIF (PhotoX's pair definition), and tracks how many
-    /// of those have an .xmp sidecar. nonisolated so callers can hop off main.
-    /// Internal (not private) so `VolumeScanner` can reuse the same
-    /// "what's a valid shoot" check when scanning DCIM subfolders on cards.
+    /// Pure function. Reads directory contents in one shot; counts
+    /// stems with any preview (ARW + HIF, ARW + JPG, standalone HIF,
+    /// or standalone JPG — same rule as `EntryFinder`), and tracks
+    /// how many of those have an .xmp sidecar. nonisolated so callers
+    /// can hop off main. Internal (not private) so `VolumeScanner`
+    /// can reuse the same "what's a valid shoot" check when scanning
+    /// DCIM subfolders on cards.
     nonisolated static func compute(for path: String) -> FolderState {
         let url = URL(fileURLWithPath: path)
         var isDir: ObjCBool = false
@@ -70,25 +73,32 @@ final class FolderStats {
             return .inaccessible
         }
 
-        var stems: [String: (raw: Bool, heif: Bool, xmp: Bool)] = [:]
+        var stems: [String: (raw: Bool, heif: Bool, jpg: Bool, xmp: Bool)] = [:]
         stems.reserveCapacity(urls.count / 2)
         for u in urls {
             let ext = u.pathExtension.lowercased()
-            let isRaw = rawExtensions.contains(ext)
+            let isRaw  = rawExtensions.contains(ext)
             let isHEIF = heifExtensions.contains(ext)
-            let isXMP = ext == "xmp"
-            guard isRaw || isHEIF || isXMP else { continue }
+            let isJPG  = jpgExtensions.contains(ext)
+            let isXMP  = ext == "xmp"
+            guard isRaw || isHEIF || isJPG || isXMP else { continue }
             let stem = u.deletingPathExtension().lastPathComponent
-            var entry = stems[stem] ?? (false, false, false)
+            var entry = stems[stem] ?? (false, false, false, false)
             if isRaw  { entry.raw  = true }
             if isHEIF { entry.heif = true }
+            if isJPG  { entry.jpg  = true }
             if isXMP  { entry.xmp  = true }
             stems[stem] = entry
         }
 
+        // Count any entry that EntryFinder would also accept:
+        //   ARW + (HIF | JPG)  →  pair
+        //   HIF  alone         →  standalone preview
+        //   JPG  alone         →  standalone preview
+        // ARW-only is rejected (matches EntryFinder).
         var total = 0
         var withXMP = 0
-        for (_, e) in stems where e.raw && e.heif {
+        for (_, e) in stems where e.heif || e.jpg {
             total += 1
             if e.xmp { withXMP += 1 }
         }

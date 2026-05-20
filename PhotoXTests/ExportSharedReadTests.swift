@@ -31,14 +31,14 @@ final class ExportSharedReadTests: XCTestCase {
         try? FileManager.default.removeItem(at: tmpRoot)
     }
 
-    private func makePair(_ stem: String, body: String) throws -> PhotoPair {
+    private func makePair(_ stem: String, body: String) throws -> PhotoEntry {
         let arw = sourceDir.appendingPathComponent("\(stem).ARW")
         let hif = sourceDir.appendingPathComponent("\(stem).HIF")
         let xmp = sourceDir.appendingPathComponent("\(stem).xmp")
         try "\(body)-ARW".data(using: .utf8)!.write(to: arw)
         try "\(body)-HIF".data(using: .utf8)!.write(to: hif)
         try "\(body)-XMP".data(using: .utf8)!.write(to: xmp)
-        return PhotoPair(rawURL: arw, heifURL: hif, stem: stem)
+        return PhotoEntry(rawURL: arw, previewURL: hif, stem: stem)
     }
 
     private func dest(at url: URL,
@@ -69,7 +69,7 @@ final class ExportSharedReadTests: XCTestCase {
 
         // Mode A: run all destinations with sharedRead=false
         let dA = dest(at: destA)
-        runner.startAll(pairs: pairs, pairXMPs: [:],
+        runner.startAll(entries: pairs, entryXMPs: [:],
                         projectName: "P", destinations: [dA],
                         sharedRead: false, notifications: .silent)
         await runner.waitForCompletion()
@@ -79,7 +79,7 @@ final class ExportSharedReadTests: XCTestCase {
         let runnerB = ExportRunner()
         let dB1 = dest(at: destB1)
         let dB2 = dest(at: destB2)
-        runnerB.startAll(pairs: pairs, pairXMPs: [:],
+        runnerB.startAll(entries: pairs, entryXMPs: [:],
                          projectName: "P", destinations: [dB1, dB2],
                          sharedRead: true, notifications: .silent)
         await runnerB.waitForCompletion()
@@ -101,13 +101,13 @@ final class ExportSharedReadTests: XCTestCase {
         let dB2 = dest(at: destB2)
 
         // First run: everything copies into both destinations.
-        runner.startAll(pairs: [p], pairXMPs: [:],
+        runner.startAll(entries: [p], entryXMPs: [:],
                         projectName: "P", destinations: [dB1, dB2],
                         sharedRead: true, notifications: .silent)
         await runner.waitForCompletion()
 
         // Second run: everything is already there → skipped on both.
-        runner.startAll(pairs: [p], pairXMPs: [:],
+        runner.startAll(entries: [p], entryXMPs: [:],
                         projectName: "P", destinations: [dB1, dB2],
                         sharedRead: true, notifications: .silent)
         await runner.waitForCompletion()
@@ -126,7 +126,7 @@ final class ExportSharedReadTests: XCTestCase {
         let p = try makePair("X", body: "hello")
         let dB1 = dest(at: destB1)
         let dB2 = dest(at: destB2)
-        runner.startAll(pairs: [p], pairXMPs: [:],
+        runner.startAll(entries: [p], entryXMPs: [:],
                         projectName: "P", destinations: [dB1, dB2],
                         sharedRead: true, notifications: .silent)
         await runner.waitForCompletion()
@@ -134,7 +134,7 @@ final class ExportSharedReadTests: XCTestCase {
         // Make every source file UNREADABLE (chmod 0) so any attempted
         // read would error. The skip-first logic must short-circuit
         // before issuing Data(contentsOf:), or the test fails.
-        let sourceFiles = [p.rawURL, p.heifURL,
+        let sourceFiles = [p.rawURL!, p.previewURL,
                            sourceDir.appendingPathComponent("X.xmp")]
         let fm = FileManager.default
         for u in sourceFiles {
@@ -149,7 +149,7 @@ final class ExportSharedReadTests: XCTestCase {
 
         // Re-run — every destination already has matching files; planner
         // should decide .skip everywhere and never attempt to read.
-        runner.startAll(pairs: [p], pairXMPs: [:],
+        runner.startAll(entries: [p], entryXMPs: [:],
                         projectName: "P", destinations: [dB1, dB2],
                         sharedRead: true, notifications: .silent)
         await runner.waitForCompletion()
@@ -181,7 +181,7 @@ final class ExportSharedReadTests: XCTestCase {
         let pB = try makePair("B", body: "beta")
         let dB1 = dest(at: destB1)
         let dB2 = dest(at: destB2)
-        runner.startAll(pairs: [pA, pB], pairXMPs: [:],
+        runner.startAll(entries: [pA, pB], entryXMPs: [:],
                         projectName: "P", destinations: [dB1, dB2],
                         sharedRead: true, notifications: .silent)
         await runner.waitForCompletion()
@@ -189,9 +189,9 @@ final class ExportSharedReadTests: XCTestCase {
         try FileManager.default.removeItem(at: destB1.appendingPathComponent("P/A.ARW"))
 
         let fm = FileManager.default
-        let unreadable = [pA.heifURL,
+        let unreadable = [pA.previewURL,
                           sourceDir.appendingPathComponent("A.xmp"),
-                          pB.rawURL, pB.heifURL,
+                          pB.rawURL!, pB.previewURL,
                           sourceDir.appendingPathComponent("B.xmp")]
         for u in unreadable {
             try fm.setAttributes([.posixPermissions: 0o000], ofItemAtPath: u.path)
@@ -202,7 +202,7 @@ final class ExportSharedReadTests: XCTestCase {
             }
         }
 
-        runner.startAll(pairs: [pA, pB], pairXMPs: [:],
+        runner.startAll(entries: [pA, pB], entryXMPs: [:],
                         projectName: "P", destinations: [dB1, dB2],
                         sharedRead: true, notifications: .silent)
         await runner.waitForCompletion()
@@ -222,14 +222,14 @@ final class ExportSharedReadTests: XCTestCase {
         let p = try makePair("X", body: "hello")
         let pastMtime = Date(timeIntervalSinceReferenceDate: 2_000_000)
         let xmpSrc = sourceDir.appendingPathComponent("X.xmp")
-        for u in [p.rawURL, p.heifURL, xmpSrc] {
+        for u in [p.rawURL!, p.previewURL, xmpSrc] {
             try FileManager.default.setAttributes(
                 [.modificationDate: pastMtime], ofItemAtPath: u.path)
         }
 
         let dB1 = dest(at: destB1)
         let dB2 = dest(at: destB2)
-        runner.startAll(pairs: [p], pairXMPs: [:],
+        runner.startAll(entries: [p], entryXMPs: [:],
                         projectName: "P", destinations: [dB1, dB2],
                         sharedRead: true, notifications: .silent)
         await runner.waitForCompletion()
@@ -254,7 +254,7 @@ final class ExportSharedReadTests: XCTestCase {
         // Initial run: both pairs go into both destinations.
         let dB1 = dest(at: destB1)
         let dB2 = dest(at: destB2)
-        runner.startAll(pairs: [pA, pB], pairXMPs: [:],
+        runner.startAll(entries: [pA, pB], entryXMPs: [:],
                         projectName: "P", destinations: [dB1, dB2],
                         sharedRead: true, notifications: .silent)
         await runner.waitForCompletion()
@@ -274,7 +274,7 @@ final class ExportSharedReadTests: XCTestCase {
             showStars: [5], showRejected: false, showUnrated: false,
             removeOrphans: false
         )
-        runner.startAll(pairs: [pA, pB], pairXMPs: xmps,
+        runner.startAll(entries: [pA, pB], entryXMPs: xmps,
                         projectName: "P", destinations: [dB1Filtered, dB2Filtered],
                         sharedRead: true, notifications: .silent)
         await runner.waitForCompletion()

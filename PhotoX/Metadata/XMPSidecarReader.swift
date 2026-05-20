@@ -3,11 +3,12 @@ import Foundation
 import ImageIO
 
 enum XMPSidecarReader {
-    /// Reads the XMP sidecar for a pair (looked up as `<stem>.xmp` next to the
-    /// ARW per Lightroom convention). Returns `.empty` if the file is missing,
-    /// unreadable, or malformed. Read-only — never mutates anything.
-    static func read(for pair: PhotoPair) -> XMPSidecar {
-        let url = pair.rawURL.deletingPathExtension().appendingPathExtension("xmp")
+    /// Reads the XMP sidecar for an entry (looked up as `<stem>.xmp`
+    /// next to the RAW when present, else next to the preview file —
+    /// matches Lightroom's convention). Returns `.empty` if the file
+    /// is missing, unreadable, or malformed. Read-only.
+    static func read(for entry: PhotoEntry) -> XMPSidecar {
+        let url = entry.xmpURL
         guard FileManager.default.fileExists(atPath: url.path),
               let data = try? Data(contentsOf: url) else {
             return .empty

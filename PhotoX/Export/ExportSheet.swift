@@ -251,8 +251,8 @@ struct ExportSheet: View {
         let needsConfirm = settings.destinations.contains(where: \.removeOrphans)
         if needsConfirm, !confirmOrphanRemoval(forSingle: nil) { return }
         runner.startAll(
-            pairs: shoot.pairs,
-            pairXMPs: state.pairXMPs,
+            entries: shoot.entries,
+            entryXMPs: state.entryXMPs,
             projectName: settings.projectName.trimmingCharacters(in: .whitespacesAndNewlines),
             destinations: settings.destinations,
             sharedRead: settings.readOnceWriteMany
@@ -264,8 +264,8 @@ struct ExportSheet: View {
         if dest.removeOrphans, !confirmOrphanRemoval(forSingle: dest) { return }
         runner.startOne(
             dest.id,
-            pairs: shoot.pairs,
-            pairXMPs: state.pairXMPs,
+            entries: shoot.entries,
+            entryXMPs: state.entryXMPs,
             projectName: settings.projectName.trimmingCharacters(in: .whitespacesAndNewlines),
             destination: dest
         )

@@ -28,8 +28,8 @@ enum XMPSidecarWriter {
     private static let rdfNamespace = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
     private static let metaNamespace = "adobe:ns:meta/"
 
-    static func updateRating(_ rating: Int?, for pair: PhotoPair) throws {
-        try mutate(pair) { desc in
+    static func updateRating(_ rating: Int?, for entry: PhotoEntry) throws {
+        try mutate(entry) { desc in
             removeChildren(named: "xmp:Rating", from: desc)
             if let rating {
                 desc.addChild(XMLElement(name: "xmp:Rating", stringValue: String(rating)))
@@ -37,8 +37,8 @@ enum XMPSidecarWriter {
         }
     }
 
-    static func updateLabel(_ label: String?, for pair: PhotoPair) throws {
-        try mutate(pair) { desc in
+    static func updateLabel(_ label: String?, for entry: PhotoEntry) throws {
+        try mutate(entry) { desc in
             removeChildren(named: "xmp:Label", from: desc)
             if let label, !label.isEmpty {
                 desc.addChild(XMLElement(name: "xmp:Label", stringValue: label))
@@ -49,8 +49,8 @@ enum XMPSidecarWriter {
     /// Generic mutator: opens (or creates) the sidecar, lets the caller modify
     /// the rdf:Description element, then bumps the modify timestamps + creator
     /// and atomically writes the result.
-    private static func mutate(_ pair: PhotoPair, _ block: (XMLElement) -> Void) throws {
-        let xmpURL = pair.rawURL.deletingPathExtension().appendingPathExtension("xmp")
+    private static func mutate(_ entry: PhotoEntry, _ block: (XMLElement) -> Void) throws {
+        let xmpURL = entry.xmpURL
 
         let doc: XMLDocument
         if FileManager.default.fileExists(atPath: xmpURL.path) {

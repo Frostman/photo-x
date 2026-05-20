@@ -16,7 +16,7 @@ final class IndexingStatusTests: XCTestCase {
     func test_startIndexing_emptyShoot_reachesDoneSynchronously() {
         let state = ViewerState()
         let dir = URL(fileURLWithPath: "/tmp/photox-indexer-tests-empty")
-        state.shoot = Shoot(folderURL: dir, pairs: [])
+        state.shoot = Shoot(folderURL: dir, entries: [])
         state.startIndexing()
         XCTAssertEqual(state.indexingStatus, .done,
                        "An empty shoot has nothing to index; status flips to .done immediately.")
@@ -92,15 +92,15 @@ final class IndexingStatusTests: XCTestCase {
 
     func test_reIndex_clearsCachesAndRestarts() {
         let state = makeState(stems: ["A", "B"])
-        state.pairExif       = ["A": ExifSummary()]
-        state.pairXMPs       = ["A": XMPSidecar(rating: 5)]
-        state.pairAFData     = ["A": ExifToolRunner.AFData()]
-        state.pairSequenceNumber = ["A": 1]
+        state.entryExif       = ["A": ExifSummary()]
+        state.entryXMPs       = ["A": XMPSidecar(rating: 5)]
+        state.entryAFData     = ["A": ExifToolRunner.AFData()]
+        state.entrySequenceNumber = ["A": 1]
         state.reIndex()
-        XCTAssertTrue(state.pairExif.isEmpty,         "reIndex wipes pairExif")
-        XCTAssertTrue(state.pairXMPs.isEmpty,         "reIndex wipes pairXMPs")
-        XCTAssertTrue(state.pairAFData.isEmpty,       "reIndex wipes pairAFData")
-        XCTAssertTrue(state.pairSequenceNumber.isEmpty, "reIndex wipes pairSequenceNumber")
+        XCTAssertTrue(state.entryExif.isEmpty,         "reIndex wipes entryExif")
+        XCTAssertTrue(state.entryXMPs.isEmpty,         "reIndex wipes entryXMPs")
+        XCTAssertTrue(state.entryAFData.isEmpty,       "reIndex wipes entryAFData")
+        XCTAssertTrue(state.entrySequenceNumber.isEmpty, "reIndex wipes entrySequenceNumber")
         // And it must have re-entered an active status.
         switch state.indexingStatus {
         case .indexing, .done: break
@@ -114,14 +114,14 @@ final class IndexingStatusTests: XCTestCase {
     private func makeState(stems: [String]) -> ViewerState {
         let dir = URL(fileURLWithPath: "/tmp/photox-indexer-tests-fake")
         let pairs = stems.map { stem in
-            PhotoPair(
+            PhotoEntry(
                 rawURL: dir.appendingPathComponent("\(stem).ARW"),
-                heifURL: dir.appendingPathComponent("\(stem).HIF"),
+                previewURL: dir.appendingPathComponent("\(stem).HIF"),
                 stem: stem
             )
         }
         let state = ViewerState()
-        state.shoot = Shoot(folderURL: dir, pairs: pairs)
+        state.shoot = Shoot(folderURL: dir, entries: pairs)
         return state
     }
 }
