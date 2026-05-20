@@ -114,6 +114,12 @@ test *only="":
 icon:
     swift scripts/generate_icon.swift
 
+# Print the README screenshot checklist (what to capture + where to save).
+# Capture them yourself with Cmd+Shift+4 + Space and drop the PNGs into
+# docs/screenshots/.
+screenshots:
+    ./scripts/screenshots.sh
+
 # Cut a release via scripts/release.sh.
 #   just release              → full release (build, sign, DMG, publish)
 #   just release --verify-only → build + tests, no publish
