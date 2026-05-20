@@ -36,7 +36,16 @@ struct PhotoXApp: App {
         WindowGroup {
             ContentView(state: viewerState, updater: updater)
                 .preferredColorScheme(appearance.colorScheme)
-                .task { await bootstrap() }
+                .task {
+                    // Provide the updater with a way to read the
+                    // currently-open shoot URL right before Sparkle
+                    // quits the app for an install — captured into
+                    // PendingReopenStore so bootstrap can resume it.
+                    updater?.shootURLProvider = { [weak viewerState] in
+                        viewerState?.shoot?.folderURL
+                    }
+                    await bootstrap()
+                }
                 .onChange(of: scenePhase) { _, phase in
                     // On background (Dock-hide / Cmd-Tab) capture the
                     // current shoot+stem so a later relaunch can
