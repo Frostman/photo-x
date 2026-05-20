@@ -217,23 +217,42 @@ struct ExportSheet: View {
         panel.prompt = "Choose"
         panel.message = "Select or create a destination folder for exports"
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        // Refuse same-as-source up front: copying a shoot back into
-        // itself would touch the originals — violates the project-
-        // wide "never mutate originals" rule and the orphan-prune
-        // would catastrophically wipe the source folder.
+        // Refuse anything that conflicts with the source shoot
+        // folder — same path, nested under, or containing it.
+        // Copying back into the originals violates the project-
+        // wide "never mutate originals" rule; orphan-prune at a
+        // destination that wraps the source could wipe real files.
         if let shootURL = state.shoot?.folderURL,
-           url.standardizedFileURL == shootURL.standardizedFileURL {
-            let alert = NSAlert()
-            alert.alertStyle = .warning
-            alert.messageText = "Can't export back into the source shoot folder"
-            alert.informativeText = "\(url.path) is the folder you opened. Pick a different folder."
-            alert.addButton(withTitle: "OK")
-            alert.runModal()
+           let conflict = ExportSettings.sourceConflict(
+            destPath: url.path, sourcePath: shootURL.path) {
+            presentSourceConflict(conflict, attemptedPath: url.path,
+                                  sourcePath: shootURL.path)
             return
         }
         let result = settings.add(path: url.path)
         if case .ok = result { return }
         presentAddRejection(result, attemptedPath: url.path)
+    }
+
+    /// User-facing copy for the three SourceConflict cases.
+    private func presentSourceConflict(_ conflict: ExportSettings.SourceConflict,
+                                        attemptedPath: String,
+                                        sourcePath: String) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        switch conflict {
+        case .isSource:
+            alert.messageText = "Can't export back into the source shoot folder"
+            alert.informativeText = "\(attemptedPath) is the folder you opened. Pick a different folder."
+        case .insideSource:
+            alert.messageText = "Destination is inside the source shoot folder"
+            alert.informativeText = "\(attemptedPath) lives inside the shoot folder \(sourcePath). Pick a folder OUTSIDE the source so PhotoX never writes back into the originals."
+        case .containsSource:
+            alert.messageText = "Destination contains the source shoot folder"
+            alert.informativeText = "\(attemptedPath) contains the shoot folder \(sourcePath). If you turned on orphan removal at this destination, PhotoX could delete originals. Pick a folder that doesn't contain the source."
+        }
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 
     /// Modal NSAlert that explains why the picked folder was refused.
@@ -262,6 +281,10 @@ struct ExportSheet: View {
 
     private func runExportAll() {
         guard canRun, let shoot = state.shoot else { return }
+        // Re-validate against the source folder on run too — a
+        // destination could've been added against a different shoot
+        // and now collides with the currently-open one.
+        if !confirmSourceConflictsClean(forSingle: nil, shoot: shoot) { return }
         let needsConfirm = settings.destinations.contains(where: \.removeOrphans)
         if needsConfirm, !confirmOrphanRemoval(forSingle: nil) { return }
         runner.startAll(
@@ -275,6 +298,7 @@ struct ExportSheet: View {
 
     private func runExportOne(_ dest: ExportSettings.Destination) {
         guard canRun, let shoot = state.shoot else { return }
+        if !confirmSourceConflictsClean(forSingle: dest, shoot: shoot) { return }
         if dest.removeOrphans, !confirmOrphanRemoval(forSingle: dest) { return }
         runner.startOne(
             dest.id,
@@ -283,6 +307,55 @@ struct ExportSheet: View {
             projectName: settings.projectName.trimmingCharacters(in: .whitespacesAndNewlines),
             destination: dest
         )
+    }
+
+    /// Returns true when the destination(s) about to run don't
+    /// conflict with the source shoot folder, false (after presenting
+    /// an alert) otherwise. `forSingle` scopes the check to one
+    /// destination row; nil checks every destination.
+    private func confirmSourceConflictsClean(
+        forSingle: ExportSettings.Destination?,
+        shoot: Shoot
+    ) -> Bool {
+        let sourcePath = shoot.folderURL.path
+        let conflicts: [(ExportSettings.Destination, ExportSettings.SourceConflict)]
+        if let dest = forSingle {
+            conflicts = ExportSettings.sourceConflict(
+                destPath: dest.path, sourcePath: sourcePath
+            ).map { [(dest, $0)] } ?? []
+        } else {
+            conflicts = settings.sourceConflicts(againstSource: sourcePath)
+        }
+        guard !conflicts.isEmpty else { return true }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        if conflicts.count == 1, let (dest, conflict) = conflicts.first {
+            switch conflict {
+            case .isSource:
+                alert.messageText = "Destination is the source shoot folder"
+                alert.informativeText = "\(dest.path) is the same folder you're culling. Remove or change this destination to run the export."
+            case .insideSource:
+                alert.messageText = "Destination is inside the source shoot folder"
+                alert.informativeText = "\(dest.path) lives inside the shoot folder \(sourcePath). Exporting would write back into the originals. Remove or move this destination."
+            case .containsSource:
+                alert.messageText = "Destination contains the source shoot folder"
+                alert.informativeText = "\(dest.path) contains the shoot folder \(sourcePath). Orphan removal at this destination could delete real originals. Remove or move this destination."
+            }
+        } else {
+            alert.messageText = "Some destinations conflict with the source folder"
+            alert.informativeText = conflicts.map { dest, c in
+                let label: String
+                switch c {
+                case .isSource:       label = "same as source"
+                case .insideSource:   label = "inside source"
+                case .containsSource: label = "contains source"
+                }
+                return "• \(dest.path) — \(label)"
+            }.joined(separator: "\n") + "\n\nRemove or move these destinations to run the export."
+        }
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+        return false
     }
 
     /// Confirm before destructive orphan removal. `forSingle == nil` means

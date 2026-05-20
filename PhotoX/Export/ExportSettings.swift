@@ -137,6 +137,49 @@ final class ExportSettings {
         case containsExisting(existingPath: String)
     }
 
+    /// Why a destination conflicts with the current shoot folder.
+    /// Pre-add and pre-run both check this; pre-run also catches the
+    /// case where the user added a destination and THEN opened a
+    /// shoot that conflicts with it.
+    enum SourceConflict: Sendable, Hashable {
+        /// destPath == sourcePath
+        case isSource
+        /// destPath is INSIDE sourcePath. Export would write back
+        /// into the originals folder.
+        case insideSource
+        /// sourcePath is INSIDE destPath. Orphan-prune at the
+        /// destination would see the source folder as a parent of
+        /// "managed" files and could delete real originals.
+        case containsSource
+    }
+
+    /// Return the conflict between `destPath` and `sourcePath`,
+    /// or nil if they're disjoint. Both paths are normalised
+    /// first; comparison is case-sensitive (matches APFS default).
+    static func sourceConflict(destPath: String,
+                                sourcePath: String) -> SourceConflict? {
+        let d = normalizePath(destPath)
+        let s = normalizePath(sourcePath)
+        if d == s { return .isSource }
+        if isStrictParent(s, of: d) { return .insideSource }
+        if isStrictParent(d, of: s) { return .containsSource }
+        return nil
+    }
+
+    /// Re-validate every destination against the current source
+    /// folder. Used at run time (Export-all and per-destination Run)
+    /// — the add-time inter-destination check already ran when each
+    /// destination was added, but the SOURCE folder may have changed
+    /// since (user opened a different shoot whose folder collides).
+    /// Returns an empty array when everything's fine.
+    func sourceConflicts(againstSource sourcePath: String)
+        -> [(destination: Destination, conflict: SourceConflict)] {
+        destinations.compactMap { dest in
+            Self.sourceConflict(destPath: dest.path, sourcePath: sourcePath)
+                .map { (dest, $0) }
+        }
+    }
+
     @discardableResult
     func add(path: String) -> AddResult {
         let normalized = Self.normalizePath(path)
