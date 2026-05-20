@@ -23,6 +23,13 @@ final class ImageCanvasNSView: NSView {
     var onImageDisplayed: ((String, CGSize) -> Void)?
     private var pendingToken: String = ""
     private var pendingOrientation: Int = 1
+    /// DecodeKey for `pendingImage` — replayed into the renderer once
+    /// it's built in `viewDidMoveToWindow`. Sentinel default for the
+    /// before-first-setImage window; never read in that case because
+    /// `pendingImage` is also nil.
+    private var pendingKey: DecodeKey = DecodeKey(pairID: "",
+                                                   variant: .heif,
+                                                   decoder: .imageIO)
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -86,7 +93,10 @@ final class ImageCanvasNSView: NSView {
                 }
             }
             if let pendingImage {
-                renderer?.setImage(pendingImage, token: pendingToken, orientation: pendingOrientation)
+                renderer?.setImage(pendingImage,
+                                   token: pendingToken,
+                                   orientation: pendingOrientation,
+                                   key: pendingKey)
                 self.pendingImage = nil
             }
             renderer?.setViewport(viewport)
@@ -125,28 +135,29 @@ final class ImageCanvasNSView: NSView {
         }
     }
 
-    func setImage(_ cgImage: CGImage, token: String, orientation: Int) {
+    func setImage(_ cgImage: CGImage, token: String, orientation: Int, key: DecodeKey) {
         PerfTracker.mark("ImageCanvasNSView.setImage entered")
         if let renderer {
-            // Async path: renderer.setImage kicks off the upload off
-            // the main actor. The OLD baseTexture (+ OLD imagePixelSize)
-            // stay bound until onTextureReady fires, which keeps the
-            // previous frame on screen instead of flashing black during
-            // the upload window. Token + orientation ride along so
-            // onImageDisplayed can fire with the token and the shader
+            // Renderer hits the texture cache synchronously on a HIT
+            // (back-and-forth nav is instant) or coalesces async on a
+            // MISS. The OLD baseTexture (+ OLD imagePixelSize) stay
+            // bound during a MISS upload, so the previous frame stays
+            // on screen instead of flashing. Token + orientation + key
+            // ride along so onImageDisplayed can fire and the shader
             // can rotate UVs based on orientation.
-            renderer.setImage(cgImage, token: token, orientation: orientation)
+            renderer.setImage(cgImage, token: token, orientation: orientation, key: key)
         } else {
             // Renderer hasn't been built yet (viewDidMoveToWindow runs
-            // shortly after init). Stash the image and pre-set the
-            // pixelSize so any layout that runs before the first async
-            // load completes has the right geometry — there's no old
-            // image to worry about glitching against. Swap dimensions
-            // for portrait orientations so pre-render layout matches
-            // what the renderer will display.
+            // shortly after init). Stash everything; the first
+            // setImage replay during viewDidMoveToWindow uses these
+            // pending values. Pre-set imagePixelSize so any layout
+            // that runs before the first async load completes has the
+            // right geometry — swap dimensions for portrait
+            // orientations.
             pendingImage = cgImage
             pendingToken = token
             pendingOrientation = orientation
+            pendingKey = key
             let isSwapped = orientation >= 5 && orientation <= 8
             imagePixelSize = isSwapped
                 ? CGSize(width: cgImage.height, height: cgImage.width)

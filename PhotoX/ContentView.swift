@@ -22,6 +22,7 @@ struct ContentView: View {
     @State private var showHelp: Bool = false
     @State private var copiedFlash: Bool = false
     @AppStorage(SettingsKey.appearance, store: AppDefaults.shared) private var appearanceRaw = SettingsKey.Defaults.appearance
+    @AppStorage(SettingsKey.showCanvasLoadingIndicator, store: AppDefaults.shared) private var loadingIndicatorEnabled = SettingsKey.Defaults.showCanvasLoadingIndicator
     @State private var recents = RecentShoots.shared
     @State private var favorites = FavoriteShoots.shared
     /// Auto-detects mounted SD / CFExpress cards with DCIM shoots. Only
@@ -326,7 +327,7 @@ struct ContentView: View {
             // both the canvas and the sidebar below the toolbar.
             canvasBackdrop
 
-            if let image = state.currentImage {
+            if let image = state.currentImage, let key = state.currentImageKey {
                 // No .ignoresSafeArea() here — extending under the titlebar
                 // pushes the photo's top edge behind the toolbar so the user
                 // can't see the full frame at fit zoom. The backdrop above
@@ -340,6 +341,7 @@ struct ContentView: View {
                     // commitDisplayed syncs the rest of the UI to it.
                     imageToken: state.pair?.stem ?? "",
                     imageOrientation: image.orientation,
+                    imageDecodeKey: key,
                     viewport: state.viewport,
                     showClipping: state.overlays.clipping,
                     showPeaking: state.overlays.focusPeaking,
@@ -364,6 +366,20 @@ struct ContentView: View {
                             regions: state.displayedAFRegions
                         )
                         .allowsHitTesting(false)
+                    }
+                }
+                .overlay {
+                    if state.isLoadingDisplayedPair,
+                       loadingIndicatorEnabled {
+                        // Translucent disc so the spinner reads on any
+                        // background. Centred automatically by .overlay.
+                        ProgressView()
+                            .controlSize(.large)
+                            .progressViewStyle(.circular)
+                            .padding(20)
+                            .background(.black.opacity(0.4), in: Circle())
+                            .foregroundStyle(.white)
+                            .allowsHitTesting(false)
                     }
                 }
             } else if state.isDecoding {
@@ -767,21 +783,24 @@ struct ContentView: View {
 
     @ViewBuilder
     private var ratingBadge: some View {
+        // Use displayedXMP (matches what's on the canvas) rather than
+        // currentXMP (which would briefly show the navigation-intent
+        // pair's rating on top of the still-bound previous image).
         // Sidebar already shows Decisions panel — don't duplicate the badge.
-        if state.currentImage != nil, state.currentXMP.hasDecision, !state.sidebarVisible {
+        if state.currentImage != nil, state.displayedXMP.hasDecision, !state.sidebarVisible {
             VStack {
                 HStack {
                     Spacer()
                     HStack(spacing: 8) {
-                        if let label = state.currentXMP.label, !label.isEmpty {
+                        if let label = state.displayedXMP.label, !label.isEmpty {
                             Circle()
                                 .fill(LabelChip.color(for: label))
                                 .frame(width: 10, height: 10)
                         }
-                        if state.currentXMP.isReject {
+                        if state.displayedXMP.isReject {
                             Image(systemName: "xmark.circle.fill")
                                 .foregroundStyle(.red)
-                        } else if let stars = state.currentXMP.starCount {
+                        } else if let stars = state.displayedXMP.starCount {
                             StarsView(count: stars)
                         }
                     }

@@ -1,16 +1,22 @@
 import Foundation
 
+/// Orchestrates HEIF + RAW decoding. No longer caches `DecodedImage`
+/// results — that role moved downstream to `MTLTextureCache`, which
+/// stores the GPU artifact (the form actually used for display).
+/// Single-flight dedup is kept so concurrent decodes of the same key
+/// share one underlying decode Task; this prevents redundant CPU work
+/// when both the user-facing nav and a prefetch ask for the same pair
+/// at the same instant.
+///
+/// HEIF bytes are still cached via `HIFBytesCache` (sits in front of
+/// the HEIF decoder); the byte cache is now cleared on shoot switch so
+/// stale shoots' data doesn't outlive the session.
 @MainActor
 final class DecodePipeline {
-    /// Decoded-pixel cache: ~200 MB per 50-MP frame × ~20 entries =
-    /// ~4 GB worst case, but typical working sets are much smaller.
-    /// Hot path for the currently-displayed frame + its neighbours.
-    let cache: DecodedImageCache
-
-    /// Raw-byte cache for HIFs: 2 GB ≈ ~200+ HIFs in RAM. Persists
-    /// across shoot switches; LRU naturally trims. Sits in front of the
-    /// HEIF decoder so back-and-forth culling never re-reads from the
-    /// source card.
+    /// Raw-byte cache for HIFs: 2 GB ≈ ~200+ HIFs in RAM. Sits in
+    /// front of the HEIF decoder so back-and-forth culling never
+    /// re-reads from the source card. Cleared on shoot switch by
+    /// ViewerState.resetForShootSwitch.
     let hifBytes: HIFBytesCache
 
     private let heifDecoder: any ImageDecoder
@@ -19,35 +25,22 @@ final class DecodePipeline {
 
     private var inflight: [DecodeKey: Task<DecodedImage, Error>] = [:]
 
-    init(cacheCapacity: Int = 20,
-         hifBytesCapacity: Int = 2 * 1024 * 1024 * 1024) {
-        self.cache = DecodedImageCache(capacity: cacheCapacity)
+    init(hifBytesCapacity: Int = 2 * 1024 * 1024 * 1024) {
         self.hifBytes = HIFBytesCache(byteCapacity: hifBytesCapacity)
         self.heifDecoder = HEIFDecoder(bytesCache: self.hifBytes)
     }
 
-    /// Cheap pre-check — does the pipeline already have this image cached?
-    /// Used by callers that want to record whether a decode was instant
-    /// (cache hit) or paid wall time (fresh decode).
-    func isCached(pair: PhotoPair, variant: ImageVariant, decoder: DecoderChoice) -> Bool {
-        let keyDecoder: DecoderChoice = (variant == .heif) ? .imageIO : decoder
-        let key = DecodeKey(pairID: pair.id, variant: variant, decoder: keyDecoder)
-        return cache.get(key) != nil
-    }
-
+    /// Decode `pair.variant` into a `DecodedImage`. Single-flight per
+    /// `DecodeKey`: concurrent callers share one decode. The result is
+    /// NOT cached on this side — caller is expected to consume the
+    /// CGImage inline (upload to `MTLTextureCache.warm`, compute the
+    /// histogram, etc.) and let the value drop.
     func decode(pair: PhotoPair, variant: ImageVariant, decoder: DecoderChoice) async throws -> DecodedImage {
         // Decoder is a RAW-only concern: HEIF always goes through HEIFDecoder.
-        // Normalize the cache key so we don't double-cache the same HEIF under
-        // different decoder slots.
+        // Normalize the dedup key so HEIF nav doesn't accidentally fan out
+        // across different decoder slots.
         let keyDecoder: DecoderChoice = (variant == .heif) ? .imageIO : decoder
         let key = DecodeKey(pairID: pair.id, variant: variant, decoder: keyDecoder)
-
-        if let cached = cache.get(key) {
-            #if DEBUG
-            Log.decode.notice("cache hit: \(key.pairID, privacy: .public) \(key.variant.rawValue, privacy: .public)/\(key.decoder.rawValue, privacy: .public)")
-            #endif
-            return cached
-        }
 
         if let existing = inflight[key] {
             return try await existing.value
@@ -66,7 +59,6 @@ final class DecodePipeline {
         defer { inflight[key] = nil }
 
         let result = try await task.value
-        cache.set(result, for: key)
         #if DEBUG
         Log.decode.notice("done: \(key.pairID, privacy: .public) \(key.variant.rawValue, privacy: .public)/\(key.decoder.rawValue, privacy: .public) in \(result.decodeMS, format: .fixed(precision: 1)) ms")
         #endif

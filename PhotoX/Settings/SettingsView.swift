@@ -13,6 +13,11 @@ enum SettingsKey {
     static let autoAdvance        = "settings.autoAdvanceAfterRating"
     static let autoAdvanceSidebar = "settings.autoAdvanceAfterSidebarRating"
     static let defaultFolderPath  = "settings.defaultFolderPath"
+    /// Centred circular ProgressView shown on the canvas while a new
+    /// image is loading (texture hasn't bound yet). Toggleable so
+    /// users who find it distracting can disable it via
+    /// `defaults write … settings.showCanvasLoadingIndicator -bool NO`.
+    static let showCanvasLoadingIndicator = "settings.showCanvasLoadingIndicator"
 
     enum Defaults {
         static let appearance = AppearanceMode.system.rawValue
@@ -23,6 +28,7 @@ enum SettingsKey {
         static let autoAdvance = false
         static let autoAdvanceSidebar = false
         static let defaultFolderPath = ""  // empty = no auto-load on launch
+        static let showCanvasLoadingIndicator = true
     }
 }
 

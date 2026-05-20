@@ -14,6 +14,10 @@ struct ImageCanvasView: NSViewRepresentable {
     /// renderer so portraits rotate via shader UV transform rather
     /// than a CPU pixel pass.
     let imageOrientation: Int
+    /// The `DecodeKey` that produced `image`. The renderer uses it to
+    /// check `MTLTextureCache` — back-and-forth nav to a cached pair
+    /// becomes a synchronous bind (no async upload).
+    let imageDecodeKey: DecodeKey
     let viewport: CanvasViewport
     let showClipping: Bool
     let showPeaking: Bool
@@ -23,6 +27,15 @@ struct ImageCanvasView: NSViewRepresentable {
     @MainActor
     final class Coordinator {
         var lastImageID: ObjectIdentifier?
+        /// We trigger `setImage` on EITHER a new CGImage instance OR a
+        /// new DecodeKey. The key-change-only case covers the
+        /// "applyRequestedVariant fast path" where `currentImage` was
+        /// left pointing at the previous pair (we skipped the decode
+        /// because the texture was already cached) but the key
+        /// advanced to the new pair. The renderer's cache-hit setImage
+        /// path ignores the passed CGImage and binds the cached
+        /// texture by key, so the stale CGImage is harmless.
+        var lastKey: DecodeKey?
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -35,8 +48,9 @@ struct ImageCanvasView: NSViewRepresentable {
         view.setShowClipping(showClipping)
         view.setShowPeaking(showPeaking)
         if let image {
-            view.setImage(image, token: imageToken, orientation: imageOrientation)
+            view.setImage(image, token: imageToken, orientation: imageOrientation, key: imageDecodeKey)
             context.coordinator.lastImageID = ObjectIdentifier(image as AnyObject)
+            context.coordinator.lastKey = imageDecodeKey
         }
         return view
     }
@@ -50,13 +64,23 @@ struct ImageCanvasView: NSViewRepresentable {
         nsView.setShowPeaking(showPeaking)
         if let image {
             let id = ObjectIdentifier(image as AnyObject)
-            if id != context.coordinator.lastImageID {
-                PerfTracker.mark("updateNSView: image changed → nsView.setImage")
-                nsView.setImage(image, token: imageToken, orientation: imageOrientation)
+            // Trigger setImage on image-identity change OR key change.
+            // The key-only-change path is the texture-cache fast path
+            // where ViewerState skipped pipeline.decode but advanced
+            // currentImageKey to the new pair — the renderer's
+            // cache-hit setImage will bind the cached texture by key
+            // (ignoring the passed CGImage).
+            if id != context.coordinator.lastImageID ||
+               imageDecodeKey != context.coordinator.lastKey
+            {
+                PerfTracker.mark("updateNSView: image/key changed → nsView.setImage")
+                nsView.setImage(image, token: imageToken, orientation: imageOrientation, key: imageDecodeKey)
                 context.coordinator.lastImageID = id
+                context.coordinator.lastKey = imageDecodeKey
             }
         } else {
             context.coordinator.lastImageID = nil
+            context.coordinator.lastKey = nil
         }
     }
 }

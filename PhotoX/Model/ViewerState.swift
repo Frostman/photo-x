@@ -60,6 +60,11 @@ final class ViewerState {
 
     var viewport: CanvasViewport = .identity
     var currentImage: DecodedImage?
+    /// The `DecodeKey` corresponding to `currentImage`. Updated
+    /// atomically with `currentImage` in `applyRequestedVariant` so
+    /// the canvas can look up the matching texture in MTLTextureCache.
+    /// Nil iff `currentImage` is nil.
+    var currentImageKey: DecodeKey?
     var currentPixelZoom: CGFloat = 1.0
     var isDecoding: Bool = false
     var errorMessage: String?
@@ -107,6 +112,22 @@ final class ViewerState {
         let pairs = sortedPairs
         guard pairs.indices.contains(displayedIndex) else { return nil }
         return pairs[displayedIndex]
+    }
+
+    /// True when the user has navigated to a pair whose texture isn't
+    /// yet on screen — drives the centred loading indicator over the
+    /// canvas and the "block rating/reject during nav lag" guard.
+    /// Two cases:
+    /// 1. **Navigation in flight**: the navigation-intent pair (`pair`)
+    ///    differs from the displayed pair — the new texture is being
+    ///    decoded + uploaded.
+    /// 2. **First-frame load**: `currentImage` is still nil because
+    ///    the initial decode hasn't completed yet.
+    /// Returns false when no shoot is loaded (nothing to load).
+    var isLoadingDisplayedPair: Bool {
+        guard let currentStem = pair?.stem else { return false }
+        if currentImage == nil { return true }
+        return currentStem != displayedPair?.stem
     }
 
     /// Bumped on every shoot teardown (closeShoot, loadShoot). Any background
@@ -256,6 +277,14 @@ final class ViewerState {
     /// loader. Replaces the per-navigation ImageIO read.
     var pairExif: [String: ExifSummary] = [:]
 
+    /// Per-shoot cache of computed histograms, keyed by pair stem.
+    /// A `Histogram` is small (~3 KB: 256 bins × 3 channels × 4 B);
+    /// even a 5 000-pair shoot is ~15 MB — no need to cap. Cleared in
+    /// `resetForShootSwitch`. Eliminates the histogram-recompute
+    /// spike on revisit (texture cache hit is now matched by
+    /// histogram cache hit — sidebar updates instantly).
+    var pairHistograms: [String: Histogram] = [:]
+
     // MARK: - Indexing state
 
     enum IndexingStatus: Hashable, Sendable {
@@ -339,6 +368,15 @@ final class ViewerState {
     var indexingCompletedAt: Date?
 
     private var indexingTask: Task<Void, Never>?
+    /// Per-neighbour prefetch tasks (warm decode + texture upload),
+    /// keyed by pair stem. Cancelled when the stem leaves the
+    /// neighbour set OR on shoot switch.
+    private var prefetchTasks: [String: Task<Void, Never>] = [:]
+    /// The task spawned by the most recent `navigate(to:)` — running
+    /// `applyCurrentPair` → `applyRequestedVariant`. Cancelled by the
+    /// next navigate so intermediate decode results never reach the
+    /// canvas during a fast arrow burst.
+    private var currentApplyTask: Task<Void, Never>?
     private var batchQueues: (advancedExif: BatchQueue,
                               xmp: BatchQueue,
                               basicExif: BatchQueue)?
@@ -465,13 +503,23 @@ final class ViewerState {
         advancedExifBatches.removeAll()
         basicExifBatches.removeAll()
 
-        // 3) Clear all caches.
-        pipeline.cache.clear()
+        // 3) Cancel any in-flight neighbour prefetches and the current
+        // apply-task, then clear all caches. DecodedImage no longer
+        // cached (texture cache replaced it); clear the texture cache
+        // + the HIF byte cache so shoots don't leak memory across
+        // switches.
+        currentApplyTask?.cancel()
+        currentApplyTask = nil
+        for (_, task) in prefetchTasks { task.cancel() }
+        prefetchTasks.removeAll()
+        MTLTextureCache.shared.clear()
+        Task { await pipeline.hifBytes.clear() }
         thumbnails.removeAll()
         pairXMPs.removeAll()
         pairAFData.removeAll()
         pairSequenceNumber.removeAll()
         pairExif.removeAll()
+        pairHistograms.removeAll()
         burstIDByStem.removeAll()
         burstSizesByID.removeAll()
         indexingStatus = .idle
@@ -482,6 +530,7 @@ final class ViewerState {
         // 4) Reset per-pair UI state.
         currentIndex = 0
         currentImage = nil
+        currentImageKey = nil
         currentXMP = .empty
         currentExif = nil
         currentHistogram = nil
@@ -828,7 +877,24 @@ final class ViewerState {
     /// correctly scaled across portrait↔landscape transitions.
     func commitDisplayed(stem: String, pixelSize: CGSize) {
         let pairs = sortedPairs
-        guard let idx = pairs.firstIndex(where: { $0.stem == stem }) else { return }
+        guard let idx = pairs.firstIndex(where: { $0.stem == stem }) else {
+            // Stem isn't in the current sorted view — typically a filter
+            // toggle (rejects/unrated/star levels) hid the pair while
+            // its texture was still loading. Clear the displayed* fields
+            // so the AF overlay / sidebar / loading indicator don't
+            // mis-attribute to a now-hidden pair. Clamp displayedIndex
+            // into range so the filmstrip doesn't try to highlight an
+            // out-of-bounds slot.
+            if !pairs.indices.contains(displayedIndex) {
+                displayedIndex = max(0, min(displayedIndex, pairs.count - 1))
+            }
+            displayedExif = nil
+            displayedAFRegions = []
+            displayedAFSettings = AFSettings()
+            displayedXMP = .empty
+            displayedPixelSize = .zero
+            return
+        }
         displayedIndex = idx
         displayedExif = pairExif[stem]
         let af = pairAFData[stem]
@@ -1016,6 +1082,13 @@ final class ViewerState {
 
     /// Move to a new pair within the current shoot (clamped). Index is into
     /// `sortedPairs`, i.e. display order.
+    ///
+    /// Cancels any prior in-flight apply-task so a fast burst doesn't
+    /// commit intermediate results. The pipeline's decoded image may
+    /// still finish in the background (HEIFDecoder/ImageIO don't honour
+    /// granular cancellation), but its result is dropped before
+    /// reaching `currentImage` — no SwiftUI re-render, no texture
+    /// upload, no histogram compute.
     func navigate(to index: Int) {
         let pairs = sortedPairs
         guard !pairs.isEmpty else { return }
@@ -1023,7 +1096,10 @@ final class ViewerState {
         guard clamped != currentIndex else { return }
         currentIndex = clamped
         PerfTracker.mark("ViewerState.navigate → spawning task")
-        Task { await applyCurrentPair(resetViewport: false) }
+        currentApplyTask?.cancel()
+        currentApplyTask = Task { [weak self] in
+            await self?.applyCurrentPair(resetViewport: false)
+        }
     }
 
     func nextPair() {
@@ -1101,7 +1177,20 @@ final class ViewerState {
 
     /// Sets the star rating (1...5), clears it (nil), or marks rejected (-1).
     /// Updates UI optimistically; rolls back if the XMP write fails.
+    // MARK: - rating / reject / label mutations
+    //
+    // Every user-action that writes to currentXMP / pairXMPs starts
+    // with `guard !isLoadingDisplayedPair` so the action targets the
+    // pair the user actually SEES. Rationale: during a fast nav burst
+    // the canvas can lag the navigation intent by ~50–200 ms; a key
+    // press in that window would otherwise rate the not-yet-visible
+    // pair. Dropping the press is unambiguous — user re-presses once
+    // the new image lands. Sidebar buttons that wrap these methods
+    // disable themselves on `isLoadingDisplayedPair` so the user can
+    // see why their click might not have acted.
+
     func setRating(_ rating: Int?, source: RatingInputSource = .keyboard) {
+        guard !isLoadingDisplayedPair else { return }
         guard let pair else { return }
         let previous = currentXMP
         var updated = currentXMP
@@ -1153,6 +1242,7 @@ final class ViewerState {
 
     /// Sets the XMP color label, or clears it (nil). Optimistic with rollback.
     func setLabel(_ label: String?, source: RatingInputSource = .keyboard) {
+        guard !isLoadingDisplayedPair else { return }
         guard let pair else { return }
         let previous = currentXMP
         var updated = currentXMP
@@ -1265,26 +1355,77 @@ final class ViewerState {
         )
     }
 
-    /// Warm the HEIF decode cache for index ±1 so arrow-key navigation
-    /// renders the next image without waiting. Image decode is its own
-    /// pipeline — the indexer does not own it.
+    /// Warm the MTLTextureCache for neighbours of `currentIndex` so the
+    /// next arrow-key press renders without an upload. Decodes + uploads
+    /// (NOT just decodes) because we dropped the DecodedImage cache —
+    /// the texture IS the cached artifact now.
+    ///
+    /// Cancels prefetches for stems that are NO LONGER neighbours (the
+    /// user navigated away), to avoid wasting GPU time on textures we
+    /// won't display soon. Per-stem dedup via `prefetchTasks` so an
+    /// already-queued prefetch isn't restarted.
+    ///
+    /// Bounded to ±1 (immediate next + previous). Wider radii thrash
+    /// the Metal upload pipeline + competed with user-initiated uploads
+    /// (~600 ms per nav was observed at ±2). Keep it tight so user nav
+    /// gets the GPU first.
     private func prefetchNeighborHEIFs() {
         let pairs = sortedPairs
-        let neighborIndices = [currentIndex - 1, currentIndex + 1]
+        let neighborOffsets = [-1, 1]
+        let neighborIndices = neighborOffsets
+            .map { currentIndex + $0 }
             .filter { pairs.indices.contains($0) }
+        let neighborStems = Set(neighborIndices.map { pairs[$0].stem })
+
+        // Drop any prefetches for stems no longer in the neighbour set.
+        for (stem, task) in prefetchTasks where !neighborStems.contains(stem) {
+            task.cancel()
+            prefetchTasks[stem] = nil
+        }
+
+        // Spawn / dedupe prefetches for the current neighbours.
         for idx in neighborIndices {
             let neighbor = pairs[idx]
-            Task { [weak self] in
-                _ = try? await self?.pipeline.decode(
-                    pair: neighbor, variant: .heif, decoder: .imageIO
-                )
+            let stem = neighbor.stem
+            if prefetchTasks[stem] != nil { continue }
+            let key = DecodeKey(pairID: neighbor.id, variant: .heif, decoder: .imageIO)
+            prefetchTasks[stem] = Task { [weak self] in
+                guard let self else { return }
+                if Task.isCancelled { return }
+                let decoded: DecodedImage?
+                do {
+                    decoded = try await self.pipeline.decode(
+                        pair: neighbor, variant: .heif, decoder: .imageIO
+                    )
+                } catch {
+                    decoded = nil
+                }
+                if Task.isCancelled { return }
+                if let decoded {
+                    _ = try? await MTLTextureCache.shared.warm(
+                        cgImage: decoded.cgImage,
+                        key: key,
+                        orientation: decoded.orientation
+                    )
+                }
+                // Self-cleanup — remove the slot so the next prefetch
+                // round can spawn a replacement if needed.
+                if !Task.isCancelled {
+                    self.prefetchTasks[stem] = nil
+                }
             }
         }
     }
 
     private func kickOffHistogramCompute(for image: DecodedImage) {
+        guard let stem = pair?.stem else { return }
         histogramGeneration += 1
         let gen = histogramGeneration
+        // Cache hit — surface instantly, no Task spawn.
+        if let cached = pairHistograms[stem] {
+            currentHistogram = cached
+            return
+        }
         let cgImage = image.cgImage
         Task { [weak self] in
             let h = await Task.detached(priority: .utility) {
@@ -1293,6 +1434,7 @@ final class ViewerState {
             guard let self else { return }
             guard self.histogramGeneration == gen else { return }
             self.currentHistogram = h
+            self.pairHistograms[stem] = h
         }
     }
 
@@ -1300,20 +1442,57 @@ final class ViewerState {
         guard let pair else { return }
         let variant = requestedVariant
         let chosenDecoder = decoder
+        // HEIF always goes through the imageIO decoder slot — match
+        // DecodePipeline.decode's keyDecoder normalisation so the
+        // canvas's MTLTextureCache key lines up with whatever the
+        // pipeline produced.
+        let keyDecoder: DecoderChoice = (variant == .heif) ? .imageIO : chosenDecoder
+        let key = DecodeKey(pairID: pair.id, variant: variant, decoder: keyDecoder)
         self.errorMessage = nil
         self.isDecoding = true
         defer { isDecoding = false }
+
+        // FAST PATH — both texture and histogram caches hit. Skip
+        // pipeline.decode entirely (saves ~100 ms per revisit on a
+        // Sony A1 II HEIF — even with HIFBytesCache hit, ImageIO's
+        // re-decode is the bottleneck on A↔B↔A↔B nav). The canvas's
+        // `ImageCanvasView` is wired to call `setImage` on key change
+        // even when the CGImage instance is the same, so the cached
+        // texture binds correctly. `currentImage` stays pointing at
+        // whatever pair the canvas LAST decoded — its `cgImage` is
+        // unused by the cache-hit setImage path; readers of pixelSize
+        // already moved to `displayedPixelSize`.
+        if !Task.isCancelled,
+           MTLTextureCache.shared.get(key) != nil,
+           let cachedHist = pairHistograms[pair.stem]
+        {
+            PerfTracker.mark("applyRequestedVariant fast-path (texture + histogram cached)")
+            self.currentImageKey = key
+            self.currentHistogram = cachedHist
+            self.displayedVariant = variant
+            return
+        }
 
         do {
             PerfTracker.mark("about to await pipeline.decode")
             let decoded = try await pipeline.decode(pair: pair, variant: variant, decoder: chosenDecoder)
             PerfTracker.mark("pipeline.decode returned")
+            // Drop the result if the user navigated past or switched
+            // variant/decoder while the decode was in flight. The
+            // decoded image is harmless — it just isn't pushed into
+            // currentImage (no SwiftUI re-render, no texture upload,
+            // no histogram compute).
+            guard !Task.isCancelled else { return }
             guard variant == self.requestedVariant, chosenDecoder == self.decoder else { return }
             self.currentImage = decoded
+            self.currentImageKey = key
             PerfTracker.mark("currentImage set")
             self.displayedVariant = variant
             kickOffHistogramCompute(for: decoded)
         } catch {
+            // Cancellation throws too — silently swallow so it doesn't
+            // surface as an "error" in the sidebar.
+            if Task.isCancelled { return }
             Log.app.error("applyRequestedVariant: \(String(describing: error), privacy: .public)")
             self.errorMessage = String(describing: error)
         }

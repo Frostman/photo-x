@@ -3,14 +3,26 @@ import SwiftUI
 struct DecisionsPanelView: View {
     @Bindable var state: ViewerState
 
-    private var xmp: XMPSidecar { state.currentXMP }
+    // Read the DISPLAYED XMP (= what's on the canvas) so the sidebar
+    // never shows the not-yet-visible navigation-intent pair's rating.
+    // Combined with the `.disabled(state.isLoadingDisplayedPair)` on
+    // `body`, this means during a nav lag the sidebar is greyed out
+    // AND reads the just-visible pair's decisions.
+    private var xmp: XMPSidecar { state.displayedXMP }
 
     var body: some View {
+        // Disable all rating/reject/label inputs while the canvas is
+        // showing an older texture than the user's navigation intent
+        // — matches the `guard !isLoadingDisplayedPair` on the
+        // ViewerState mutators, and visually signals to the user why
+        // a click might be a no-op.
         VStack(alignment: .leading, spacing: 6) {
             ratingRow
             rejectRow
             labelRow
         }
+        .disabled(state.isLoadingDisplayedPair)
+        .opacity(state.isLoadingDisplayedPair ? 0.45 : 1.0)
     }
 
     @ViewBuilder

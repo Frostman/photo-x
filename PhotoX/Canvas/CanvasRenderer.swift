@@ -8,7 +8,11 @@ final class CanvasRenderer {
     let device: MTLDevice
     private let commandQueue: MTLCommandQueue
     private let pipelineState: MTLRenderPipelineState
-    private let textureLoader: MTKTextureLoader
+    /// Shared GPU-texture cache; reused across the whole canvas. Cache
+    /// HITs swap `baseTexture` synchronously (back-and-forth nav feels
+    /// instant). MISSes go through the coalesced async upload path
+    /// below.
+    private let textureCache: MTLTextureCache
 
     private var baseTexture: MTLTexture?
     /// DISPLAY-orientation pixel size (i.e. dimensions AFTER EXIF
@@ -38,6 +42,21 @@ final class CanvasRenderer {
     /// already shows something newer).
     private var displayedGeneration: Int = 0
 
+    /// Coalescing state for cache MISSes: at most one upload is in
+    /// flight + one pending. A held arrow key that fires `setImage`
+    /// 50 times only spawns one upload at a time — the latest pending
+    /// supersedes earlier ones, so the GPU only does ONE intermediate
+    /// upload + the final one rather than 50 in parallel.
+    private struct PendingRequest {
+        let cgImage: CGImage
+        let key: DecodeKey
+        let token: String
+        let orientation: Int
+        let gen: Int
+    }
+    private var inFlight: Bool = false
+    private var pendingRequest: PendingRequest?
+
     /// Called on the main actor after an async texture load completes
     /// and `baseTexture` has been updated. Payload is:
     /// - `token`: the opaque string the caller passed to `setImage`
@@ -54,8 +73,12 @@ final class CanvasRenderer {
     }
 
     init?(layerPixelFormat: MTLPixelFormat) {
-        guard let device = MTLCreateSystemDefaultDevice(),
-              let queue = device.makeCommandQueue(),
+        // Pull the device from the shared texture cache so both layers
+        // operate on the same MTLDevice (mandatory: textures from one
+        // device can't be sampled by another).
+        let cache = MTLTextureCache.shared
+        let device = cache.device
+        guard let queue = device.makeCommandQueue(),
               let library = try? device.makeDefaultLibrary(bundle: .main),
               let vertexFn = library.makeFunction(name: "vertex_main"),
               let fragmentFn = library.makeFunction(name: "fragment_main")
@@ -78,70 +101,128 @@ final class CanvasRenderer {
         self.device = device
         self.commandQueue = queue
         self.pipelineState = pipeline
-        self.textureLoader = MTKTextureLoader(device: device)
+        self.textureCache = cache
     }
 
-    /// Kick off an async load of `cgImage` into a Metal texture. The
-    /// previous texture stays bound (and visible) until the new one is
-    /// ready, so arrow-key navigation stays responsive even while the
-    /// upload is in flight. Stale loads (a newer setImage came in
-    /// before this one finished) are dropped via the generation counter.
-    /// Reads to follow up:
-    /// `onTextureReady` fires on the main actor when `baseTexture` has
-    /// been updated.
-    func setImage(_ cgImage: CGImage, token: String, orientation: Int) {
+    /// Bind a Metal texture for `cgImage` and update the canvas. Two
+    /// paths:
+    ///
+    /// 1. **Cache HIT** (`textureCache.get(key) != nil`): synchronous
+    ///    bind. Bumps `loadGeneration` and `displayedGeneration`, swaps
+    ///    the bound texture + display geometry, clears any pending
+    ///    async upload (otherwise a stale pending warm would overwrite
+    ///    this cached image later), and fires `onTextureReady`
+    ///    immediately. NSView's `onTextureReady` handler still uses
+    ///    the 1-runloop Metal-commit defer (same as the async path) so
+    ///    SwiftUI's AFPointOverlay re-render lands in the same
+    ///    CATransaction as the new Metal present — no "new image +
+    ///    old AF" intermediate frame.
+    /// 2. **Cache MISS**: coalesced async upload. If nothing is in
+    ///    flight, kicks off `textureCache.warm(...)`. If something is
+    ///    already in flight, stores the request as `pendingRequest` so
+    ///    only the latest queued request actually completes — a fast
+    ///    arrow-key burst no longer floods the GPU with N parallel
+    ///    uploads.
+    ///
+    /// The previous bound texture stays visible until the new one is
+    /// ready (no flash to black during the upload window).
+    /// `onTextureReady` fires on the main actor when the new texture
+    /// is bound (cache-hit fires immediately; cache-miss fires after
+    /// the upload commits).
+    func setImage(_ cgImage: CGImage, token: String, orientation: Int, key: DecodeKey) {
         PerfTracker.mark("CanvasRenderer.setImage entered")
         loadGeneration += 1
         let gen = loadGeneration
-        // Display dimensions = raw swapped iff EXIF orientation rotates
-        // by 90° (values 5–8). Stored on `imagePixelSize` so viewport
-        // math and the vertex quad sizing operate in display space.
-        let isSwapped = orientation >= 5 && orientation <= 8
-        let pixelSize = isSwapped
-            ? CGSize(width: cgImage.height, height: cgImage.width)
-            : CGSize(width: cgImage.width, height: cgImage.height)
-        let loader = textureLoader
-        let queue = commandQueue
 
+        // Cache HIT — synchronous bind, no async dance.
+        if let cached = textureCache.get(key) {
+            // Drop any pending warm queued while a previous upload was
+            // in flight — that pending was for an even-older request
+            // chain and would overwrite this cache-hit image later.
+            pendingRequest = nil
+            displayedGeneration = gen
+            baseTexture = cached.texture
+            imagePixelSize = cached.pixelSize
+            imageOrientation = cached.orientation
+            PerfTracker.mark("CanvasRenderer.setImage done (cache hit)")
+            onTextureReady?(token, cached.pixelSize)
+            return
+        }
+
+        // Cache MISS — queue an async warm. If something is already in
+        // flight, store this request; the in-flight completion handler
+        // will pick it up and supersede whatever's pending.
+        let req = PendingRequest(cgImage: cgImage, key: key, token: token,
+                                  orientation: orientation, gen: gen)
+        if inFlight {
+            pendingRequest = req
+            return
+        }
+        startWarm(req)
+    }
+
+    /// Kick off the actual async upload for `req`. Assumes `inFlight`
+    /// is false; sets it true. On completion, either commits the
+    /// result OR consumes a newer `pendingRequest` and restarts.
+    private func startWarm(_ req: PendingRequest) {
+        inFlight = true
+        let cache = textureCache
+        let queue = commandQueue
         Task.detached(priority: .userInitiated) {
-            // MTKTextureLoader handles format conversion + upload via
-            // its own optimized path (typically GPU-side, no 200 MB
-            // CGContext on the CPU). Mipmap generation is requested
-            // up-front so we don't need a separate blit pass.
-            let texture: MTLTexture?
+            let entry: MTLTextureCache.Entry?
             do {
-                texture = try await loader.newTexture(
-                    cgImage: cgImage,
-                    options: [
-                        .generateMipmaps: NSNumber(value: true),
-                        .SRGB:            NSNumber(value: true),
-                        .textureStorageMode: NSNumber(value: MTLStorageMode.shared.rawValue),
-                        .textureUsage:    NSNumber(value: MTLTextureUsage.shaderRead.rawValue),
-                    ]
-                )
+                entry = try await cache.warm(cgImage: req.cgImage,
+                                              key: req.key,
+                                              orientation: req.orientation)
             } catch {
-                Log.canvas.error("MTKTextureLoader failed (\(String(describing: error), privacy: .public)); falling back to manual CGContext upload")
-                texture = Self.manualUpload(cgImage: cgImage, device: loader.device, commandQueue: queue)
+                // Fall back to a manual CGContext + replace upload. The
+                // result isn't inserted into the cache (the cache's
+                // own error path already returned nil), so a repeat
+                // visit will retry — acceptable for the rare CGImage
+                // format MTKTextureLoader rejects.
+                Log.canvas.error("MTLTextureCache.warm failed (\(String(describing: error), privacy: .public)); falling back to manual upload")
+                let device = cache.device
+                let texture = Self.manualUpload(cgImage: req.cgImage,
+                                                 device: device,
+                                                 commandQueue: queue)
+                let isSwapped = req.orientation >= 5 && req.orientation <= 8
+                let pixelSize: CGSize = isSwapped
+                    ? CGSize(width: req.cgImage.height, height: req.cgImage.width)
+                    : CGSize(width: req.cgImage.width, height: req.cgImage.height)
+                entry = texture.map {
+                    MTLTextureCache.Entry(texture: $0, pixelSize: pixelSize,
+                                          orientation: req.orientation)
+                }
             }
 
             await MainActor.run { [weak self] in
                 guard let self else { return }
-                // Only drop if a strictly newer load has already been
-                // committed. Intermediate completions during fast nav
-                // still render so the canvas keeps up with the user's
-                // arrow-key bursts instead of staying frozen until
-                // they stop.
-                guard gen > self.displayedGeneration else { return }
-                guard let texture else {
-                    Log.canvas.error("setImage: texture creation returned nil for \(Int(pixelSize.width))x\(Int(pixelSize.height))")
+                self.inFlight = false
+
+                // If a newer request queued while we were uploading,
+                // DROP this result and kick off the pending one. The
+                // intermediate texture is wasted GPU work, but it's
+                // already done and the next iteration of the coalesce
+                // loop bounds us at 1 in-flight + 1 pending.
+                if let next = self.pendingRequest {
+                    self.pendingRequest = nil
+                    self.startWarm(next)
                     return
                 }
-                self.displayedGeneration = gen
-                self.baseTexture = texture
-                self.imagePixelSize = pixelSize
-                self.imageOrientation = orientation
+
+                // Defence in depth: out-of-order completion (this load's
+                // gen is older than something already displayed) — drop.
+                guard req.gen > self.displayedGeneration else { return }
+                guard let entry else {
+                    Log.canvas.error("setImage: texture creation returned nil for \(req.cgImage.width)x\(req.cgImage.height)")
+                    return
+                }
+                self.displayedGeneration = req.gen
+                self.baseTexture = entry.texture
+                self.imagePixelSize = entry.pixelSize
+                self.imageOrientation = entry.orientation
                 PerfTracker.mark("CanvasRenderer.setImage done (async)")
-                self.onTextureReady?(token, pixelSize)
+                self.onTextureReady?(req.token, entry.pixelSize)
             }
         }
     }
