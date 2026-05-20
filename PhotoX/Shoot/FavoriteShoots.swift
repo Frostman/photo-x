@@ -11,9 +11,13 @@ final class FavoriteShoots {
     static let shared = FavoriteShoots()
 
     private let key = "favoriteShoots.paths"
+    private let lastEntryKey = "favoriteShoots.lastEntry"
     private let defaults: UserDefaults
 
     private(set) var paths: [String] = []
+    /// Last viewed entry stem per favorite path. Kept in a separate
+    /// map so the existing `paths`-iterating callers don't change.
+    private(set) var lastEntryByPath: [String: String] = [:]
 
     /// `defaults` is injectable so tests can use a per-suite UserDefaults and
     /// avoid clobbering the user's real favorites. Production uses `.standard`
@@ -21,6 +25,8 @@ final class FavoriteShoots {
     init(defaults: UserDefaults = AppDefaults.shared) {
         self.defaults = defaults
         self.paths = defaults.stringArray(forKey: key) ?? []
+        self.lastEntryByPath = (defaults.dictionary(forKey: lastEntryKey)
+            as? [String: String]) ?? [:]
     }
 
     func add(_ path: String) {
@@ -33,7 +39,9 @@ final class FavoriteShoots {
         let next = paths.filter { $0 != path }
         guard next.count != paths.count else { return }
         paths = next
+        lastEntryByPath.removeValue(forKey: path)
         defaults.set(next, forKey: key)
+        defaults.set(lastEntryByPath, forKey: lastEntryKey)
     }
 
     func toggle(_ path: String) {
@@ -59,5 +67,23 @@ final class FavoriteShoots {
         next.insert(element, at: insertAt)
         paths = next
         defaults.set(next, forKey: key)
+    }
+
+    /// Record the stem the user was on when they last saw this shoot.
+    /// No-op if the path isn't a favorite (don't resurrect removed
+    /// favorites just because the user navigated inside one before
+    /// unfavoriting).
+    func setLastEntry(_ stem: String?, for path: String) {
+        guard paths.contains(path) else { return }
+        if let stem {
+            lastEntryByPath[path] = stem
+        } else {
+            lastEntryByPath.removeValue(forKey: path)
+        }
+        defaults.set(lastEntryByPath, forKey: lastEntryKey)
+    }
+
+    func lastEntry(for path: String) -> String? {
+        lastEntryByPath[path]
     }
 }

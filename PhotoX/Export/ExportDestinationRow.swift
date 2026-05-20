@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// One row in the Export sheet's destinations list. Caller owns the
@@ -13,6 +14,11 @@ struct ExportDestinationRow: View {
     let onCancel: () -> Void
     let onRemove: () -> Void
     let onChange: ((inout ExportSettings.Destination) -> Void) -> Void
+
+    /// Flips to true for ~1 s after a click-to-copy on the path,
+    /// flipping the label to "Copied path" — mirrors the canvas
+    /// stem-pill's `copiedFlash` UX.
+    @State private var copiedFlash = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -33,14 +39,32 @@ struct ExportDestinationRow: View {
         HStack(spacing: 6) {
             dragHandle
             Image(systemName: "folder").foregroundStyle(.secondary)
-            Text((destination.path as NSString).abbreviatingWithTildeInPath)
-                .font(.callout.monospaced())
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .help(destination.path)
+            Button {
+                copyPathToClipboard()
+            } label: {
+                Text(copiedFlash
+                     ? "Copied path"
+                     : (destination.path as NSString).abbreviatingWithTildeInPath)
+                    .font(.callout.monospaced())
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .foregroundStyle(.primary)
+            }
+            .buttonStyle(.plain)
+            .help("Click to copy absolute path — \(destination.path)")
             Spacer()
             runButton
             removeButton
+        }
+    }
+
+    private func copyPathToClipboard() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(destination.path, forType: .string)
+        copiedFlash = true
+        Task {
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            copiedFlash = false
         }
     }
 

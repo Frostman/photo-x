@@ -65,7 +65,10 @@ enum ThumbnailLoader {
         }
         // FALLBACK: ImageIO. No ExifSummary in this path — by the
         // time we're here the file isn't a camera preview we
-        // recognise.
+        // recognise. Warn so the user can spot images that pay the
+        // full ImageIO decode tax at index time (web-edited JPGs,
+        // non-Sony HEICs without an embedded JPEG item, etc.).
+        Log.app.warning("thumbnail fast-path missed for \(url.lastPathComponent, privacy: .public) — falling back to ImageIO full decode")
         let data: Data
         do {
             data = try Data(contentsOf: url)

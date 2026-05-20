@@ -55,11 +55,22 @@ class PhotoXUITestCase: XCTestCase {
         ]
         app.launch()
 
-        // Ensure the window becomes key — SwiftUI's @FocusState +
-        // .onKeyPress only fire when the canvas is focused, which
-        // requires the window to be key. Just launching doesn't
-        // always promote the test-runner-spawned window to key.
-        app.activate()
+        // Ensure the window becomes key + frontmost — SwiftUI's
+        // @FocusState + .onKeyPress only fire when the canvas is
+        // focused, which requires the window to be key. Just
+        // launching doesn't always promote the test-runner-spawned
+        // window to key, and under back-to-back test runs the OS
+        // sometimes leaves the test runner in front instead.
+        //
+        // Poll until app.state == .runningForeground (raw value 4)
+        // before relying on the window. Activate up to 3× — the
+        // first .activate() commonly no-ops while the process is
+        // still in `.inactive` (SwiftUI scenePhase not yet `.active`).
+        for _ in 0 ..< 30 {  // ~3 s @ 100 ms
+            app.activate()
+            if app.state == .runningForeground { break }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
         let window = app.windows.firstMatch
         if window.waitForExistence(timeout: 5) {
             // Click well inside the canvas, not at center (the stem
@@ -299,11 +310,23 @@ class PhotoXUITestCase: XCTestCase {
     /// Wait for the shoot to finish initial load — observed via the
     /// `canvas.stemPill.indexLabel` element appearing. Returns the
     /// total pair count parsed from the "N/M" label, or fails.
+    ///
+    /// 20 s default: under back-to-back test runs, multiple PhotoX
+    /// processes spawn in close succession and contend on disk IO
+    /// (sample/ clone + UserDefaults sync); 10 s wasn't enough to
+    /// stay reliably green.
     @discardableResult
-    func waitForShootLoaded(timeout: TimeInterval = 10) -> Int {
+    func waitForShootLoaded(timeout: TimeInterval = 20) -> Int {
         let pill = app.staticTexts["canvas.stemPill.indexLabel"]
         if !pill.waitForExistence(timeout: timeout) {
-            XCTFail("stem pill never appeared (shoot didn't load); state=\(app.state.rawValue)")
+            // One more activate kick + a brief retry — sometimes the
+            // OS leaves the window unfocused enough that the
+            // accessibility snapshot is empty even though the app is
+            // foreground per `state`.
+            app.activate()
+            if !pill.waitForExistence(timeout: 5) {
+                XCTFail("stem pill never appeared (shoot didn't load); state=\(app.state.rawValue)")
+            }
         }
         // Now that the shoot is loaded, click into the canvas to
         // confirm the .focusable() view takes @FocusState focus.

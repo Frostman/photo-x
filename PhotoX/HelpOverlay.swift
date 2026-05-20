@@ -25,6 +25,7 @@ struct HelpOverlay: View {
             .init(keys: "⇧ 1 – 5", label: "Toggle color label: Red / Yellow / Green / Blue / Purple (writes xmp:Label)"),
             .init(keys: "0", label: "Clear rating"),
             .init(keys: "R", label: "Reject (xmp:Rating = -1); R again un-rejects"),
+            .init(keys: "G", label: "Inside a burst: reject other burst members (scope is set in Settings → Workflow)"),
         ]),
         ("Image variant", [
             .init(keys: "Z", label: "Toggle HIF/JPG ↔ RAW (when both exist)"),
@@ -34,6 +35,8 @@ struct HelpOverlay: View {
             .init(keys: "← / →", label: "Previous / next pair in the shoot"),
             .init(keys: "⌥ ← / →", label: "Skip 10 pairs"),
             .init(keys: "⌘ ← / →", label: "Jump to previous / next burst (singletons count as 1-frame bursts)"),
+            .init(keys: "[ / ]", label: "Jump to previous / next unrated frame"),
+            .init(keys: "J", label: "Jump to entry by index or stem name (sheet with completion)"),
             .init(keys: "Home / End", label: "Jump to first / last pair"),
         ]),
         ("View", [

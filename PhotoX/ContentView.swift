@@ -20,6 +20,7 @@ struct ContentView: View {
     @Bindable var state: ViewerState
     @FocusState private var canvasFocused: Bool
     @State private var showHelp: Bool = false
+    @State private var showJumpSheet: Bool = false
     @State private var copiedFlash: Bool = false
     @AppStorage(SettingsKey.appearance, store: AppDefaults.shared) private var appearanceRaw = SettingsKey.Defaults.appearance
     @AppStorage(SettingsKey.showCanvasLoadingIndicator, store: AppDefaults.shared) private var loadingIndicatorEnabled = SettingsKey.Defaults.showCanvasLoadingIndicator
@@ -66,6 +67,15 @@ struct ContentView: View {
             if showHelp {
                 HelpOverlay(onDismiss: { showHelp = false })
             }
+
+            if showJumpSheet {
+                // Overlay (not .sheet) so a tap on the dimmed
+                // background dismisses, and the canvas's @FocusState
+                // stays intact for arrow nav to resume immediately
+                // after close. Matches HelpOverlay's pattern.
+                JumpToView(state: state,
+                           onDismiss: { showJumpSheet = false })
+            }
         }
         .frame(minWidth: 900, minHeight: 600)
         .sheet(isPresented: $showExportSheet) {
@@ -84,42 +94,63 @@ struct ContentView: View {
         .onChange(of: showExportSheet) { _, isShowing in
             canvasFocused = !isShowing
         }
+        // Jump overlay focus handoff is fully handled inside
+        // JumpToView.dismissCleanly via a synthetic mouse click on
+        // the canvas — every SwiftUI @FocusState / AppKit
+        // makeFirstResponder path we tried failed to restore arrow
+        // nav after the overlay's TextField was destroyed. See the
+        // comment block at JumpToView.simulateCanvasClick for why.
         // Detach the whole shortcut chain while the sheet is up — otherwise
         // .onKeyPress modifiers intercept everything before sheet controls
         // (TextField, etc.) get a chance.
-        .conditional(!showExportSheet) { view in
-            view
+        .conditional(!showExportSheet && !showJumpSheet) { view in
+            // Canvas-action shortcuts only fire when a shoot is loaded.
+            // Returning .ignored on the starter screen lets the OS
+            // process the keystroke normally (beep, no side effects)
+            // instead of toggling features against nil state OR
+            // surfacing modals like the jump dialog out of context.
+            // `?` (help) and Esc (dismiss help) stay always-available.
+            let hasShoot = state.shoot != nil
+            return view
                 .onKeyPress(keys: ["z", "Z"]) { _ in
+                    guard hasShoot else { return .ignored }
                     state.toggleRequestedVariant()
                     return .handled
                 }
                 .onKeyPress(keys: ["x", "X"]) { _ in
+                    guard hasShoot else { return .ignored }
                     state.setViewportToFit()
                     return .handled
                 }
                 .onKeyPress(keys: ["d", "D"]) { _ in
+                    guard hasShoot else { return .ignored }
                     state.cycleDecoder()
                     return .handled
                 }
                 .onKeyPress(keys: ["c", "C"]) { _ in
+                    guard hasShoot else { return .ignored }
                     state.toggleClipping()
                     return .handled
                 }
                 .onKeyPress(keys: ["f", "F"]) { _ in
+                    guard hasShoot else { return .ignored }
                     state.togglePeaking()
                     return .handled
                 }
                 .onKeyPress(keys: ["a", "A"]) { _ in
+                    guard hasShoot else { return .ignored }
                     state.toggleAFOverlay()
                     return .handled
                 }
                 .onKeyPress(keys: ["b", "B"]) { _ in
+                    guard hasShoot else { return .ignored }
                     withAnimation(.easeInOut(duration: 0.15)) {
                         state.toggleSidebar()
                     }
                     return .handled
                 }
                 .onKeyPress(keys: ["t", "T"]) { _ in
+                    guard hasShoot else { return .ignored }
                     withAnimation(.easeInOut(duration: 0.15)) {
                         state.toggleFilmstrip()
                     }
@@ -127,44 +158,85 @@ struct ContentView: View {
                 }
                 // Scoring. SwiftUI's onKeyPress matches against the TYPED character on
                 // macOS, so Shift+1 arrives as "!" (not "1") — we register both forms.
-                .onKeyPress(keys: ["1"]) { _ in state.toggleRating(1); return .handled }
-                .onKeyPress(keys: ["2"]) { _ in state.toggleRating(2); return .handled }
-                .onKeyPress(keys: ["3"]) { _ in state.toggleRating(3); return .handled }
-                .onKeyPress(keys: ["4"]) { _ in state.toggleRating(4); return .handled }
-                .onKeyPress(keys: ["5"]) { _ in state.toggleRating(5); return .handled }
-                .onKeyPress(keys: ["!"]) { _ in state.toggleLabel("Red"); return .handled }
-                .onKeyPress(keys: ["@"]) { _ in state.toggleLabel("Yellow"); return .handled }
-                .onKeyPress(keys: ["#"]) { _ in state.toggleLabel("Green"); return .handled }
-                .onKeyPress(keys: ["$"]) { _ in state.toggleLabel("Blue"); return .handled }
-                .onKeyPress(keys: ["%"]) { _ in state.toggleLabel("Purple"); return .handled }
-                .onKeyPress(keys: ["0"]) { _ in state.setRating(nil); return .handled }
-                .onKeyPress(keys: ["r", "R"]) { _ in state.toggleReject(); return .handled }
+                .onKeyPress(keys: ["1"]) { _ in guard hasShoot else { return .ignored }; state.toggleRating(1); return .handled }
+                .onKeyPress(keys: ["2"]) { _ in guard hasShoot else { return .ignored }; state.toggleRating(2); return .handled }
+                .onKeyPress(keys: ["3"]) { _ in guard hasShoot else { return .ignored }; state.toggleRating(3); return .handled }
+                .onKeyPress(keys: ["4"]) { _ in guard hasShoot else { return .ignored }; state.toggleRating(4); return .handled }
+                .onKeyPress(keys: ["5"]) { _ in guard hasShoot else { return .ignored }; state.toggleRating(5); return .handled }
+                .onKeyPress(keys: ["!"]) { _ in guard hasShoot else { return .ignored }; state.toggleLabel("Red"); return .handled }
+                .onKeyPress(keys: ["@"]) { _ in guard hasShoot else { return .ignored }; state.toggleLabel("Yellow"); return .handled }
+                .onKeyPress(keys: ["#"]) { _ in guard hasShoot else { return .ignored }; state.toggleLabel("Green"); return .handled }
+                .onKeyPress(keys: ["$"]) { _ in guard hasShoot else { return .ignored }; state.toggleLabel("Blue"); return .handled }
+                .onKeyPress(keys: ["%"]) { _ in guard hasShoot else { return .ignored }; state.toggleLabel("Purple"); return .handled }
+                .onKeyPress(keys: ["0"]) { _ in guard hasShoot else { return .ignored }; state.setRating(nil); return .handled }
+                .onKeyPress(keys: ["r", "R"]) { _ in guard hasShoot else { return .ignored }; state.toggleReject(); return .handled }
                 .onKeyPress(.leftArrow, phases: [.down, .repeat]) { press in
+                    guard hasShoot else { return .ignored }
                     PerfTracker.begin("← key")
                     if press.modifiers.contains(.command) {
                         state.navigateByBurst(direction: -1)
+                    } else if press.modifiers.contains(.option) {
+                        // When collapse-bursts is on, ⌥arrow steps by
+                        // 10 collapsed entries (one burst = one
+                        // entry) so the filmstrip jumps a uniform
+                        // 10 thumbs regardless of internal burst size.
+                        if state.collapseBurstsActive {
+                            state.navigate(byEntries: -10)
+                        } else {
+                            state.navigate(by: -10)
+                        }
                     } else {
-                        let step = press.modifiers.contains(.option) ? 10 : 1
-                        state.navigate(by: -step)
+                        state.navigate(by: -1)
                     }
                     return .handled
                 }
                 .onKeyPress(.rightArrow, phases: [.down, .repeat]) { press in
+                    guard hasShoot else { return .ignored }
                     PerfTracker.begin("→ key")
                     if press.modifiers.contains(.command) {
                         state.navigateByBurst(direction: 1)
+                    } else if press.modifiers.contains(.option) {
+                        if state.collapseBurstsActive {
+                            state.navigate(byEntries: 10)
+                        } else {
+                            state.navigate(by: 10)
+                        }
                     } else {
-                        let step = press.modifiers.contains(.option) ? 10 : 1
-                        state.navigate(by: step)
+                        state.navigate(by: 1)
                     }
                     return .handled
                 }
                 .onKeyPress(.home) {
+                    guard hasShoot else { return .ignored }
                     state.firstPair()
                     return .handled
                 }
                 .onKeyPress(.end) {
+                    guard hasShoot else { return .ignored }
                     state.lastPair()
+                    return .handled
+                }
+                .onKeyPress(KeyEquivalent("[")) {
+                    guard hasShoot else { return .ignored }
+                    state.previousUnrated()
+                    return .handled
+                }
+                .onKeyPress(KeyEquivalent("]")) {
+                    guard hasShoot else { return .ignored }
+                    state.nextUnrated()
+                    return .handled
+                }
+                .onKeyPress(keys: ["g", "G"]) { _ in
+                    guard hasShoot else { return .ignored }
+                    let raw = AppDefaults.shared.string(forKey: SettingsKey.gRejectScope)
+                        ?? SettingsKey.Defaults.gRejectScope
+                    let scope = GRejectScope(rawValue: raw) ?? .unrated
+                    state.rejectBurstSiblings(scope: scope)
+                    return .handled
+                }
+                .onKeyPress(keys: ["j", "J"]) { _ in
+                    guard hasShoot else { return .ignored }
+                    showJumpSheet = true
                     return .handled
                 }
                 .onKeyPress(KeyEquivalent("?")) {
@@ -782,10 +854,19 @@ struct ContentView: View {
                 return
             }
             let shoot = ShootScanner.scan(folder: url)
-            guard let focus = shoot.entries.first else {
+            guard let firstEntry = shoot.entries.first else {
                 state.errorMessage = "No ARW + HIF/JPG pairs (or standalone HIF/JPG files) found in \(url.lastPathComponent)"
                 return
             }
+            // Restore the last-viewed entry if this path is a known
+            // favorite or recent. Favorites take precedence (more
+            // deliberate); both stores fall back to the first entry
+            // silently if the saved stem no longer exists.
+            let savedStem = FavoriteShoots.shared.lastEntry(for: path)
+                         ?? RecentShoots.shared.lastEntry(for: path)
+            let focus = savedStem
+                .flatMap { stem in shoot.entries.first { $0.stem == stem } }
+                ?? firstEntry
             await state.loadShoot(shoot, focus: focus)
         }
     }
@@ -909,6 +990,21 @@ struct ContentView: View {
             try? await Task.sleep(for: .milliseconds(800))
             await MainActor.run { copiedFlash = false }
         }
+    }
+
+    /// Recursive depth-first search for the `ImageCanvasNSView`
+    /// inside an arbitrary NSView tree. Used by the jump-overlay
+    /// dismiss path to reset AppKit's firstResponder to the canvas
+    /// (SwiftUI's @FocusState doesn't restore AppKit focus after
+    /// the overlay's TextField is destroyed — same effect as the
+    /// user manually clicking the canvas).
+    static func findCanvasNSView(in view: NSView?) -> NSView? {
+        guard let view else { return nil }
+        if view is ImageCanvasNSView { return view }
+        for sub in view.subviews {
+            if let found = findCanvasNSView(in: sub) { return found }
+        }
+        return nil
     }
 
     /// Reserve enough horizontal space for the largest possible "N/M" string

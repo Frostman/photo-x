@@ -217,6 +217,20 @@ struct ExportSheet: View {
         panel.prompt = "Choose"
         panel.message = "Select or create a destination folder for exports"
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        // Refuse same-as-source up front: copying a shoot back into
+        // itself would touch the originals — violates the project-
+        // wide "never mutate originals" rule and the orphan-prune
+        // would catastrophically wipe the source folder.
+        if let shootURL = state.shoot?.folderURL,
+           url.standardizedFileURL == shootURL.standardizedFileURL {
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "Can't export back into the source shoot folder"
+            alert.informativeText = "\(url.path) is the folder you opened. Pick a different folder."
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            return
+        }
         let result = settings.add(path: url.path)
         if case .ok = result { return }
         presentAddRejection(result, attemptedPath: url.path)

@@ -442,6 +442,10 @@ final class ViewerState {
     /// decode so the focus entry's metadata batch is already in flight by
     /// the time the HEIF preview lands on-screen.
     func loadShoot(_ shoot: Shoot, focus: PhotoEntry) async {
+        // Before we tear down the current shoot, save the user's
+        // last position so a future reopen (favorite / recent click,
+        // app relaunch) lands them back where they were.
+        captureLastEntryToStores()
         resetForShootSwitch()
         self.shoot = shoot
         self.currentIndex = shoot.index(of: focus) ?? 0
@@ -461,6 +465,20 @@ final class ViewerState {
         await applyCurrentEntry(resetViewport: true)
     }
 
+    /// Save the user's current position to both the recents and
+    /// favorites stores. Idempotent (the stores no-op when the
+    /// path isn't in their list). Called on shoot-switch (inside
+    /// `loadShoot`) and on app-background (from `PhotoXApp`'s
+    /// scenePhase handler). Card shoots are skipped to match the
+    /// recents-skip policy: their paths aren't in either store.
+    func captureLastEntryToStores() {
+        guard let shoot, let stem = displayedEntry?.stem else { return }
+        let path = shoot.folderURL.path
+        if Self.isCardShootPath(shoot.folderURL) { return }
+        RecentShoots.shared.setLastEntry(stem, for: path)
+        FavoriteShoots.shared.setLastEntry(stem, for: path)
+    }
+
     /// True iff the URL looks like a DCIM shoot folder mounted under
     /// `/Volumes/<NAME>/DCIM/<100MSDCF-style>`. Reuses the same DCIM-
     /// name check VolumeScanner uses to populate the Cards section, so
@@ -478,6 +496,9 @@ final class ViewerState {
 
     /// Drop the current shoot and return to the empty starter state.
     func closeShoot() {
+        // Save the user's position before tearing down so reopening
+        // this shoot (favorite / recent click) lands on the same entry.
+        captureLastEntryToStores()
         resetForShootSwitch()
         shoot = nil
     }
@@ -1171,6 +1192,78 @@ final class ViewerState {
         navigate(to: idx)
     }
 
+    /// Walk `steps` *entry boundaries* (sign = direction). A multi-
+    /// frame burst counts as ONE entry — used by ⌥+arrow when
+    /// "collapse bursts" is on, so the user moves a uniform 10
+    /// thumbs across the (collapsed) filmstrip regardless of how
+    /// many raw frames live inside each burst.
+    ///
+    /// Reuses `nextVisibleIndex` for the per-frame walk; only the
+    /// "did we cross into a different entry" check differs. Backward
+    /// direction lands on the FIRST frame of the target entry so the
+    /// behavior matches ⌘← from the burst-features PR.
+    func navigate(byEntries steps: Int) {
+        guard steps != 0 else { return }
+        let direction = steps > 0 ? 1 : -1
+        var idx = currentIndex
+        var crossed = 0
+        let limit = abs(steps)
+        while crossed < limit,
+              let next = nextVisibleIndex(from: idx, direction: direction) {
+            if !sameBurst(sortedEntries[idx].stem, sortedEntries[next].stem) {
+                crossed += 1
+            }
+            idx = next
+        }
+        if direction < 0 {
+            idx = walkBackToEntryStart(from: idx)
+        }
+        navigate(to: idx)
+    }
+
+    /// From `start`, walk backward through the visible array while
+    /// staying inside the same entry (same burst id). Returns the
+    /// first frame of that entry. For a singleton or nil-burst-id
+    /// entry, returns `start` unchanged.
+    private func walkBackToEntryStart(from start: Int) -> Int {
+        guard sortedEntries.indices.contains(start) else { return start }
+        let id = burstIDByStem[sortedEntries[start].stem]
+        // Nil burst id → singleton, can't walk back inside it.
+        guard let id else { return start }
+        var i = start
+        while let prev = nextVisibleIndex(from: i, direction: -1),
+              burstIDByStem[sortedEntries[prev].stem] == id {
+            i = prev
+        }
+        return i
+    }
+
+    /// Mirror of `FilmstripView`'s `@AppStorage(SettingsKey.collapseBursts)`
+    /// so navigation handlers can branch on the same toggle without
+    /// each call site importing `@AppStorage` itself.
+    var collapseBurstsActive: Bool {
+        AppDefaults.shared.bool(forKey: SettingsKey.collapseBursts)
+    }
+
+    /// Jump to the next visible UNRATED entry (rating nil or 0).
+    /// `[` / `]` shortcuts. No-op if nothing unrated in that
+    /// direction — sit still rather than wrap.
+    func nextUnrated()     { walkRated(direction: 1)  }
+    func previousUnrated() { walkRated(direction: -1) }
+
+    private func walkRated(direction: Int) {
+        var idx = currentIndex
+        while let next = nextVisibleIndex(from: idx, direction: direction) {
+            let stem = sortedEntries[next].stem
+            let rating = entryXMPs[stem]?.rating
+            if rating == nil || rating == 0 {
+                navigate(to: next)
+                return
+            }
+            idx = next
+        }
+    }
+
     /// Move to the first visible frame of the next/previous burst.
     /// `direction` is +1 (next) or −1 (previous). Singletons count
     /// as 1-frame bursts (each one is its own "step"), so this never
@@ -1189,37 +1282,49 @@ final class ViewerState {
             navigate(by: direction > 0 ? 1 : -1)
             return
         }
-        let startID = burstIDByStem[sortedEntries[currentIndex].stem]
-        // Step 1: find the first frame in `direction` whose burst id
-        // differs from where we started.
+        let startStem = sortedEntries[currentIndex].stem
+        // Step 1: find the first frame in `direction` that belongs
+        // to a DIFFERENT entry from where we started.
         var boundary: Int?
         var idx = currentIndex
         while let next = nextVisibleIndex(from: idx, direction: direction) {
-            if burstIDByStem[sortedEntries[next].stem] != startID {
+            if !sameBurst(startStem, sortedEntries[next].stem) {
                 boundary = next
                 break
             }
             idx = next
         }
         guard let boundary else {
-            navigate(to: idx)  // already at the first/last burst
+            navigate(to: idx)  // already at the first/last entry
             return
         }
         if direction > 0 {
-            navigate(to: boundary)  // first frame of the next burst — done
+            navigate(to: boundary)  // first frame of the next entry — done
             return
         }
-        // Backward: boundary is the LAST frame of the previous burst.
+        // Backward: boundary is the LAST frame of the previous entry.
         // Walk back to its first frame.
-        let prevID = burstIDByStem[sortedEntries[boundary].stem]
+        let prevStem = sortedEntries[boundary].stem
         var firstOfPrev = boundary
         idx = boundary
         while let prev = nextVisibleIndex(from: idx, direction: -1) {
-            if burstIDByStem[sortedEntries[prev].stem] != prevID { break }
+            if !sameBurst(prevStem, sortedEntries[prev].stem) { break }
             firstOfPrev = prev
             idx = prev
         }
         navigate(to: firstOfPrev)
+    }
+
+    /// Two stems belong to the SAME entry only when both have a known
+    /// burst id AND those ids are equal. nil burst ids (entries
+    /// without a Sony SequenceNumber, JPG-only entries, or entries
+    /// not yet seen by the advanced-EXIF pipeline) are each their own
+    /// singleton — preventing `navigateByBurst` from treating "two
+    /// nils" as the same burst and running off the end.
+    func sameBurst(_ a: String, _ b: String) -> Bool {
+        guard let ia = burstIDByStem[a], let ib = burstIDByStem[b]
+        else { return false }
+        return ia == ib
     }
 
     func toggleRequestedVariant() {
@@ -1303,6 +1408,53 @@ final class ViewerState {
     func toggleReject(source: RatingInputSource = .keyboard) {
         let next: Int? = (currentXMP.rating == -1) ? nil : -1
         setRating(next, source: source)
+    }
+
+    /// Mutate an arbitrary entry's XMP rating without moving the
+    /// canvas focus. Used by `rejectBurstSiblings` so the user stays
+    /// on the keeper while the rest of the burst gets ✗-ed. Mirrors
+    /// `setRating`'s optimistic + write + rollback shape.
+    func setRating(_ rating: Int?, for target: PhotoEntry) {
+        let previous = entryXMPs[target.stem] ?? .empty
+        var updated = previous
+        updated.rating = rating
+        entryXMPs[target.stem] = updated
+        Task {
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    try XMPSidecarWriter.updateRating(rating, for: target)
+                }.value
+            } catch {
+                self.entryXMPs[target.stem] = previous
+                self.errorMessage = "Failed to write XMP for \(target.stem): \(String(describing: error))"
+                Log.app.error("XMP write FAILED: \(target.stem, privacy: .public) — \(String(describing: error), privacy: .public)")
+            }
+        }
+    }
+
+    /// `g` shortcut: reject other members of the displayed entry's
+    /// burst. `scope == .unrated` skips siblings that already have a
+    /// rating / label / reject (the common "I've already triaged
+    /// these" case). `scope == .all` rejects every sibling. No-op
+    /// outside a burst (size < 2) or with no displayed entry.
+    func rejectBurstSiblings(scope: GRejectScope) {
+        guard let stem = displayedEntry?.stem,
+              let id = burstIDByStem[stem],
+              (burstSizesByID[id] ?? 0) >= 2 else { return }
+        let siblings = sortedEntries.filter {
+            $0.stem != stem && burstIDByStem[$0.stem] == id
+        }
+        for sib in siblings {
+            let xmp = entryXMPs[sib.stem]
+            let isUnrated = (xmp?.rating == nil || xmp?.rating == 0)
+                && (xmp?.label?.isEmpty ?? true)
+            switch scope {
+            case .unrated:
+                if isUnrated { setRating(-1, for: sib) }
+            case .all:
+                setRating(-1, for: sib)
+            }
+        }
     }
 
     /// Pressing the same star key again clears the rating. From any other

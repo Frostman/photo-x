@@ -26,6 +26,7 @@ struct PhotoXApp: App {
     /// nil-safe ref instead of branching every read site.
     @State private var updater: UpdaterController? = LaunchFlags.disableSparkle ? nil : UpdaterController()
     @AppStorage(SettingsKey.appearance, store: AppDefaults.shared) private var appearanceRaw = SettingsKey.Defaults.appearance
+    @Environment(\.scenePhase) private var scenePhase
 
     private var appearance: AppearanceMode {
         AppearanceMode(rawValue: appearanceRaw) ?? .system
@@ -36,6 +37,21 @@ struct PhotoXApp: App {
             ContentView(state: viewerState)
                 .preferredColorScheme(appearance.colorScheme)
                 .task { await bootstrap() }
+                .onChange(of: scenePhase) { _, phase in
+                    // On background (Dock-hide / Cmd-Tab) capture the
+                    // current shoot+stem so a later relaunch can
+                    // resume on the same entry. Cheap — touches at
+                    // most two UserDefaults keys. ⌘Q goes through
+                    // applicationWillTerminate (see below) since
+                    // scenePhase .background is unreliable on quit.
+                    if phase == .background {
+                        viewerState.captureLastEntryToStores()
+                    }
+                }
+                .onReceive(NotificationCenter.default.publisher(
+                    for: .photoxWillTerminate)) { _ in
+                    viewerState.captureLastEntryToStores()
+                }
         }
         .windowResizability(.contentMinSize)
         .windowToolbarStyle(.unifiedCompact(showsTitle: false))
@@ -94,7 +110,16 @@ struct PhotoXApp: App {
         // If the user has configured a default folder and it exists with
         // pairs, auto-load it. Otherwise just leave the window in its empty
         // state — no error, no nag.
-        if let (shoot, focus) = SamplePathProvider.resolveShoot() {
+        if let (shoot, firstFocus) = SamplePathProvider.resolveShoot() {
+            // Restore the last-viewed entry if the default folder is
+            // also a known favorite/recent. Otherwise focus the first
+            // entry (current behavior).
+            let path = shoot.folderURL.path
+            let savedStem = FavoriteShoots.shared.lastEntry(for: path)
+                         ?? RecentShoots.shared.lastEntry(for: path)
+            let focus = savedStem
+                .flatMap { stem in shoot.entries.first { $0.stem == stem } }
+                ?? firstFocus
             await viewerState.loadShoot(shoot, focus: focus)
         }
     }
@@ -113,10 +138,15 @@ struct PhotoXApp: App {
             return
         }
         let shoot = ShootScanner.scan(folder: url)
-        guard let focus = shoot.entries.first else {
+        guard let firstFocus = shoot.entries.first else {
             viewerState.errorMessage = "No ARW + HIF/JPG pairs (or standalone HIF/JPG files) found in \(url.lastPathComponent)"
             return
         }
+        let savedStem = FavoriteShoots.shared.lastEntry(for: path)
+                     ?? RecentShoots.shared.lastEntry(for: path)
+        let focus = savedStem
+            .flatMap { stem in shoot.entries.first { $0.stem == stem } }
+            ?? firstFocus
         await viewerState.loadShoot(shoot, focus: focus)
     }
 
@@ -138,9 +168,27 @@ struct PhotoXApp: App {
     }
 }
 
+/// Broadcast right before the app quits. ViewerState listens (via
+/// PhotoXApp's `.onReceive`) and captures the current shoot's last-
+/// viewed entry so a relaunch can resume on it. scenePhase
+/// `.background` is not reliable on ⌘Q — it can be skipped entirely
+/// or fire too late for the UserDefaults write to flush — so we use
+/// `applicationWillTerminate` instead.
+extension Notification.Name {
+    static let photoxWillTerminate = Notification.Name("dev.frostman.PhotoX.willTerminate")
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUserNotificationCenterDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        // SwiftUI listeners get a synchronous chance to capture state
+        // before the process exits; UserDefaults is then synced on
+        // the line below so the writes definitely hit disk.
+        NotificationCenter.default.post(name: .photoxWillTerminate, object: nil)
+        AppDefaults.shared.synchronize()
     }
 
     /// Disable title-bar double-click action (minimize / zoom). NSWindow reads

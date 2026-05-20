@@ -341,4 +341,31 @@ final class ExportCopyLoopTests: XCTestCase {
         XCTAssertEqual(summary(dest.id)?.errors.count, 0)
         XCTAssertEqual(summary(dest.id)?.copied, 2, "no XMP to copy — only ARW + HIF")
     }
+
+    /// Regression: ARW+JPG entries (no HIF) must export the JPG when
+    /// the "HIF/JPG" toggle is on. The export pipeline routes through
+    /// `entry.previewURL` regardless of format, so HIF and JPG are
+    /// peers all the way through planner → runner → orphan-prune.
+    func test_copy_ARWplusJPG_exportsJPGUnderHIFToggle() async throws {
+        // Build an ARW+JPG entry by hand — the existing makePair
+        // helper assumes HIF. We construct the JPG sibling directly,
+        // then point `previewURL` at it.
+        let stem = "DSC00060"
+        let arw = sourceDir.appendingPathComponent("\(stem).ARW")
+        let jpg = sourceDir.appendingPathComponent("\(stem).JPG")
+        try Data(repeating: 0xAB, count: 1024).write(to: arw)
+        try Data(repeating: 0xCD, count: 512).write(to: jpg)
+        let entry = PhotoEntry(rawURL: arw, previewURL: jpg, stem: stem)
+
+        let dest = destination(includeXMP: false)
+        await run(dest, entries: [entry])
+
+        let out = outputFolder(project: "P")
+        XCTAssertTrue(exists(out.appendingPathComponent("\(stem).ARW")),
+                      "ARW should be copied when includeARW=true")
+        XCTAssertTrue(exists(out.appendingPathComponent("\(stem).JPG")),
+                      "JPG (entry.previewURL) should be copied under the single HIF/JPG toggle")
+        XCTAssertFalse(exists(out.appendingPathComponent("\(stem).HIF")),
+                       "no HIF in source — none should appear in output")
+    }
 }
