@@ -3,6 +3,9 @@ import SwiftUI
 struct FilmstripView: View {
     @Bindable var state: ViewerState
 
+    @AppStorage(SettingsKey.collapseBursts, store: AppDefaults.shared)
+    private var collapseBursts = SettingsKey.Defaults.collapseBursts
+
     static let height: CGFloat = 108
 
     var body: some View {
@@ -14,10 +17,8 @@ struct FilmstripView: View {
                         // adjacency, `visibleSortedIndices` to map each thumb
                         // back to its position in state.sortedPairs (which is
                         // what state.currentIndex and navigate(to:) use).
-                        let enumeratedVisible = state.sortedPairs.enumerated()
+                        let allVisible = state.sortedPairs.enumerated()
                             .filter { state.isVisible($1) }
-                        let visible = enumeratedVisible.map(\.element)
-                        let visibleSortedIndices = enumeratedVisible.map(\.offset)
                         let useBrackets = state.sortMode == .name
                         // Hoist the burst id / size tables ONCE per render.
                         // Both are O(N over the shoot); calling the per-cell
@@ -26,9 +27,41 @@ struct FilmstripView: View {
                         // the main thread on 3 k+ pair shoots.
                         let burstIDs   = useBrackets ? state.burstIDByStem   : [:]
                         let burstSizes = useBrackets ? state.burstSizesByID  : [:]
+                        // Burst id of the focused pair — its burst auto-expands
+                        // in collapsed mode so the user can step through it.
+                        let currentBurstID: Int? = state.displayedPair
+                            .flatMap { burstIDs[$0.stem] }
+                        // Collapse pass: keep singletons and the expanded
+                        // burst; for every other burst, keep only its first
+                        // visible frame. Only kicks in for .name sort, where
+                        // burst frames are contiguous.
+                        let enumeratedVisible: [(offset: Int, element: PhotoPair)] = {
+                            guard collapseBursts, useBrackets else { return allVisible }
+                            var seen: Set<Int> = []
+                            return allVisible.filter { _, pair in
+                                guard let id = burstIDs[pair.stem],
+                                      (burstSizes[id] ?? 0) >= 2
+                                else { return true }                  // singleton
+                                if id == currentBurstID { return true } // expanded
+                                return seen.insert(id).inserted        // 1st of burst
+                            }
+                        }()
+                        let visible = enumeratedVisible.map(\.element)
+                        let visibleSortedIndices = enumeratedVisible.map(\.offset)
                         ForEach(visible.indices, id: \.self) { vIdx in
                             let pair = visible[vIdx]
                             let sortedIdx = visibleSortedIndices[vIdx]
+                            // Nx badge only on collapsed-representative thumbs:
+                            // burst size ≥ 2 AND this burst isn't currently
+                            // expanded AND collapse mode is on.
+                            let collapsedBurstSize: Int? = {
+                                guard collapseBursts, useBrackets,
+                                      let id = burstIDs[pair.stem],
+                                      id != currentBurstID,
+                                      let size = burstSizes[id], size >= 2
+                                else { return nil }
+                                return size
+                            }()
                             FilmstripThumbnailView(
                                 pair: pair,
                                 isSelected: sortedIdx == state.displayedIndex,
@@ -40,6 +73,7 @@ struct FilmstripView: View {
                                                                ids: burstIDs,
                                                                sizes: burstSizes)
                                     : .none,
+                                collapsedBurstSize: collapsedBurstSize,
                                 onTap: { state.navigate(to: sortedIdx) },
                                 onAppear: { state.prioritizeBatch(forStem: pair.stem) }
                             )
@@ -75,6 +109,9 @@ struct FilmstripThumbnailView: View {
     let thumbnail: CGImage?
     let xmp: XMPSidecar
     let burstSegment: ViewerState.BurstSegment
+    /// When non-nil, this thumb is the representative of a collapsed
+    /// burst of this size — renders an "Nx" badge in the top-left.
+    let collapsedBurstSize: Int?
     let onTap: () -> Void
     let onAppear: () -> Void
 
@@ -84,6 +121,7 @@ struct FilmstripThumbnailView: View {
     var body: some View {
         thumbnailImage
             .overlay(alignment: .topTrailing) { namePill.padding(3) }
+            .overlay(alignment: .topLeading)  { burstSizePill.padding(3) }
             .overlay(alignment: .bottomTrailing) { scorePill.padding(3) }
             .overlay(
                 // Accent (system selection blue) for the selected thumbnail —
@@ -99,6 +137,18 @@ struct FilmstripThumbnailView: View {
             .onTapGesture(perform: onTap)
             .onAppear(perform: onAppear)
             .help(pair.stem)
+    }
+
+    @ViewBuilder
+    private var burstSizePill: some View {
+        if let n = collapsedBurstSize {
+            Text("\(n)×")
+                .font(.caption2.monospacedDigit().bold())
+                .foregroundStyle(.white.opacity(0.9))
+                .padding(.horizontal, 4)
+                .padding(.vertical, 1)
+                .background(Color.accentColor.opacity(0.85), in: Capsule())
+        }
     }
 
     /// One slice of the top-edge bracket that joins a horizontal run of

@@ -33,6 +33,7 @@ struct HelpOverlay: View {
         ("Navigation", [
             .init(keys: "← / →", label: "Previous / next pair in the shoot"),
             .init(keys: "⌥ ← / →", label: "Skip 10 pairs"),
+            .init(keys: "⌘ ← / →", label: "Jump to previous / next burst (singletons count as 1-frame bursts)"),
             .init(keys: "Home / End", label: "Jump to first / last pair"),
         ]),
         ("View", [

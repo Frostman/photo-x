@@ -141,14 +141,22 @@ struct ContentView: View {
                 .onKeyPress(keys: ["r", "R"]) { _ in state.toggleReject(); return .handled }
                 .onKeyPress(.leftArrow, phases: [.down, .repeat]) { press in
                     PerfTracker.begin("← key")
-                    let step = press.modifiers.contains(.option) ? 10 : 1
-                    state.navigate(by: -step)
+                    if press.modifiers.contains(.command) {
+                        state.navigateByBurst(direction: -1)
+                    } else {
+                        let step = press.modifiers.contains(.option) ? 10 : 1
+                        state.navigate(by: -step)
+                    }
                     return .handled
                 }
                 .onKeyPress(.rightArrow, phases: [.down, .repeat]) { press in
                     PerfTracker.begin("→ key")
-                    let step = press.modifiers.contains(.option) ? 10 : 1
-                    state.navigate(by: step)
+                    if press.modifiers.contains(.command) {
+                        state.navigateByBurst(direction: 1)
+                    } else {
+                        let step = press.modifiers.contains(.option) ? 10 : 1
+                        state.navigate(by: step)
+                    }
                     return .handled
                 }
                 .onKeyPress(.home) {
@@ -856,6 +864,11 @@ struct ContentView: View {
             Text(filesBadge)
                 .foregroundStyle(.white.opacity(0.45))
                 .accessibilityIdentifier("canvas.stemPill.files")
+            if let b = state.burstPosition(for: pair.stem) {
+                Text("\(b.index)/\(b.total) burst")
+                    .foregroundStyle(.white.opacity(0.45))
+                    .accessibilityIdentifier("canvas.stemPill.burst")
+            }
         }
         .font(.caption.monospacedDigit())
         .padding(.horizontal, 10)
@@ -868,15 +881,12 @@ struct ContentView: View {
 
     private var filesBadge: String {
         let files = state.currentPairFiles
-        var parts: [String] = []
         switch (files.arw, files.hif) {
-        case (true, true):  parts.append("ARW+HIF")
-        case (true, false): parts.append("ARW")
-        case (false, true): parts.append("HIF")
-        case (false, false): break
+        case (true, true):  return "ARW+HIF"
+        case (true, false): return "ARW"
+        case (false, true): return "HIF"
+        case (false, false): return ""
         }
-        if files.xmp { parts.append("+XMP") }
-        return parts.joined()
     }
 
     private func copyPath(for pair: PhotoPair) {

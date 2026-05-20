@@ -1080,6 +1080,23 @@ final class ViewerState {
         }
     }
 
+    /// 1-based position + total for a pair inside its burst, or nil for
+    /// singletons. Bursts are contiguous in `shoot.pairs` (name-order),
+    /// so we walk backward from `stem` until the burst id changes.
+    func burstPosition(for stem: String) -> (index: Int, total: Int)? {
+        guard let id = burstIDByStem[stem],
+              let size = burstSizesByID[id], size >= 2,
+              let shoot,
+              let idx = shoot.pairs.firstIndex(where: { $0.stem == stem })
+        else { return nil }
+        var start = idx
+        while start > 0,
+              burstIDByStem[shoot.pairs[start - 1].stem] == id {
+            start -= 1
+        }
+        return (idx - start + 1, size)
+    }
+
     /// Move to a new pair within the current shoot (clamped). Index is into
     /// `sortedPairs`, i.e. display order.
     ///
@@ -1151,6 +1168,57 @@ final class ViewerState {
             idx = next
         }
         navigate(to: idx)
+    }
+
+    /// Move to the first visible frame of the next/previous burst.
+    /// `direction` is +1 (next) or −1 (previous). Singletons count
+    /// as 1-frame bursts (each one is its own "step"), so this never
+    /// skips them. Outside `.name` sort the burst groups aren't
+    /// contiguous in the visible array, so we degrade to single-step.
+    ///
+    /// Both directions land on the FIRST frame of the target burst.
+    /// Forward (+1) hits it directly. Backward (-1) first finds the
+    /// LAST frame of the previous burst, then walks further back
+    /// inside that burst until the id changes again — the last index
+    /// with the matching id is the burst's first frame.
+    func navigateByBurst(direction: Int) {
+        guard direction != 0 else { return }
+        guard sortMode == .name,
+              sortedPairs.indices.contains(currentIndex) else {
+            navigate(by: direction > 0 ? 1 : -1)
+            return
+        }
+        let startID = burstIDByStem[sortedPairs[currentIndex].stem]
+        // Step 1: find the first frame in `direction` whose burst id
+        // differs from where we started.
+        var boundary: Int?
+        var idx = currentIndex
+        while let next = nextVisibleIndex(from: idx, direction: direction) {
+            if burstIDByStem[sortedPairs[next].stem] != startID {
+                boundary = next
+                break
+            }
+            idx = next
+        }
+        guard let boundary else {
+            navigate(to: idx)  // already at the first/last burst
+            return
+        }
+        if direction > 0 {
+            navigate(to: boundary)  // first frame of the next burst — done
+            return
+        }
+        // Backward: boundary is the LAST frame of the previous burst.
+        // Walk back to its first frame.
+        let prevID = burstIDByStem[sortedPairs[boundary].stem]
+        var firstOfPrev = boundary
+        idx = boundary
+        while let prev = nextVisibleIndex(from: idx, direction: -1) {
+            if burstIDByStem[sortedPairs[prev].stem] != prevID { break }
+            firstOfPrev = prev
+            idx = prev
+        }
+        navigate(to: firstOfPrev)
     }
 
     func toggleRequestedVariant() {

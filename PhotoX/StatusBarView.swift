@@ -6,6 +6,8 @@ import SwiftUI
 struct StatusBarView: View {
     @Bindable var state: ViewerState
     @State private var showIndexingDetails = false
+    @AppStorage(SettingsKey.collapseBursts, store: AppDefaults.shared)
+    private var collapseBursts = SettingsKey.Defaults.collapseBursts
 
     static let height: CGFloat = 30
 
@@ -15,6 +17,7 @@ struct StatusBarView: View {
             Spacer()
             indexingChip
             sortMenu
+            collapseBurstsButton
             Divider().frame(height: 18)
             toggles
         }
@@ -80,6 +83,33 @@ struct StatusBarView: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    /// Filmstrip-only display toggle. Hides all-but-the-first frame
+    /// of each burst; the burst the user is currently inside auto-
+    /// expands. Doesn't affect navigation — arrows still walk every
+    /// frame. Gated to `.name` sort because burst frames are only
+    /// contiguous there; in other sorts we render an invisible
+    /// placeholder so the status-bar layout doesn't shift when the
+    /// user changes sort mode.
+    @ViewBuilder
+    private var collapseBurstsButton: some View {
+        let available = state.sortMode == .name
+        Button {
+            collapseBursts.toggle()
+        } label: {
+            Image(systemName: collapseBursts
+                ? "rectangle.stack.fill"
+                : "rectangle.stack")
+                .foregroundStyle(collapseBursts ? Color.accentColor : .secondary)
+                .font(.callout)
+        }
+        .buttonStyle(.plain)
+        .help("Collapse bursts in filmstrip (\(collapseBursts ? "on" : "off")) — the burst you're inside stays expanded")
+        .accessibilityIdentifier("statusbar.collapseBursts")
+        .opacity(available ? 1 : 0)
+        .disabled(!available)
+        .allowsHitTesting(available)
     }
 
     private var sortMenu: some View {

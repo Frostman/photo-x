@@ -18,6 +18,10 @@ enum SettingsKey {
     /// users who find it distracting can disable it via
     /// `defaults write … settings.showCanvasLoadingIndicator -bool NO`.
     static let showCanvasLoadingIndicator = "settings.showCanvasLoadingIndicator"
+    /// When on, the filmstrip hides all-but-the-first frame of each
+    /// burst; the burst the user is currently inside auto-expands.
+    /// Toggled by the rectangle.stack button in the status bar.
+    static let collapseBursts = "settings.collapseBursts"
 
     enum Defaults {
         static let appearance = AppearanceMode.system.rawValue
@@ -29,6 +33,7 @@ enum SettingsKey {
         static let autoAdvanceSidebar = false
         static let defaultFolderPath = ""  // empty = no auto-load on launch
         static let showCanvasLoadingIndicator = false
+        static let collapseBursts = false
     }
 }
 
