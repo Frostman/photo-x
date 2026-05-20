@@ -34,15 +34,18 @@ struct RAWImageIODecoder: ImageDecoder {
             throw DecodeError.imageCreationFailed(url)
         }
 
-        // Apply EXIF Orientation (see HEIFDecoder for context).
+        // Read EXIF Orientation; the renderer rotates via shader (see
+        // HEIFDecoder for context). Skipping the CPU rotation here
+        // matters more for ARWs than HIFs because the demosaiced raw
+        // is even larger than the HEIF's HEVC frame.
         let orientation = OrientationApplier.readOrientation(from: source)
-        let cgImage = OrientationApplier.apply(orientation: orientation, to: rawCGImage)
 
         let decodeMS = (CFAbsoluteTimeGetCurrent() - start) * 1000.0
-        let colorSpaceName = cgImage.colorSpace?.name as String? ?? "unknown"
+        let colorSpaceName = rawCGImage.colorSpace?.name as String? ?? "unknown"
 
         return DecodedImage(
-            cgImage: cgImage,
+            cgImage: rawCGImage,
+            orientation: orientation,
             decodeMS: decodeMS,
             colorSpaceName: colorSpaceName
         )

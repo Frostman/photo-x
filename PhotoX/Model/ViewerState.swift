@@ -92,6 +92,13 @@ final class ViewerState {
     var displayedAFRegions: [AFRegion] = []
     var displayedAFSettings: AFSettings = AFSettings()
     var displayedXMP: XMPSidecar = .empty
+    /// Display-orientation pixel size of the image currently bound to
+    /// the canvas. AF overlay reads this — using `currentImage.pixelSize`
+    /// would race during a portrait→landscape transition (AF rects are
+    /// for the still-bound portrait, but `currentImage` is already the
+    /// landscape texture-in-flight, causing one frame of mis-scaled
+    /// rects). Updated atomically with the other displayed* fields.
+    var displayedPixelSize: CGSize = .zero
 
     /// Pair that's currently rendered on the canvas — derived from
     /// `displayedIndex`. Differs from `pair` (derived from `currentIndex`)
@@ -486,6 +493,7 @@ final class ViewerState {
         displayedAFRegions = []
         displayedAFSettings = AFSettings()
         displayedXMP = .empty
+        displayedPixelSize = .zero
         errorMessage = nil
         isDecoding = false
         viewport = .identity
@@ -815,8 +823,10 @@ final class ViewerState {
     /// filmstrip-selection / AF-overlay / sidebar-EXIF state so they
     /// match what the user actually sees. Drops the call if the stem
     /// no longer maps to any pair in the current shoot (rare race
-    /// with shoot teardown).
-    func commitDisplayed(stem: String) {
+    /// with shoot teardown). `pixelSize` is the bound texture's
+    /// display dimensions — feeds the AF overlay so rects stay
+    /// correctly scaled across portrait↔landscape transitions.
+    func commitDisplayed(stem: String, pixelSize: CGSize) {
         let pairs = sortedPairs
         guard let idx = pairs.firstIndex(where: { $0.stem == stem }) else { return }
         displayedIndex = idx
@@ -825,6 +835,7 @@ final class ViewerState {
         displayedAFRegions = af?.regions ?? []
         displayedAFSettings = af?.settings ?? AFSettings()
         displayedXMP = pairXMPs[stem] ?? .empty
+        displayedPixelSize = pixelSize
     }
 
     // MARK: progress

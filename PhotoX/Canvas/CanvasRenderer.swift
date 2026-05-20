@@ -11,7 +11,15 @@ final class CanvasRenderer {
     private let textureLoader: MTKTextureLoader
 
     private var baseTexture: MTLTexture?
+    /// DISPLAY-orientation pixel size (i.e. dimensions AFTER EXIF
+    /// rotation has been notionally applied). The raw texture is laid
+    /// out in sensor orientation; we swap W↔H for portrait shots so
+    /// viewport math (fit, 1:1, gestures) operates in display space.
     private var imagePixelSize: CGSize = .zero
+    /// EXIF orientation (1–8) of the currently-bound texture. Used
+    /// only inside `quadVertices` to emit the right UV mapping —
+    /// the shader itself is orientation-agnostic.
+    private var imageOrientation: Int = 1
     private var viewport: CanvasViewport = .identity
     private var showClipping: Bool = false
     private var showPeaking: Bool = false
@@ -81,11 +89,17 @@ final class CanvasRenderer {
     /// Reads to follow up:
     /// `onTextureReady` fires on the main actor when `baseTexture` has
     /// been updated.
-    func setImage(_ cgImage: CGImage, token: String) {
+    func setImage(_ cgImage: CGImage, token: String, orientation: Int) {
         PerfTracker.mark("CanvasRenderer.setImage entered")
         loadGeneration += 1
         let gen = loadGeneration
-        let pixelSize = CGSize(width: cgImage.width, height: cgImage.height)
+        // Display dimensions = raw swapped iff EXIF orientation rotates
+        // by 90° (values 5–8). Stored on `imagePixelSize` so viewport
+        // math and the vertex quad sizing operate in display space.
+        let isSwapped = orientation >= 5 && orientation <= 8
+        let pixelSize = isSwapped
+            ? CGSize(width: cgImage.height, height: cgImage.width)
+            : CGSize(width: cgImage.width, height: cgImage.height)
         let loader = textureLoader
         let queue = commandQueue
 
@@ -125,6 +139,7 @@ final class CanvasRenderer {
                 self.displayedGeneration = gen
                 self.baseTexture = texture
                 self.imagePixelSize = pixelSize
+                self.imageOrientation = orientation
                 PerfTracker.mark("CanvasRenderer.setImage done (async)")
                 self.onTextureReady?(token, pixelSize)
             }
@@ -262,6 +277,9 @@ final class CanvasRenderer {
 
     /// Build 6 vertices (2 triangles) for the image quad, positioned in clip space
     /// according to the current viewport. Each vertex is (x, y, u, v) packed into a SIMD4.
+    /// UV mapping picks up `imageOrientation` so the GPU does the EXIF
+    /// rotation via texture-coordinate transform — no CPU pixel
+    /// rotation needed.
     private func quadVertices(drawableSize: CGSize) -> [SIMD4<Float>] {
         let fit = CanvasViewport.fitScale(imagePixelSize: imagePixelSize, viewPixelSize: drawableSize)
         let effectiveScale = fit * viewport.scale
@@ -283,13 +301,50 @@ final class CanvasRenderer {
         let bottom = -halfH + oy
         let top    =  halfH + oy
 
+        // Pick the UV for each display-quad corner based on EXIF
+        // orientation. `tl/tr/bl/br` are texture-space (u, v) — same
+        // for orientation 1 as the original hard-coded mapping.
+        let (tl, tr, bl, br) = uvCorners(for: imageOrientation)
+
         return [
-            SIMD4(left,  bottom, 0, 1),
-            SIMD4(right, bottom, 1, 1),
-            SIMD4(left,  top,    0, 0),
-            SIMD4(right, bottom, 1, 1),
-            SIMD4(right, top,    1, 0),
-            SIMD4(left,  top,    0, 0)
+            SIMD4(left,  bottom, bl.x, bl.y),
+            SIMD4(right, bottom, br.x, br.y),
+            SIMD4(left,  top,    tl.x, tl.y),
+            SIMD4(right, bottom, br.x, br.y),
+            SIMD4(right, top,    tr.x, tr.y),
+            SIMD4(left,  top,    tl.x, tl.y)
         ]
+    }
+
+    /// EXIF orientation → texture-coordinate corners.
+    /// Returned tuple is (topLeft, topRight, bottomLeft, bottomRight)
+    /// where each corner names a position on the DISPLAY quad and the
+    /// SIMD2 value is the UV to sample from the (sensor-orientation)
+    /// texture at that display corner. Working through one example:
+    /// orientation 6 (rotate 90° CW for display) — display top-left
+    /// shows what was sensor bottom-left, so its UV is (0, 1); display
+    /// top-right shows sensor top-left = (0, 0); and so on.
+    private func uvCorners(for orientation: Int)
+        -> (tl: SIMD2<Float>, tr: SIMD2<Float>, bl: SIMD2<Float>, br: SIMD2<Float>)
+    {
+        let uv: (Float, Float) -> SIMD2<Float> = { SIMD2($0, $1) }
+        switch orientation {
+        case 2:   // Mirror H
+            return (uv(1, 0), uv(0, 0), uv(1, 1), uv(0, 1))
+        case 3:   // Rotate 180
+            return (uv(1, 1), uv(0, 1), uv(1, 0), uv(0, 0))
+        case 4:   // Mirror V
+            return (uv(0, 1), uv(1, 1), uv(0, 0), uv(1, 0))
+        case 5:   // Transpose (mirror across main diagonal)
+            return (uv(0, 0), uv(0, 1), uv(1, 0), uv(1, 1))
+        case 6:   // Rotate 90 CW
+            return (uv(0, 1), uv(0, 0), uv(1, 1), uv(1, 0))
+        case 7:   // Transverse
+            return (uv(1, 1), uv(1, 0), uv(0, 1), uv(0, 0))
+        case 8:   // Rotate 90 CCW
+            return (uv(1, 0), uv(1, 1), uv(0, 0), uv(0, 1))
+        default:  // 1 = no transform (and any unexpected value)
+            return (uv(0, 0), uv(1, 0), uv(0, 1), uv(1, 1))
+        }
     }
 }

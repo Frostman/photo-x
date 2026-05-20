@@ -14,12 +14,15 @@ final class ImageCanvasNSView: NSView {
 
     var onViewportChange: ((CanvasViewport, CGFloat) -> Void)?
     /// Fires when a setImage() upload has bound the new texture (i.e.
-    /// the user actually sees the new image). The payload is the token
-    /// the caller passed to setImage — PhotoX uses the pair stem so
-    /// it can commit displayed* state in lock-step with the bound
-    /// texture.
-    var onImageDisplayed: ((String) -> Void)?
+    /// the user actually sees the new image). The payload is:
+    /// - `token`: the caller's identifier (PhotoX uses pair stem).
+    /// - `pixelSize`: display-orientation dimensions of the bound
+    ///   texture. The AF overlay needs this lagged value so rects
+    ///   stay correctly scaled when transitioning between portrait
+    ///   and landscape pairs.
+    var onImageDisplayed: ((String, CGSize) -> Void)?
     private var pendingToken: String = ""
+    private var pendingOrientation: Int = 1
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -68,12 +71,22 @@ final class ImageCanvasNSView: NSView {
                 renderer.onTextureReady = { [weak self] token, pixelSize in
                     guard let self else { return }
                     self.imagePixelSize = pixelSize
-                    self.scheduleDraw()
-                    self.onImageDisplayed?(token)
+                    // Fire commitDisplayed FIRST so SwiftUI invalidates
+                    // AFPointOverlay with the new pair's regions, then
+                    // defer the Metal commit to the next runloop tick.
+                    // SwiftUI processes the @Observable change and
+                    // commits AFPointOverlay's layer in the same
+                    // CATransaction as the Metal present that follows
+                    // — both land in the same vsync, so the user never
+                    // sees the "new image + old AF" intermediate frame.
+                    self.onImageDisplayed?(token, pixelSize)
+                    DispatchQueue.main.async { [weak self] in
+                        self?.scheduleDraw()
+                    }
                 }
             }
             if let pendingImage {
-                renderer?.setImage(pendingImage, token: pendingToken)
+                renderer?.setImage(pendingImage, token: pendingToken, orientation: pendingOrientation)
                 self.pendingImage = nil
             }
             renderer?.setViewport(viewport)
@@ -112,25 +125,32 @@ final class ImageCanvasNSView: NSView {
         }
     }
 
-    func setImage(_ cgImage: CGImage, token: String) {
+    func setImage(_ cgImage: CGImage, token: String, orientation: Int) {
         PerfTracker.mark("ImageCanvasNSView.setImage entered")
         if let renderer {
             // Async path: renderer.setImage kicks off the upload off
             // the main actor. The OLD baseTexture (+ OLD imagePixelSize)
             // stay bound until onTextureReady fires, which keeps the
             // previous frame on screen instead of flashing black during
-            // the upload window. Token rides along so onImageDisplayed
-            // can fire with it later.
-            renderer.setImage(cgImage, token: token)
+            // the upload window. Token + orientation ride along so
+            // onImageDisplayed can fire with the token and the shader
+            // can rotate UVs based on orientation.
+            renderer.setImage(cgImage, token: token, orientation: orientation)
         } else {
             // Renderer hasn't been built yet (viewDidMoveToWindow runs
             // shortly after init). Stash the image and pre-set the
             // pixelSize so any layout that runs before the first async
             // load completes has the right geometry — there's no old
-            // image to worry about glitching against.
+            // image to worry about glitching against. Swap dimensions
+            // for portrait orientations so pre-render layout matches
+            // what the renderer will display.
             pendingImage = cgImage
             pendingToken = token
-            imagePixelSize = CGSize(width: cgImage.width, height: cgImage.height)
+            pendingOrientation = orientation
+            let isSwapped = orientation >= 5 && orientation <= 8
+            imagePixelSize = isSwapped
+                ? CGSize(width: cgImage.height, height: cgImage.width)
+                : CGSize(width: cgImage.width, height: cgImage.height)
         }
     }
 

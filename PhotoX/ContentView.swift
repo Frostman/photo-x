@@ -339,20 +339,27 @@ struct ContentView: View {
                     // lands, onImageDisplayed fires with this stem and
                     // commitDisplayed syncs the rest of the UI to it.
                     imageToken: state.pair?.stem ?? "",
+                    imageOrientation: image.orientation,
                     viewport: state.viewport,
                     showClipping: state.overlays.clipping,
                     showPeaking: state.overlays.focusPeaking,
                     onViewportChange: { vp, pz in
                         state.updateViewportFromCanvas(vp, pixelZoom: pz)
                     },
-                    onImageDisplayed: { stem in
-                        state.commitDisplayed(stem: stem)
+                    onImageDisplayed: { stem, pixelSize in
+                        state.commitDisplayed(stem: stem, pixelSize: pixelSize)
                     }
                 )
                 .overlay {
-                    if state.overlays.afPoints {
+                    if state.overlays.afPoints, state.displayedPixelSize != .zero {
+                        // imagePixelSize is the DISPLAYED pair's size,
+                        // NOT image.pixelSize — those can disagree for
+                        // one frame during portrait↔landscape transitions
+                        // (currentImage updates immediately on nav, but
+                        // the AF rects are still for the still-bound
+                        // previous image).
                         AFPointOverlay(
-                            imagePixelSize: image.pixelSize,
+                            imagePixelSize: state.displayedPixelSize,
                             viewport: state.viewport,
                             regions: state.displayedAFRegions
                         )

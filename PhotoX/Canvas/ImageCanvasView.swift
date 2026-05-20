@@ -10,11 +10,15 @@ struct ImageCanvasView: NSViewRepresentable {
     /// pixels appearing on screen — keeps filmstrip selection / AF
     /// overlay / sidebar EXIF synced with what the user actually sees.
     let imageToken: String
+    /// EXIF orientation of `image` (1–8). Passed through to the
+    /// renderer so portraits rotate via shader UV transform rather
+    /// than a CPU pixel pass.
+    let imageOrientation: Int
     let viewport: CanvasViewport
     let showClipping: Bool
     let showPeaking: Bool
     let onViewportChange: (CanvasViewport, CGFloat) -> Void
-    let onImageDisplayed: (String) -> Void
+    let onImageDisplayed: (String, CGSize) -> Void
 
     @MainActor
     final class Coordinator {
@@ -31,7 +35,7 @@ struct ImageCanvasView: NSViewRepresentable {
         view.setShowClipping(showClipping)
         view.setShowPeaking(showPeaking)
         if let image {
-            view.setImage(image, token: imageToken)
+            view.setImage(image, token: imageToken, orientation: imageOrientation)
             context.coordinator.lastImageID = ObjectIdentifier(image as AnyObject)
         }
         return view
@@ -48,7 +52,7 @@ struct ImageCanvasView: NSViewRepresentable {
             let id = ObjectIdentifier(image as AnyObject)
             if id != context.coordinator.lastImageID {
                 PerfTracker.mark("updateNSView: image changed → nsView.setImage")
-                nsView.setImage(image, token: imageToken)
+                nsView.setImage(image, token: imageToken, orientation: imageOrientation)
                 context.coordinator.lastImageID = id
             }
         } else {

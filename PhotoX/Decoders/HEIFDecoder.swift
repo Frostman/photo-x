@@ -76,17 +76,18 @@ final class HEIFDecoder: ImageDecoder {
             throw DecodeError.imageCreationFailed(sourceURL)
         }
 
-        // Apply EXIF Orientation so portrait shots render upright. The raw
-        // CGImage from ImageIO has the sensor-orientation pixel layout; the
-        // Orientation tag tells us how to display it.
+        // Read EXIF Orientation but do NOT pre-rotate the pixels — the
+        // canvas renderer applies the rotation via shader texture-
+        // coordinate transform, which is essentially free on the GPU
+        // vs. ~1 s of CPU work to rotate 200 MB for an A1 II portrait.
         let orientation = OrientationApplier.readOrientation(from: source)
-        let cgImage = OrientationApplier.apply(orientation: orientation, to: rawCGImage)
 
         let decodeMS = (CFAbsoluteTimeGetCurrent() - start) * 1000.0
-        let colorSpaceName = cgImage.colorSpace?.name as String? ?? "unknown"
+        let colorSpaceName = rawCGImage.colorSpace?.name as String? ?? "unknown"
 
         return DecodedImage(
-            cgImage: cgImage,
+            cgImage: rawCGImage,
+            orientation: orientation,
             decodeMS: decodeMS,
             colorSpaceName: colorSpaceName
         )
