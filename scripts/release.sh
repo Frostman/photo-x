@@ -1,9 +1,15 @@
 #!/bin/bash
 # Cuts a release of PhotoX. Version is derived entirely from git — never
-# hand-bumped. Builds, performs static self-containment checks, ad-hoc
-# codesigns, packages a DMG, signs it with Sparkle's EdDSA key, splices an
-# entry into docs/appcast.xml, commits + pushes, and creates a GitHub Release
-# via `gh`. Hermetic to this repo — no sudo, no writes outside the repo.
+# hand-bumped. Builds, Developer-ID-signs the .app + nested
+# .xpc/.app/.framework bundles, notarizes + staples the .app, packages a
+# notarized + stapled DMG, signs it with Sparkle's EdDSA key, splices an
+# entry into docs/appcast.xml, commits + pushes, and creates a GitHub
+# Release via `gh`. Hermetic to this repo — no sudo, no writes outside
+# the repo.
+#
+# Signing requires scripts/release.local.env (gitignored — see
+# release.local.env.example). One-time setup steps are in README.md
+# under "Cutting a release".
 #
 # Flags:
 #   --verify-only   build + static checks + tests; no signing, DMG, or publish
@@ -34,6 +40,33 @@ test -f ThirdParty/libraw/lib/libraw_r.a \
   || { echo "[release] ThirdParty/libraw missing — run scripts/bootstrap.sh" >&2; exit 1; }
 test -x Resources/exiftool/exiftool \
   || { echo "[release] Resources/exiftool missing — run scripts/bootstrap.sh" >&2; exit 1; }
+
+# ── 0. Load release-local signing config ────────────────────────────────────
+# verify-only doesn't sign anything; skip the requirement.
+if [[ $VERIFY_ONLY -eq 0 ]]; then
+  ENV_FILE="scripts/release.local.env"
+  if [[ ! -f "$ENV_FILE" ]]; then
+    echo "[release] $ENV_FILE missing — copy scripts/release.local.env.example and fill in." >&2
+    exit 1
+  fi
+  # shellcheck disable=SC1091
+  source "$ENV_FILE"
+  : "${DEVELOPER_ID_APPLICATION:?[release] DEVELOPER_ID_APPLICATION not set in $ENV_FILE}"
+  : "${NOTARYTOOL_KEYCHAIN_PROFILE:?[release] NOTARYTOOL_KEYCHAIN_PROFILE not set in $ENV_FILE}"
+
+  if ! security find-identity -v -p codesigning | grep -qF "$DEVELOPER_ID_APPLICATION"; then
+    echo "[release] codesigning identity not found: $DEVELOPER_ID_APPLICATION" >&2
+    echo "[release] hint: Xcode → Settings → Accounts → Manage Certificates → '+' → 'Developer ID Application'" >&2
+    exit 1
+  fi
+  if ! xcrun notarytool history --keychain-profile "$NOTARYTOOL_KEYCHAIN_PROFILE" --output-format json >/dev/null 2>&1; then
+    echo "[release] notarytool keychain profile '$NOTARYTOOL_KEYCHAIN_PROFILE' missing or invalid." >&2
+    echo "[release] hint: xcrun notarytool store-credentials \"$NOTARYTOOL_KEYCHAIN_PROFILE\" --key … --key-id … --issuer …" >&2
+    exit 1
+  fi
+  echo "[release] signing identity: $DEVELOPER_ID_APPLICATION"
+  echo "[release] notary profile:   $NOTARYTOOL_KEYCHAIN_PROFILE"
+fi
 
 # ── 1. Derive version from git ──────────────────────────────────────────────
 COMMITS=$(git rev-list --count HEAD)
@@ -125,32 +158,69 @@ if [[ $VERIFY_ONLY -eq 1 ]]; then
   exit 0
 fi
 
-# ── 5. Ad-hoc codesign (phase 3a) ───────────────────────────────────────────
-# When Developer ID enrollment lands, replace this block with:
-#   codesign --force --deep --sign "Developer ID Application: <Name> (TEAMID)" \
-#     --options runtime --timestamp \
-#     --entitlements PhotoX/PhotoX.entitlements "$APP"
-#   xcrun notarytool submit "$APP" --apple-id "$APPLE_ID" --team-id TEAMID \
-#     --key "$ASC_KEY_PATH" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER" --wait
-#   xcrun stapler staple "$APP"
-echo "[release] ad-hoc codesign"
-# Sparkle ships pre-signed with its maintainers' Team ID. macOS's hardened
-# runtime refuses to load a framework whose Team ID differs from the host
-# binary's, and `--deep` is unreliable at rebadging nested .xpc/.app/.framework
-# bundles. So: strip every existing signature inside the .app, then sign from
-# inside-out with the ad-hoc identity, then seal the outer app last.
+# ── 5. Developer ID codesign ────────────────────────────────────────────────
+# Sparkle ships pre-signed with its maintainers' Team ID. The hardened
+# runtime refuses to load a framework whose Team ID differs from the
+# host binary's, and `--deep` is unreliable at rebadging nested
+# .xpc/.app/.framework bundles. Strip every existing signature inside
+# the .app, then sign from inside-out with OUR Developer ID, then seal
+# the outer app last (with --options runtime so the hardened runtime
+# enforces library validation against our Team ID).
+echo "[release] Developer ID codesign"
 find "$APP" -path '*/_CodeSignature' -type d -prune -exec rm -rf {} +
 
-# Re-sign all nested Mach-O bundles (xpc → app → framework), depth-first.
 while IFS= read -r BUNDLE; do
-  codesign --force --sign - --options runtime --timestamp=none "$BUNDLE"
+  # --deep here applies only to THIS bundle's subtree (catches bare
+  # Mach-O helpers like Sparkle.framework/Versions/B/Autoupdate that
+  # aren't .xpc/.app/.framework themselves). NOT applied to the outer
+  # app — that one gets sealed below with an explicit (non-deep) pass.
+  codesign --force --deep \
+    --sign "$DEVELOPER_ID_APPLICATION" \
+    --options runtime \
+    --timestamp \
+    "$BUNDLE"
 done < <(find "$APP/Contents/Frameworks" \
   \( -name '*.xpc' -o -name '*.app' -o -name '*.framework' \) \
   -type d -depth 2>/dev/null)
 
-# Seal the outer app last, with the hardened-runtime entitlements.
-codesign --force --sign - --options runtime --timestamp=none \
-  --entitlements PhotoX/PhotoX.entitlements "$APP"
+# Seal the outer app last, with the (now-empty Release) entitlements
+# applied.
+codesign --force \
+  --sign "$DEVELOPER_ID_APPLICATION" \
+  --options runtime \
+  --timestamp \
+  --entitlements PhotoX/PhotoX.entitlements \
+  "$APP"
+
+codesign --verify --deep --strict --verbose=2 "$APP" 2>&1 | sed 's/^/  /'
+
+# ── 5b. Notarize .app ───────────────────────────────────────────────────────
+# notarytool only accepts .zip/.dmg/.pkg, so wrap the .app first.
+# `ditto -c -k --keepParent` makes a zip that, when extracted, recreates
+# the PhotoX.app folder (preserves symlinks, extended attributes, etc).
+APP_ZIP="build/PhotoX.app.zip"
+rm -f "$APP_ZIP"
+echo "[release] notarize .app (uploading…)"
+ditto -c -k --keepParent "$APP" "$APP_ZIP"
+SUBMIT_OUT=$(xcrun notarytool submit "$APP_ZIP" \
+  --keychain-profile "$NOTARYTOOL_KEYCHAIN_PROFILE" \
+  --wait \
+  --output-format json)
+echo "$SUBMIT_OUT" | sed 's/^/  /'
+SUBMIT_ID=$(echo "$SUBMIT_OUT" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+STATUS=$(echo "$SUBMIT_OUT" | python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])')
+if [[ "$STATUS" != "Accepted" ]]; then
+  echo "[release] notarization status: $STATUS — fetching log:" >&2
+  xcrun notarytool log "$SUBMIT_ID" \
+    --keychain-profile "$NOTARYTOOL_KEYCHAIN_PROFILE" >&2
+  exit 6
+fi
+rm -f "$APP_ZIP"
+
+# ── 5c. Staple .app ─────────────────────────────────────────────────────────
+echo "[release] staple .app"
+xcrun stapler staple "$APP" 2>&1 | sed 's/^/  /'
+spctl --assess --type exec -vv "$APP" 2>&1 | sed 's/^/  /'
 
 # ── 6. DMG ──────────────────────────────────────────────────────────────────
 # Stage the .app alongside an /Applications symlink so the mounted DMG shows
@@ -166,6 +236,37 @@ ln -s /Applications "$STAGE/Applications"
 echo "[release] dmg → $DMG"
 hdiutil create -volname "PhotoX" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
 rm -rf "$STAGE"
+
+# ── 6b. Sign DMG ────────────────────────────────────────────────────────────
+echo "[release] sign dmg"
+codesign --force \
+  --sign "$DEVELOPER_ID_APPLICATION" \
+  --timestamp \
+  "$DMG"
+
+# ── 6c. Notarize DMG ────────────────────────────────────────────────────────
+echo "[release] notarize dmg (uploading…)"
+DMG_SUBMIT_OUT=$(xcrun notarytool submit "$DMG" \
+  --keychain-profile "$NOTARYTOOL_KEYCHAIN_PROFILE" \
+  --wait \
+  --output-format json)
+echo "$DMG_SUBMIT_OUT" | sed 's/^/  /'
+DMG_SUBMIT_ID=$(echo "$DMG_SUBMIT_OUT" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+DMG_STATUS=$(echo "$DMG_SUBMIT_OUT" | python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])')
+if [[ "$DMG_STATUS" != "Accepted" ]]; then
+  echo "[release] DMG notarization status: $DMG_STATUS — fetching log:" >&2
+  xcrun notarytool log "$DMG_SUBMIT_ID" \
+    --keychain-profile "$NOTARYTOOL_KEYCHAIN_PROFILE" >&2
+  exit 7
+fi
+
+# ── 6d. Staple DMG ──────────────────────────────────────────────────────────
+echo "[release] staple dmg"
+xcrun stapler staple "$DMG" 2>&1 | sed 's/^/  /'
+spctl --assess --type open --context context:primary-signature -vv "$DMG" 2>&1 | sed 's/^/  /'
+
+# Capture final size for the appcast enclosure AFTER staple, since
+# stapler rewrites the file.
 SIZE=$(stat -f%z "$DMG")
 
 # ── 7. Sparkle EdDSA sign ───────────────────────────────────────────────────

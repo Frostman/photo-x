@@ -269,10 +269,56 @@ just build
 # Run tests (60 s hard timeout).
 just test
 
-# Cut a full release: build → sign → DMG → Sparkle EdDSA → appcast
-# → commit → push → GitHub Release. Maintainers only.
+# Cut a full release. See "Cutting a release" below for one-time
+# setup. Maintainers only.
 just release
 ```
+
+## Cutting a release
+
+`just release` produces a Developer-ID-signed, notarized, stapled
+`.dmg` with no Gatekeeper warning on first launch.
+
+### One-time setup (maintainers)
+
+1. **Install the Developer ID Application certificate.** Xcode →
+   Settings → Accounts → Manage Certificates → `+` → "Developer ID
+   Application". Verify:
+   ```sh
+   security find-identity -v -p codesigning
+   # → 1) … "Developer ID Application: Your Name (TEAMID)"
+   ```
+
+2. **Create an App Store Connect API key** at
+   <https://appstoreconnect.apple.com/access/integrations/api> with
+   access role "Developer". Download the `AuthKey_XXX.p8` (one-time
+   download) and note the Key ID + Issuer ID.
+
+3. **Register the key with notarytool** (stores creds in your login
+   keychain):
+   ```sh
+   xcrun notarytool store-credentials "PhotoX-Notarize" \
+     --key ~/.appstoreconnect/private_keys/AuthKey_XXX.p8 \
+     --key-id XXX \
+     --issuer YYY-YYY-YYY
+   ```
+
+4. **Create `scripts/release.local.env`** from the
+   [`.example`](scripts/release.local.env.example), filling in the
+   Developer ID identity string and the keychain profile name. The
+   file is gitignored.
+
+### Running the release
+
+```sh
+just release --verify-only   # build + tests, no signing
+just release --dry-run       # full build + sign + notarize + DMG, no publish
+just release                 # full release: notarize + staple + publish + GitHub Release
+```
+
+Each notarization step uploads to Apple and waits for the result —
+typically 30–90 s per submission (one for the .app, one for the DMG),
+so a full release is ~3 min wall time.
 
 ## Tech stack
 

@@ -40,6 +40,10 @@ sample*/
 *.xcarchive
 /build/
 
+# Local release config (Developer ID identity + notarytool keychain
+# profile). Copy from scripts/release.local.env.example.
+scripts/release.local.env
+
 # Logs and crash reports
 *.log
 *.crash
