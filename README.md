@@ -199,6 +199,15 @@ In rough order, with the usual caveat that this is what the author
 - Light-mode UI polish (currently optimised for the typical dark
   culling workspace).
 
+## A note on how this was built
+
+PhotoX was developed end-to-end in collaboration with modern AI
+coding assistants — architecture, the Metal pipeline, tests, the
+release automation, every screen of UI. A human steered the work,
+reviewed each change, and decided what shipped; the AI did most
+of the typing. The result is a small, real, focused tool built by
+one person at AI-augmented pace.
+
 ---
 
 # Development
