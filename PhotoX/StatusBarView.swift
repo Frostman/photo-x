@@ -94,20 +94,30 @@ struct StatusBarView: View {
     /// user changes sort mode.
     @ViewBuilder
     private var collapseBurstsButton: some View {
-        let available = state.sortMode == .name
+        // sortMode gate: bursts are only contiguous in .name sort, so
+        // the button is hidden in score sort to avoid a misleading
+        // toggle. indexing gate: the burst table is built up batch-
+        // by-batch; let the user only enable collapsing once it's
+        // complete.
+        let availableForSort = state.sortMode == .name
+        let availableForIndex = !state.isIndexingActive
+        let available = availableForSort && availableForIndex
+        let effective = collapseBursts && availableForIndex
         Button {
             collapseBursts.toggle()
         } label: {
-            Image(systemName: collapseBursts
+            Image(systemName: effective
                 ? "rectangle.stack.fill"
                 : "rectangle.stack")
-                .foregroundStyle(collapseBursts ? Color.accentColor : .secondary)
+                .foregroundStyle(effective ? Color.accentColor : .secondary)
                 .font(.callout)
         }
         .buttonStyle(.plain)
-        .help("Collapse bursts in filmstrip (\(collapseBursts ? "on" : "off")) — the burst you're inside stays expanded")
+        .help(availableForIndex
+              ? "Collapse bursts in filmstrip (\(effective ? "on" : "off")) — the burst you're inside stays expanded"
+              : "Collapse bursts disabled while indexing — burst membership is still being detected")
         .accessibilityIdentifier("statusbar.collapseBursts")
-        .opacity(available ? 1 : 0)
+        .opacity(availableForSort ? 1 : 0)
         .disabled(!available)
         .allowsHitTesting(available)
     }

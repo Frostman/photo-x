@@ -35,8 +35,14 @@ struct FilmstripView: View {
                         // burst; for every other burst, keep only its first
                         // visible frame. Only kicks in for .name sort, where
                         // burst frames are contiguous.
+                        // Collapse is force-off while indexing is in flight —
+                        // the burst id table is still being built up batch-
+                        // by-batch and collapsing would hide siblings that
+                        // haven't been detected yet. `state.collapseBurstsActive`
+                        // bakes the same gate in for nav handlers.
+                        let collapseActive = collapseBursts && !state.isIndexingActive
                         let enumeratedVisible: [(offset: Int, element: PhotoEntry)] = {
-                            guard collapseBursts, useBrackets else { return allVisible }
+                            guard collapseActive, useBrackets else { return allVisible }
                             var seen: Set<Int> = []
                             return allVisible.filter { _, entry in
                                 guard let id = burstIDs[entry.stem],
@@ -76,7 +82,7 @@ struct FilmstripView: View {
                             // burst size ≥ 2 AND this burst isn't currently
                             // expanded AND collapse mode is on.
                             let collapsedBurstSize: Int? = {
-                                guard collapseBursts, useBrackets,
+                                guard collapseActive, useBrackets,
                                       let id = burstIDs[entry.stem],
                                       id != currentBurstID,
                                       let size = burstSizes[id], size >= 2

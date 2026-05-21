@@ -482,6 +482,12 @@ final class ViewerState {
         // app relaunch) lands them back where they were.
         captureLastEntryToStores()
         resetForShootSwitch()
+        // Every shoot opens with collapse-bursts off — the indexer
+        // hasn't started yet and the burst table will only be
+        // complete once indexing finishes (the StatusBarView button
+        // is disabled until then). The @AppStorage-backed views
+        // observe this UserDefaults write and re-render.
+        AppDefaults.shared.set(false, forKey: SettingsKey.collapseBursts)
         self.shoot = shoot
         self.currentIndex = shoot.index(of: focus) ?? 0
         // displayedIndex mirrors currentIndex on shoot load — the first
@@ -1344,11 +1350,25 @@ final class ViewerState {
         return i
     }
 
+    /// True while the indexer is mid-flight. Drives the
+    /// collapse-bursts gate below — while indexing the burst-id table
+    /// is still being built up batch-by-batch, so collapsing would
+    /// hide entries whose siblings haven't been detected yet (the
+    /// representative thumb would flip-flop as new burst memberships
+    /// land). Forcing off until indexing completes keeps the
+    /// filmstrip stable.
+    var isIndexingActive: Bool {
+        if case .indexing = indexingStatus { return true }
+        return false
+    }
+
     /// Mirror of `FilmstripView`'s `@AppStorage(SettingsKey.collapseBursts)`
     /// so navigation handlers can branch on the same toggle without
-    /// each call site importing `@AppStorage` itself.
+    /// each call site importing `@AppStorage` itself. Always off
+    /// while indexing — see `isIndexingActive`.
     var collapseBurstsActive: Bool {
-        AppDefaults.shared.bool(forKey: SettingsKey.collapseBursts)
+        guard !isIndexingActive else { return false }
+        return AppDefaults.shared.bool(forKey: SettingsKey.collapseBursts)
     }
 
     /// Jump to the next visible UNRATED entry (rating nil or 0).
