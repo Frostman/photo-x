@@ -198,9 +198,13 @@ final class UpdaterDelegate: NSObject, SPUUpdaterDelegate {
     }
 
     nonisolated func updaterWillRelaunchApplication(_ updater: SPUUpdater) {
-        // Bounce to main actor so we can read SwiftUI state.
-        Task { @MainActor [weak controller] in
-            controller?.captureShootForReopen()
+        // Bounce to main actor so we can read SwiftUI state. Capture
+        // `self` (an NSObject, not actor-isolated) and reach for the
+        // MainActor-isolated `controller` property *inside* the closure
+        // — capturing it directly in the capture list would access it
+        // from this nonisolated context.
+        Task { @MainActor [weak self] in
+            self?.controller?.captureShootForReopen()
         }
     }
 }

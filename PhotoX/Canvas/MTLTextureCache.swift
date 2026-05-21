@@ -1,6 +1,6 @@
 import CoreGraphics
 import Foundation
-import Metal
+@preconcurrency import Metal
 import MetalKit
 
 /// Shared GPU-texture cache. Sits at the END of the decode pipeline —
