@@ -446,14 +446,21 @@ final class UpdaterDelegate: NSObject, SPUUpdaterDelegate {
                              error: Error?) {
         let errStr = error.map { String(describing: $0) } ?? "nil"
         Log.app.notice("update: cycle finished kind=\(updateCheck.rawValue, privacy: .public) error=\(errStr, privacy: .public)")
-        Task { @MainActor [weak self] in
-            self?.controller?.updateCycleFinished()
-        }
     }
 
     nonisolated func updater(_ updater: SPUUpdater,
                              willScheduleUpdateCheckAfterDelay delay: TimeInterval) {
         Log.app.notice("update: scheduler armed — next check in \(Int(delay), privacy: .public)s")
+        // willScheduleUpdateCheckAfterDelay fires AFTER Sparkle has
+        // finished arming its next-tick scheduler — empirically the
+        // very last lifecycle hook in a cycle, and the only point
+        // where sessionInProgress is definitively false. Firing the
+        // post-swap recheck from didFinishUpdateCycleFor was 93µs
+        // too early — Sparkle armed the scheduler then dropped the
+        // call. From here we're truly past the teardown.
+        Task { @MainActor [weak self] in
+            self?.controller?.updateCycleFinished()
+        }
     }
 
     nonisolated func updaterWillNotScheduleUpdateCheck(_ updater: SPUUpdater) {
