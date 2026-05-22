@@ -127,6 +127,32 @@ final class PhotoXUserDriver: NSObject, SPUUserDriver {
 
     var hasPendingOffer: Bool { pendingItem != nil }
 
+    /// True iff the install popup is currently on-screen. Lets
+    /// `UpdaterController.handleSupplementaryTick` decide whether
+    /// it's safe to swap the pending offer for a newer one without
+    /// pulling the rug from under the user.
+    var isPopupOpen: Bool { popup.isOpen }
+
+    /// Release the currently-held offer so Sparkle's session ends
+    /// and the next `checkForUpdatesInBackground()` can actually
+    /// run (otherwise `sessionInProgress` no-ops it). Caller is
+    /// responsible for kicking off the new check. We clear every
+    /// piece of cached state — pill, popup, reply, pendingItem —
+    /// so the brief window before the new `showUpdateFound` lands
+    /// is visually consistent (no stale "vOld available" pill).
+    func swapForNewerOffer() {
+        Log.app.notice("update: swapForNewerOffer — releasing held reply")
+        if let reply = availableReply {
+            availableReply = nil
+            reply(.dismiss)
+        }
+        pendingItem = nil
+        cancelDownload = nil
+        cancelCheck = nil
+        popup.close()
+        controller?.clearAvailableUpdate()
+    }
+
     // MARK: - SPUUserDriver
 
     func show(

@@ -167,12 +167,76 @@ final class UpdaterController {
             repeats: true
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
-                guard let self else { return }
-                Log.app.notice("update: supplementary timer tick → checkForUpdatesInBackground")
-                self.updater.checkForUpdatesInBackground()
+                await self?.handleSupplementaryTick()
             }
         }
         self.supplementaryPollTimer = timer
+    }
+
+    /// One tick of the supplementary polling timer. Two paths:
+    ///
+    /// - **No offer pending**: defer to Sparkle's own
+    ///   `checkForUpdatesInBackground()` — it'll fetch the appcast,
+    ///   either find a newer item (→ `showUpdateFound`) or no-op.
+    ///
+    /// - **Offer pending** (we're holding a reply for v_old): Sparkle's
+    ///   `sessionInProgress` flag would silently drop a
+    ///   `checkForUpdatesInBackground` call. Instead, probe the
+    ///   appcast directly via `AppcastProbe`. If a strictly newer
+    ///   build is on the feed, tear down the held offer (which ends
+    ///   Sparkle's session) and re-trigger Sparkle so the new item
+    ///   surfaces. If not newer, do nothing — Sparkle would no-op
+    ///   anyway, and we'd just be burning a network round-trip per
+    ///   tick if we tried.
+    ///
+    /// We refuse to swap while the popup is on-screen — yanking the
+    /// "v_old available" popup out from under a user who's reading
+    /// release notes / about to click Install would be hostile.
+    private func handleSupplementaryTick() async {
+        guard let pending = userDriver.pendingItem else {
+            Log.app.notice("update: supplementary tick → checkForUpdatesInBackground (no pending)")
+            updater.checkForUpdatesInBackground()
+            return
+        }
+        if userDriver.isPopupOpen {
+            Log.app.notice("update: supplementary tick — popup open, skipping probe")
+            return
+        }
+        guard let feedURL = Self.appcastFeedURL() else {
+            Log.app.error("update: supplementary tick — no SUFeedURL configured, skipping probe")
+            return
+        }
+        let pendingBuild = Int(pending.versionString) ?? 0
+        do {
+            guard let latestBuild = try await AppcastProbe.probeLatestBuildNumber(feedURL: feedURL) else {
+                Log.app.notice("update: probe — no versions parsed, skipping")
+                return
+            }
+            guard latestBuild > pendingBuild else {
+                Log.app.notice("update: probe — pending build \(pendingBuild, privacy: .public) is still latest (\(latestBuild, privacy: .public))")
+                return
+            }
+            // Re-check state after the await — the popup may have
+            // opened, or the user may have already installed, between
+            // when we started probing and now. Bail in those cases.
+            guard let stillPending = userDriver.pendingItem,
+                  Int(stillPending.versionString) == pendingBuild,
+                  !userDriver.isPopupOpen
+            else {
+                Log.app.notice("update: probe — state changed during await, aborting swap")
+                return
+            }
+            Log.app.notice("update: probe — newer build \(latestBuild, privacy: .public) > pending \(pendingBuild, privacy: .public), swapping offer")
+            userDriver.swapForNewerOffer()
+            updater.checkForUpdatesInBackground()
+        } catch {
+            Log.app.error("update: probe failed: \(String(describing: error), privacy: .public)")
+        }
+    }
+
+    private static func appcastFeedURL() -> URL? {
+        guard let s = Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") as? String else { return nil }
+        return URL(string: s)
     }
 
     /// Menu trigger + pill click. Fires an immediate user-initiated

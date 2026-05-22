@@ -20,6 +20,12 @@ final class UpdateInstallWindowController {
     /// stage. Wired by `PhotoXUserDriver`.
     var onInstall: () -> Void = {}
 
+    /// True iff the popup window currently exists (visible or order-
+    /// out is treated as closed). Used by `UpdaterController` to
+    /// suppress mid-session probe-swap so we don't yank the popup
+    /// the user is actively reading from under them.
+    var isOpen: Bool { window != nil }
+
     private var window: NSWindow?
     /// Strong ref — `NSWindow.delegate` is `weak`, so without holding
     /// the delegate ourselves it deallocates the moment we assign.
