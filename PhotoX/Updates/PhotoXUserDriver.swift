@@ -121,9 +121,7 @@ final class PhotoXUserDriver: NSObject, SPUUserDriver {
             newVersion: item.displayVersionString,
             currentVersion: Self.currentVersion()
         )
-        if let inline = item.itemDescription, !inline.isEmpty {
-            popup.model.releaseNotesHTML = Data(inline.utf8)
-        }
+        Self.populateReleaseNotes(for: item, into: popup.model)
         popup.show()
     }
 
@@ -179,9 +177,7 @@ final class PhotoXUserDriver: NSObject, SPUUserDriver {
                 newVersion: appcastItem.displayVersionString,
                 currentVersion: Self.currentVersion()
             )
-            if let inline = appcastItem.itemDescription, !inline.isEmpty {
-                popup.model.releaseNotesHTML = Data(inline.utf8)
-            }
+            Self.populateReleaseNotes(for: appcastItem, into: popup.model)
             popup.show()
         } else {
             // Background poll: pill is enough. Popup opens on pill
@@ -301,5 +297,27 @@ final class PhotoXUserDriver: NSObject, SPUUserDriver {
 
     private static func currentVersion() -> String {
         (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? ""
+    }
+
+    /// Surface whatever release notes are available for `item` into
+    /// the popup's view model. There are three states:
+    ///
+    /// - Inline `<description>` in the appcast → render it right away.
+    /// - `<sparkle:releaseNotesLink>` present (no inline) → leave the
+    ///   model in its initial "Loading…" state; Sparkle will call
+    ///   `showUpdateReleaseNotes(with:)` once the fetch finishes.
+    /// - Neither present → mark `releaseNotesFailed = true` so the
+    ///   popup shows "Release notes are unavailable." instead of
+    ///   pretending a fetch is still in flight.
+    private static func populateReleaseNotes(for item: SUAppcastItem,
+                                             into model: UpdateInstallViewModel) {
+        if let inline = item.itemDescription, !inline.isEmpty {
+            model.releaseNotesHTML = Data(inline.utf8)
+            return
+        }
+        if item.releaseNotesURL == nil {
+            // No inline notes AND no remote fetch coming.
+            model.releaseNotesFailed = true
+        }
     }
 }

@@ -280,6 +280,31 @@ fi
 # so don't double-emit length= ourselves.
 SIG_BLOB=$("$SIGN_UPDATE" "$DMG")
 
+# Release notes: derived from `git log PREV_TAG..HEAD`. Used in two
+# places below — the appcast <description> (rendered in the in-app
+# update popup) and the GitHub Release body (rendered on the
+# Releases page). One source so both stay in lockstep.
+# We use `gh release list` rather than `git tag` because tags are
+# created on GitHub (by `gh release create`) and never fetched back
+# locally. `|| true` guards against pipefail when there are no prior
+# releases.
+PREV_TAG=$(gh release list --limit 5 --json tagName --jq '.[].tagName' 2>/dev/null \
+  | grep -v "^$TAG$" \
+  | head -1 || true)
+if [[ -n "$PREV_TAG" ]] && git rev-parse --verify "$PREV_TAG" >/dev/null 2>&1; then
+  NOTES_PLAIN=$(git log --pretty='format:- %s' "$PREV_TAG..HEAD" | head -50)
+  NOTES_HTML="<ul>$(git log --pretty='format:<li>%s</li>' "$PREV_TAG..HEAD" \
+    | head -50 | tr -d '\n')</ul>"
+elif [[ -n "$PREV_TAG" ]]; then
+  NOTES_PLAIN="See appcast.xml for the EdDSA-signed download.
+
+Diff vs previous release: https://github.com/Frostman/photo-x/compare/$PREV_TAG...$TAG"
+  NOTES_HTML="<p>Diff vs previous release: <a href=\"https://github.com/Frostman/photo-x/compare/$PREV_TAG...$TAG\">$PREV_TAG → $TAG</a></p>"
+else
+  NOTES_PLAIN="Initial release."
+  NOTES_HTML="<p>Initial release.</p>"
+fi
+
 PUBDATE=$(date -R)
 SNIPPET="    <item>
       <title>$DESCRIBE</title>
@@ -287,6 +312,7 @@ SNIPPET="    <item>
       <sparkle:version>$BUILD</sparkle:version>
       <sparkle:shortVersionString>$MARKETING</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[$NOTES_HTML]]></description>
       <enclosure
         url=\"https://github.com/Frostman/photo-x/releases/download/$TAG/$DMG_NAME\"
         type=\"application/octet-stream\"
@@ -320,26 +346,13 @@ git add docs/appcast.xml
 git -c commit.gpgsign=false commit -m "Release $DESCRIBE"
 git push
 
-# Release notes from commits since the previous v0.*.0 tag. We use `gh
-# release list` rather than `git tag` because tags are created on GitHub
-# (by `gh release create`) and never fetched back locally.
-# `|| true` guards against pipefail when there are no prior releases.
-PREV_TAG=$(gh release list --limit 5 --json tagName --jq '.[].tagName' 2>/dev/null \
-  | grep -v "^$TAG$" \
-  | head -1 || true)
-if [[ -n "$PREV_TAG" ]] && git rev-parse --verify "$PREV_TAG" >/dev/null 2>&1; then
-  NOTES=$(git log --pretty='format:- %s' "$PREV_TAG..HEAD" | head -50)
-else
-  NOTES="See appcast.xml for the EdDSA-signed download.
-
-Diff vs previous release: https://github.com/Frostman/photo-x/compare/$PREV_TAG...$TAG"
-  [[ -z "$PREV_TAG" ]] && NOTES="Initial release."
-fi
-
+# Reuse the bullets we already built above for the appcast
+# <description> — keeps the in-app popup and the GitHub Release page
+# in lockstep.
 echo "[release] gh release create $TAG"
 gh release create "$TAG" \
   --title "$DESCRIBE" \
-  --notes "$NOTES" \
+  --notes "$NOTES_PLAIN" \
   "$DMG"
 
 echo "[release] DONE"
