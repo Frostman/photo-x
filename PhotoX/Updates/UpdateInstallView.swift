@@ -139,6 +139,11 @@ private struct ReleaseNotesView: NSViewRepresentable {
         cfg.preferences = prefs
         let view = WKWebView(frame: .zero, configuration: cfg)
         view.setValue(false, forKey: "drawsBackground")
+        // Hand link clicks (and any `target=_blank`) to the system
+        // default browser instead of letting the embedded WebView
+        // replace the release-notes pane with a web page.
+        view.navigationDelegate = context.coordinator
+        view.uiDelegate = context.coordinator
         return view
     }
 
@@ -150,6 +155,46 @@ private struct ReleaseNotesView: NSViewRepresentable {
             view.loadHTMLString(wrap("<p><em>Release notes are unavailable.</em></p>"), baseURL: nil)
         } else {
             view.loadHTMLString(wrap("<p><em>Loading release notes…</em></p>"), baseURL: nil)
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    /// Diverts link clicks (and `target=_blank` window-opens) out of
+    /// the embedded WebView and into the system default browser.
+    /// Without this, clicking a commit/issue link inside the release
+    /// notes would replace the pane with a full web page and the
+    /// user would have no easy way back to the popup.
+    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
+        func webView(
+            _ webView: WKWebView,
+            decidePolicyFor navigationAction: WKNavigationAction,
+            decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
+        ) {
+            // Allow our own `loadHTMLString` initial load (.other);
+            // intercept anything the user clicks.
+            if navigationAction.navigationType == .linkActivated,
+               let url = navigationAction.request.url {
+                NSWorkspace.shared.open(url)
+                decisionHandler(.cancel)
+                return
+            }
+            decisionHandler(.allow)
+        }
+
+        /// Handles `<a target="_blank">` and JS `window.open` (we
+        /// disable JS, but the target attribute alone can route here).
+        /// Returning nil keeps the embedded WebView idle.
+        func webView(
+            _ webView: WKWebView,
+            createWebViewWith configuration: WKWebViewConfiguration,
+            for navigationAction: WKNavigationAction,
+            windowFeatures: WKWindowFeatures
+        ) -> WKWebView? {
+            if let url = navigationAction.request.url {
+                NSWorkspace.shared.open(url)
+            }
+            return nil
         }
     }
 
