@@ -328,6 +328,18 @@
         type="application/octet-stream"
         sparkle:edSignature="Lkq6HUecqK2F7piDxA2WLwxSf35H1RHOx7FqrYK2q2yyjneH3HYkL/GxvtSz5uMz6blEyrdeWhv3q+Z5GozPBw==" length="11320017" />
     </item>
+    <item>
+      <title>v0.234.0-b686ab488</title>
+      <pubDate>Fri, 22 May 2026 00:54:47 -0700</pubDate>
+      <sparkle:version>234</sparkle:version>
+      <sparkle:shortVersionString>0.234.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[<ul><li>docs/plans: refresh culling gap audit</li><li>release.sh: fetch the new tag locally after `gh release create`</li></ul>]]></description>
+      <enclosure
+        url="https://github.com/Frostman/photo-x/releases/download/v0.234.0/PhotoX-v0.234.0-b686ab488.dmg"
+        type="application/octet-stream"
+        sparkle:edSignature="rbZoC5ExlKyZ7U54dHWLNsT2x+8Xyc5tBqd1hxV+FieoKr///mBIwbLlluZcLNMtYxhg4viax7A28GpogR3oBQ==" length="11320023" />
+    </item>
     <!-- scripts/release.sh splices new <item> entries here, just before </channel>. -->
   </channel>
 </rss>
