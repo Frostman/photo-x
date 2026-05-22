@@ -363,6 +363,12 @@ gh release create "$TAG" \
   --notes "$NOTES_PLAIN" \
   "$DMG"
 
+# `gh release create` makes the tag on GitHub but doesn't push it
+# back to the local repo. Fetch it now so subsequent local git
+# commands (and the next release's PREV_TAG resolution) see it
+# without needing the just-in-time fetch up top.
+git fetch origin "refs/tags/$TAG:refs/tags/$TAG" 2>/dev/null || true
+
 echo "[release] DONE"
 echo "[release] Tag:     $TAG"
 echo "[release] Release: https://github.com/Frostman/photo-x/releases/tag/$TAG"
