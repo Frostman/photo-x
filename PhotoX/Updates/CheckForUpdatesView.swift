@@ -11,6 +11,6 @@ struct CheckForUpdatesView: View {
         } label: {
             Label("Check for Updates…", systemImage: "arrow.clockwise.circle")
         }
-        .disabled(!controller.canCheckForUpdates)
+        .disabled(!controller.menuCheckForUpdatesEnabled)
     }
 }

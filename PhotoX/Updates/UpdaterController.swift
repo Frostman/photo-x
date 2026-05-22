@@ -54,8 +54,22 @@ final class UpdaterController {
 
     private(set) var availableUpdate: AvailableUpdate = .none
 
-    /// Mirrors `SPUUpdater.canCheckForUpdates` for the menu item.
+    /// Mirrors `SPUUpdater.canCheckForUpdates`. Sparkle flips this to
+    /// false while a session is in progress — which, in our "hold the
+    /// reply until install" model, is most of the time the pill is
+    /// showing. Read `menuCheckForUpdatesEnabled` instead of this
+    /// directly when gating the Check-for-Updates menu item, so the
+    /// menu stays clickable while we have a cached offer to replay.
     var canCheckForUpdates: Bool = false
+
+    /// Drives `disabled(_:)` on the Check for Updates menu item.
+    /// True iff Sparkle is idle (so a fresh check would actually run)
+    /// OR we have a pending offer that the menu can replay via
+    /// `openCachedOffer()`. Either case results in a useful action.
+    var menuCheckForUpdatesEnabled: Bool {
+        if case .available = availableUpdate { return true }
+        return canCheckForUpdates
+    }
 
     /// Closure the host sets so we can capture the currently-open
     /// shoot folder URL right before Sparkle quits the app for the
@@ -217,17 +231,6 @@ final class UpdaterController {
             )
         }
     }
-
-    // MARK: - DEBUG fake popup
-
-    #if DEBUG
-    /// Drives `PhotoXUserDriver`'s popup through every stage without
-    /// Sparkle. Wired to a DEBUG-only menu command so the popup UI
-    /// can be verified in `just dev`.
-    func debugShowFakePopup() {
-        userDriver.debugDriveFakePopup()
-    }
-    #endif
 
     private static func clearSkippedVersionDefaults() {
         let d = UserDefaults.standard

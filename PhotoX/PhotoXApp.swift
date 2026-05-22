@@ -79,19 +79,6 @@ struct PhotoXApp: App {
                 if let updater {
                     CheckForUpdatesView(controller: updater)
                 }
-                #if DEBUG
-                // Sparkle is disabled in DEBUG (the dev bundle ID
-                // differs from prod), so the real update flow never
-                // fires in `just dev`. This menu item drives the
-                // custom popup through every stage from a fake
-                // appcast item so the UI can be verified without
-                // shipping a release.
-                if let updater {
-                    Button("Show Update Popup (Fake)") {
-                        updater.debugShowFakePopup()
-                    }
-                }
-                #endif
             }
             CommandGroup(replacing: .newItem) {
                 Button("Open Folder…") {
