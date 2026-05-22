@@ -364,6 +364,18 @@
         type="application/octet-stream"
         sparkle:edSignature="vzylYJ1k7NrvXTaS9ebZdY0meLje+yfJuE2YNEBzLsG7ccyddYaaIcOtYEeDnPv7d/inNA8sgBsusBic/+nOBw==" length="11321507" />
     </item>
+    <item>
+      <title>v0.239.0-d4cd0f70a</title>
+      <pubDate>Fri, 22 May 2026 09:01:58 -0700</pubDate>
+      <sparkle:version>239</sparkle:version>
+      <sparkle:shortVersionString>0.239.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[<ul><li>Self-update: add 5-min supplementary polling timer</li></ul>]]></description>
+      <enclosure
+        url="https://github.com/Frostman/photo-x/releases/download/v0.239.0/PhotoX-v0.239.0-d4cd0f70a.dmg"
+        type="application/octet-stream"
+        sparkle:edSignature="KBk/DKFmhUJJ3TADwMZgg2OgDOAlsSKSnOcAKCnhdVkUqK5a6BB33HC+6SQzXAlg0T23Sei8eRH3yuep6LU4CA==" length="11323065" />
+    </item>
     <!-- scripts/release.sh splices new <item> entries here, just before </channel>. -->
   </channel>
 </rss>
