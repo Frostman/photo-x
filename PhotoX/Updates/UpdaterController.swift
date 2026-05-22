@@ -89,6 +89,16 @@ final class UpdaterController {
     private let updater: SPUUpdater
     private let updaterDelegate: UpdaterDelegate
     private var canCheckObservation: NSKeyValueObservation?
+    /// Drives our supplementary 5-min background polling. Sparkle's
+    /// own scheduler clamps `SUScheduledCheckInterval` to a hard
+    /// minimum of 1 hour regardless of what we put in `Info.plist`,
+    /// which is too slow for the "cut a release → see the pill"
+    /// workflow we want. This timer rides on top and triggers extra
+    /// `checkForUpdatesInBackground()` calls between Sparkle's own
+    /// hourly ticks. Sparkle de-dupes via its `sessionInProgress`
+    /// flag, so overlapping cycles are safe.
+    private var supplementaryPollTimer: Timer?
+    private static let supplementaryPollInterval: TimeInterval = 5 * 60
     /// Set on every user-initiated `checkForUpdates()`. The user
     /// driver's `showUpdateNotFoundWithError(...)` consumes it to
     /// decide whether to surface the "you're up to date" alert.
@@ -145,10 +155,24 @@ final class UpdaterController {
         // Fire an immediate first check at launch. Sparkle's
         // documented pattern for this is `checkForUpdatesInBackground`
         // — the alternative `resetUpdateCycle` only re-arms the
-        // timer and does NOT trigger an immediate check, so the
-        // user waits up to `SUScheduledCheckInterval` (5 min) before
-        // seeing any update pill.
+        // timer and does NOT trigger an immediate check.
         sparkle.checkForUpdatesInBackground()
+
+        // Start the supplementary 5-min polling timer. See the
+        // property's doc comment — Sparkle's own scheduler is locked
+        // at a 1-hour minimum, so without this the user wouldn't see
+        // a newly-cut release for up to an hour.
+        let timer = Timer.scheduledTimer(
+            withTimeInterval: Self.supplementaryPollInterval,
+            repeats: true
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                Log.app.notice("update: supplementary timer tick → checkForUpdatesInBackground")
+                self.updater.checkForUpdatesInBackground()
+            }
+        }
+        self.supplementaryPollTimer = timer
     }
 
     /// Menu trigger + pill click. Fires an immediate user-initiated
