@@ -412,6 +412,18 @@
         type="application/octet-stream"
         sparkle:edSignature="zQ+HZNEnu9vIJM+yzWpyGeSaBFU49NgxThGYcQkfwCqVrZhJTqTa6y/DdGhyzGDw2IojhFZsFsn3hzNZHwlWDw==" length="11323072" />
     </item>
+    <item>
+      <title>v0.244.0-d9406105c</title>
+      <pubDate>Fri, 22 May 2026 15:16:45 -0700</pubDate>
+      <sparkle:version>244</sparkle:version>
+      <sparkle:shortVersionString>0.244.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[<ul><li>Self-update: probe appcast out-of-band to detect newer mid-session</li></ul>]]></description>
+      <enclosure
+        url="https://github.com/Frostman/photo-x/releases/download/v0.244.0/PhotoX-v0.244.0-d9406105c.dmg"
+        type="application/octet-stream"
+        sparkle:edSignature="vIkIX6VRvcSRGenrMXrAF7CRh+zWjn6dgYqZ16uLac+19G4FzZ91taqwxzCJG0UuIZWVGSVaARlmMmA11zhIAQ==" length="11322650" />
+    </item>
     <!-- scripts/release.sh splices new <item> entries here, just before </channel>. -->
   </channel>
 </rss>
