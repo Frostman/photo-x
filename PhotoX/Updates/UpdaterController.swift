@@ -227,8 +227,14 @@ final class UpdaterController {
                 return
             }
             Log.app.notice("update: probe — newer build \(latestBuild, privacy: .public) > pending \(pendingBuild, privacy: .public), swapping offer")
+            // `swapForNewerOffer` sends Sparkle the .dismiss reply,
+            // which triggers an ASYNC session teardown ending in
+            // `dismissUpdateInstallation`. Sparkle drops any
+            // checkForUpdatesInBackground call made before the
+            // teardown completes (sessionInProgress still true), so
+            // the follow-up check is dispatched from
+            // dismissUpdateInstallation via runBackgroundCheckAfterSwap().
             userDriver.swapForNewerOffer()
-            updater.checkForUpdatesInBackground()
         } catch {
             Log.app.error("update: probe failed: \(String(describing: error), privacy: .public)")
         }
@@ -278,6 +284,15 @@ final class UpdaterController {
     func clearAvailableUpdate() {
         Log.app.notice("update: clearAvailableUpdate → pill hidden")
         availableUpdate = .none
+    }
+
+    /// Called by `PhotoXUserDriver.dismissUpdateInstallation()` after
+    /// it finishes Sparkle's session teardown that was triggered by
+    /// `swapForNewerOffer`. Safe to call `checkForUpdatesInBackground`
+    /// only at this point — earlier the session is still considered
+    /// in-progress and the call is silently dropped.
+    func runBackgroundCheckAfterSwap() {
+        updater.checkForUpdatesInBackground()
     }
 
     /// Read + reset the "user initiated this check" flag. Called by

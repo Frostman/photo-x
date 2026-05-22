@@ -60,6 +60,17 @@ final class PhotoXUserDriver: NSObject, SPUUserDriver {
     /// and only consume it on a real Install.
     private(set) var pendingItem: SUAppcastItem?
 
+    /// Set by `swapForNewerOffer()` when we're tearing down the
+    /// current session specifically so the controller can run a
+    /// fresh `checkForUpdatesInBackground()`. Consumed by
+    /// `dismissUpdateInstallation()` after Sparkle finishes its
+    /// async session teardown — calling the check synchronously
+    /// after `reply(.dismiss)` races with Sparkle's session-end
+    /// path (verified empirically: the immediate follow-up gets
+    /// silently dropped, the follow-up dispatched from
+    /// `dismissUpdateInstallation` actually runs).
+    private var pendingProbeRecheck: Bool = false
+
     override init() {
         super.init()
         popup.onCancel = { [weak self] in self?.userClickedCancel() }
@@ -142,6 +153,9 @@ final class PhotoXUserDriver: NSObject, SPUUserDriver {
     /// is visually consistent (no stale "vOld available" pill).
     func swapForNewerOffer() {
         Log.app.notice("update: swapForNewerOffer — releasing held reply")
+        // Mark BEFORE replying — dismissUpdateInstallation may fire
+        // synchronously inside reply(.dismiss) on some code paths.
+        pendingProbeRecheck = true
         if let reply = availableReply {
             availableReply = nil
             reply(.dismiss)
@@ -321,6 +335,16 @@ final class PhotoXUserDriver: NSObject, SPUUserDriver {
         // failed, user cancelled mid-download). Clear the pill so it
         // doesn't pretend to be clickable.
         controller?.clearAvailableUpdate()
+        // If we were the one who triggered this dismiss (probe
+        // detected a newer version), Sparkle has now finished its
+        // session teardown and a fresh checkForUpdatesInBackground
+        // will actually run. Doing this here, not at the swap site,
+        // sidesteps the race.
+        if pendingProbeRecheck {
+            pendingProbeRecheck = false
+            Log.app.notice("update: dismiss → follow-up checkForUpdatesInBackground (post-swap)")
+            controller?.runBackgroundCheckAfterSwap()
+        }
     }
 
     // MARK: - Helpers
