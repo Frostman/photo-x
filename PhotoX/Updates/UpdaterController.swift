@@ -142,9 +142,12 @@ final class UpdaterController {
         } catch {
             Log.app.error("SPUUpdater.start failed: \(String(describing: error), privacy: .public)")
         }
-        // Immediate background check on launch in addition to the
-        // scheduled cadence so the user doesn't wait up to 5 min on
-        // first launch.
+        // Fire an immediate first check at launch. Sparkle's
+        // documented pattern for this is `checkForUpdatesInBackground`
+        // — the alternative `resetUpdateCycle` only re-arms the
+        // timer and does NOT trigger an immediate check, so the
+        // user waits up to `SUScheduledCheckInterval` (5 min) before
+        // seeing any update pill.
         sparkle.checkForUpdatesInBackground()
     }
 
@@ -166,7 +169,11 @@ final class UpdaterController {
         }
         Log.app.notice("update: checkForUpdates() — pendingUserInitiated=true")
         pendingUserInitiated = true
-        updater.resetUpdateCycle()
+        // Do NOT call updater.resetUpdateCycle() before this — it
+        // re-arms the scheduler timer and (empirically) silently
+        // cancels the user-initiated check that follows. The
+        // documented pattern for user-initiated checks is just
+        // `checkForUpdates()`.
         updater.checkForUpdates()
     }
 
@@ -222,7 +229,16 @@ final class UpdaterController {
     /// release's notes even when the user is skipping intermediate
     /// versions.
     func appcastLoaded(_ appcast: SUAppcast) {
-        Log.app.notice("update: appcast loaded with \(appcast.items.count, privacy: .public) items")
+        // Log the highest version Sparkle saw — repeated identical
+        // values across polls indicate the appcast HTTP response is
+        // being cached (Fastly fronts GitHub Raw). The cache-bust
+        // timestamp in `UpdaterDelegate.feedParameters` should
+        // prevent that; this log confirms.
+        let cmp = SUStandardVersionComparator.default
+        let latest = appcast.items
+            .max { cmp.compareVersion($0.versionString, toVersion: $1.versionString) == .orderedAscending }?
+            .displayVersionString ?? "?"
+        Log.app.notice("update: appcast loaded with \(appcast.items.count, privacy: .public) items, latest v\(latest, privacy: .public)")
         lastAppcast = appcast
     }
 
@@ -295,5 +311,31 @@ final class UpdaterDelegate: NSObject, SPUUpdaterDelegate {
         Task { @MainActor [weak self] in
             self?.controller?.appcastLoaded(appcast)
         }
+    }
+
+    // MARK: - Scheduler-lifecycle diagnostics
+    //
+    // These three hooks tell us whether Sparkle's scheduler is alive
+    // after each update cycle. Without them, "I started the app, no
+    // update was found, then I cut a release, then nothing happened"
+    // is impossible to distinguish from "Sparkle never re-polled" vs
+    // "Sparkle re-polled but the appcast HTTP was cached" vs "the
+    // schedule was silently disabled". Cycle-end + arm/disarm events
+    // resolve it from `log show`.
+
+    nonisolated func updater(_ updater: SPUUpdater,
+                             didFinishUpdateCycleFor updateCheck: SPUUpdateCheck,
+                             error: Error?) {
+        let errStr = error.map { String(describing: $0) } ?? "nil"
+        Log.app.notice("update: cycle finished kind=\(updateCheck.rawValue, privacy: .public) error=\(errStr, privacy: .public)")
+    }
+
+    nonisolated func updater(_ updater: SPUUpdater,
+                             willScheduleUpdateCheckAfterDelay delay: TimeInterval) {
+        Log.app.notice("update: scheduler armed — next check in \(Int(delay), privacy: .public)s")
+    }
+
+    nonisolated func updaterWillNotScheduleUpdateCheck(_ updater: SPUUpdater) {
+        Log.app.notice("update: scheduler will NOT schedule further checks (auto-checks disabled?)")
     }
 }
