@@ -286,12 +286,27 @@ final class UpdaterController {
         availableUpdate = .none
     }
 
-    /// Called by `PhotoXUserDriver.dismissUpdateInstallation()` after
-    /// it finishes Sparkle's session teardown that was triggered by
-    /// `swapForNewerOffer`. Safe to call `checkForUpdatesInBackground`
-    /// only at this point — earlier the session is still considered
-    /// in-progress and the call is silently dropped.
-    func runBackgroundCheckAfterSwap() {
+    /// Set by `PhotoXUserDriver.swapForNewerOffer()` before it sends
+    /// `reply(.dismiss)`. Consumed by `updateCycleFinished()` once
+    /// Sparkle's delegate confirms session teardown is complete —
+    /// that's the only point a follow-up `checkForUpdatesInBackground`
+    /// actually runs (verified empirically across two prior attempts:
+    /// firing from inside `swapForNewerOffer` or from inside
+    /// `dismissUpdateInstallation` both raced ahead of Sparkle's own
+    /// `sessionInProgress` reset and got dropped).
+    private var pendingProbeRecheck: Bool = false
+
+    func markPendingProbeRecheck() {
+        pendingProbeRecheck = true
+    }
+
+    /// Wired to `UpdaterDelegate.didFinishUpdateCycleFor`. If we're
+    /// the reason this cycle ended (swap triggered it), fire the
+    /// follow-up check now.
+    func updateCycleFinished() {
+        guard pendingProbeRecheck else { return }
+        pendingProbeRecheck = false
+        Log.app.notice("update: cycle ended → firing post-swap checkForUpdatesInBackground")
         updater.checkForUpdatesInBackground()
     }
 
@@ -431,6 +446,9 @@ final class UpdaterDelegate: NSObject, SPUUpdaterDelegate {
                              error: Error?) {
         let errStr = error.map { String(describing: $0) } ?? "nil"
         Log.app.notice("update: cycle finished kind=\(updateCheck.rawValue, privacy: .public) error=\(errStr, privacy: .public)")
+        Task { @MainActor [weak self] in
+            self?.controller?.updateCycleFinished()
+        }
     }
 
     nonisolated func updater(_ updater: SPUUpdater,
