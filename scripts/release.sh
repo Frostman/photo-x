@@ -291,6 +291,14 @@ SIG_BLOB=$("$SIGN_UPDATE" "$DMG")
 PREV_TAG=$(gh release list --limit 5 --json tagName --jq '.[].tagName' 2>/dev/null \
   | grep -v "^$TAG$" \
   | head -1 || true)
+# `gh release create` makes tags on GitHub; the local repo never
+# fetches them back, so PREV_TAG is a remote-only ref. Pull just
+# that one tag down so `git log PREV_TAG..HEAD` can resolve the
+# range below. Falls through to the diff-link branch on any failure
+# (offline, tag genuinely missing, etc.).
+if [[ -n "$PREV_TAG" ]]; then
+  git fetch origin "refs/tags/$PREV_TAG:refs/tags/$PREV_TAG" 2>/dev/null || true
+fi
 if [[ -n "$PREV_TAG" ]] && git rev-parse --verify "$PREV_TAG" >/dev/null 2>&1; then
   NOTES_PLAIN=$(git log --pretty='format:- %s' "$PREV_TAG..HEAD" | head -50)
   NOTES_HTML="<ul>$(git log --pretty='format:<li>%s</li>' "$PREV_TAG..HEAD" \
