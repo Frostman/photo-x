@@ -340,6 +340,18 @@
         type="application/octet-stream"
         sparkle:edSignature="rbZoC5ExlKyZ7U54dHWLNsT2x+8Xyc5tBqd1hxV+FieoKr///mBIwbLlluZcLNMtYxhg4viax7A28GpogR3oBQ==" length="11320023" />
     </item>
+    <item>
+      <title>v0.236.0-e07788a82</title>
+      <pubDate>Fri, 22 May 2026 01:21:19 -0700</pubDate>
+      <sparkle:version>236</sparkle:version>
+      <sparkle:shortVersionString>0.236.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[<ul><li>Self-update: stop calling resetUpdateCycle around checkForUpdates</li></ul>]]></description>
+      <enclosure
+        url="https://github.com/Frostman/photo-x/releases/download/v0.236.0/PhotoX-v0.236.0-e07788a82.dmg"
+        type="application/octet-stream"
+        sparkle:edSignature="ImApWDf/YSYytX2MaHjgNs/mg5vLeStrN/BU4QQK+h5WeNbgcN+2GzVnME7nixYCxr5dH6f2eDhCTeYLuaAlDA==" length="11321455" />
+    </item>
     <!-- scripts/release.sh splices new <item> entries here, just before </channel>. -->
   </channel>
 </rss>
