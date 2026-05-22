@@ -79,6 +79,13 @@ final class UpdaterController {
     /// The custom user driver.
     let userDriver = PhotoXUserDriver()
 
+    /// The most recently-parsed appcast (refreshed every check). Used
+    /// by `PhotoXUserDriver` to aggregate release notes from every
+    /// item between the user's current version and the offered
+    /// target — so a v0.220 → v0.225 jump surfaces all 5 changelogs.
+    /// Nil until Sparkle's first fetch completes.
+    private(set) var lastAppcast: SUAppcast?
+
     private let updater: SPUUpdater
     private let updaterDelegate: UpdaterDelegate
     private var canCheckObservation: NSKeyValueObservation?
@@ -208,6 +215,17 @@ final class UpdaterController {
         availableUpdate = .available(version: version, item: item)
     }
 
+    /// Called by `UpdaterDelegate.updater(_:didFinishLoadingAppcast:)`
+    /// every time Sparkle finishes parsing the feed (each check). The
+    /// stashed appcast feeds `PhotoXUserDriver`'s release-notes
+    /// aggregator — without this, the popup only shows the target
+    /// release's notes even when the user is skipping intermediate
+    /// versions.
+    func appcastLoaded(_ appcast: SUAppcast) {
+        Log.app.notice("update: appcast loaded with \(appcast.items.count, privacy: .public) items")
+        lastAppcast = appcast
+    }
+
     // MARK: - Pill model
 
     struct PillContent {
@@ -266,6 +284,16 @@ final class UpdaterDelegate: NSObject, SPUUpdaterDelegate {
         // from this nonisolated context.
         Task { @MainActor [weak self] in
             self?.controller?.captureShootForReopen()
+        }
+    }
+
+    /// Called every time Sparkle finishes parsing the appcast feed.
+    /// We stash it on the controller so `PhotoXUserDriver` can walk
+    /// the full item list when assembling release notes that span
+    /// multiple skipped versions.
+    nonisolated func updater(_ updater: SPUUpdater, didFinishLoading appcast: SUAppcast) {
+        Task { @MainActor [weak self] in
+            self?.controller?.appcastLoaded(appcast)
         }
     }
 }

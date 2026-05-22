@@ -121,7 +121,7 @@ final class PhotoXUserDriver: NSObject, SPUUserDriver {
             newVersion: item.displayVersionString,
             currentVersion: Self.currentVersion()
         )
-        Self.populateReleaseNotes(for: item, into: popup.model)
+        populateReleaseNotes(for: item, into: popup.model)
         popup.show()
     }
 
@@ -177,7 +177,7 @@ final class PhotoXUserDriver: NSObject, SPUUserDriver {
                 newVersion: appcastItem.displayVersionString,
                 currentVersion: Self.currentVersion()
             )
-            Self.populateReleaseNotes(for: appcastItem, into: popup.model)
+            populateReleaseNotes(for: appcastItem, into: popup.model)
             popup.show()
         } else {
             // Background poll: pill is enough. Popup opens on pill
@@ -187,6 +187,10 @@ final class PhotoXUserDriver: NSObject, SPUUserDriver {
     }
 
     func showUpdateReleaseNotes(with downloadData: SPUDownloadData) {
+        // Only fill in if we have nothing yet — aggregated or inline
+        // notes (set during showUpdateFound) outrank a late
+        // single-item link fetch.
+        guard popup.model.releaseNotesHTML == nil else { return }
         popup.model.releaseNotesHTML = downloadData.data
         popup.model.releaseNotesFailed = false
     }
@@ -299,25 +303,82 @@ final class PhotoXUserDriver: NSObject, SPUUserDriver {
         (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? ""
     }
 
-    /// Surface whatever release notes are available for `item` into
-    /// the popup's view model. There are three states:
+    /// Surface release notes for `item` into the popup's view model.
+    /// Prefers aggregating notes across every appcast item between
+    /// the user's current version and the offered target so a
+    /// multi-version skip ("v0.220 → v0.225") shows all four
+    /// intermediate changelogs. Falls back to the single-item path
+    /// if the appcast isn't loaded yet, only one item is in range,
+    /// or there are no notes at all.
     ///
-    /// - Inline `<description>` in the appcast → render it right away.
+    /// Single-item fallback resolution:
+    /// - Inline `<description>` → render it.
     /// - `<sparkle:releaseNotesLink>` present (no inline) → leave the
-    ///   model in its initial "Loading…" state; Sparkle will call
+    ///   model in its "Loading…" state; Sparkle will call
     ///   `showUpdateReleaseNotes(with:)` once the fetch finishes.
     /// - Neither present → mark `releaseNotesFailed = true` so the
     ///   popup shows "Release notes are unavailable." instead of
-    ///   pretending a fetch is still in flight.
-    private static func populateReleaseNotes(for item: SUAppcastItem,
-                                             into model: UpdateInstallViewModel) {
+    ///   pretending a fetch is in flight.
+    private func populateReleaseNotes(for item: SUAppcastItem,
+                                      into model: UpdateInstallViewModel) {
+        if let aggregated = aggregatedReleaseNotes(targetItem: item),
+           !aggregated.isEmpty {
+            model.releaseNotesHTML = Data(aggregated.utf8)
+            return
+        }
         if let inline = item.itemDescription, !inline.isEmpty {
             model.releaseNotesHTML = Data(inline.utf8)
             return
         }
         if item.releaseNotesURL == nil {
-            // No inline notes AND no remote fetch coming.
             model.releaseNotesFailed = true
         }
+    }
+
+    /// Returns concatenated `<h2>v…</h2>` + per-item notes for every
+    /// appcast item in the range (currentVersion, targetVersion],
+    /// newest first. Returns nil when the appcast isn't loaded; ""
+    /// when only the target item is in range (caller falls back to
+    /// single-item rendering); otherwise the assembled HTML.
+    private func aggregatedReleaseNotes(targetItem: SUAppcastItem) -> String? {
+        guard let appcast = controller?.lastAppcast else { return nil }
+        let cmp = SUStandardVersionComparator.default
+        let current = Self.currentVersion()
+        let target = targetItem.versionString
+
+        let inRange = appcast.items.filter { it in
+            let v = it.versionString
+            // Skip empty version strings (malformed entry).
+            guard !v.isEmpty else { return false }
+            // strictly newer than current
+            let above = current.isEmpty
+                ? true
+                : cmp.compareVersion(v, toVersion: current) == .orderedDescending
+            // at most target
+            let withinTarget = cmp.compareVersion(v, toVersion: target) != .orderedDescending
+            return above && withinTarget
+        }
+
+        guard inRange.count > 1 else {
+            // Only the target itself qualifies — let the single-item
+            // path do its usual rendering.
+            return ""
+        }
+
+        let sorted = inRange.sorted { a, b in
+            cmp.compareVersion(a.versionString, toVersion: b.versionString) == .orderedDescending
+        }
+
+        var html = ""
+        for it in sorted {
+            let body: String = {
+                if let inline = it.itemDescription, !inline.isEmpty {
+                    return inline
+                }
+                return "<p><em>No release notes for this version.</em></p>"
+            }()
+            html += "<h2>v\(it.displayVersionString)</h2>\(body)"
+        }
+        return html
     }
 }
