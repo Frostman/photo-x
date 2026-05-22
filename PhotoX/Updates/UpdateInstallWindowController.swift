@@ -27,10 +27,12 @@ final class UpdateInstallWindowController {
 
     func show() {
         if let window {
+            Log.app.notice("update popup: re-show existing window")
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return
         }
+        Log.app.notice("update popup: creating window for v\(self.model.newVersion, privacy: .public)")
         let view = UpdateInstallView(
             model: model,
             onCancel: { [weak self] in self?.onCancel() },

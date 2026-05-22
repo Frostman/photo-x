@@ -51,6 +51,15 @@ final class PhotoXUserDriver: NSObject, SPUUserDriver {
     private var cancelCheck: (() -> Void)?
     private var retryTerminate: (() -> Void)?
 
+    /// The appcast item Sparkle most recently offered us (background
+    /// poll OR user-initiated check). Stashed so the pill click can
+    /// re-open the popup without firing a fresh `checkForUpdates()` —
+    /// Sparkle's `.dismiss` reply has stickier session memory than the
+    /// docs suggest and silently no-ops same-version checks for a
+    /// while after, so we keep `availableReply` alive across Cancel
+    /// and only consume it on a real Install.
+    private(set) var pendingItem: SUAppcastItem?
+
     override init() {
         super.init()
         popup.onCancel = { [weak self] in self?.userClickedCancel() }
@@ -66,6 +75,10 @@ final class PhotoXUserDriver: NSObject, SPUUserDriver {
         popup.model.actionsEnabled = false
         if let reply = availableReply {
             availableReply = nil
+            // pendingItem is also consumed — once download starts there's
+            // no "re-open via pill" path; the popup transitions in-place.
+            pendingItem = nil
+            Log.app.notice("update: install clicked → reply(.install)")
             reply(.install)
         }
     }
@@ -73,14 +86,19 @@ final class PhotoXUserDriver: NSObject, SPUUserDriver {
     private func userClickedCancel() {
         switch popup.model.stage {
         case .available:
-            if let reply = availableReply {
-                availableReply = nil
-                reply(.dismiss)
-            }
+            // Just close the popup. Keep `availableReply` + `pendingItem`
+            // alive so the pill stays clickable: a later pill click can
+            // re-open this same offer and the user can still install.
+            // Replying `.dismiss` here would let Sparkle close the session
+            // and then silently no-op all future `checkForUpdates()` calls
+            // for the same version — that's the bug commit-message-this
+            // change fixes.
+            Log.app.notice("update: cancel at Available — popup closed, reply held")
             popup.close()
         case .downloading, .extracting:
             // Hand cancel to Sparkle; it will fire
             // dismissUpdateInstallation which closes the popup.
+            Log.app.notice("update: cancel during download → cancel block")
             cancelDownload?()
             cancelDownload = nil
         case .installing:
@@ -88,6 +106,28 @@ final class PhotoXUserDriver: NSObject, SPUUserDriver {
             break
         }
     }
+
+    /// Re-open the popup using the most recent stashed offer. Called
+    /// by `UpdaterController.userClickedAvailable()` so the pill click
+    /// doesn't re-enter Sparkle (which would no-op against a
+    /// previously-dismissed same-version offer).
+    func openCachedOffer() {
+        guard let item = pendingItem else {
+            Log.app.notice("update: openCachedOffer — no pendingItem")
+            return
+        }
+        Log.app.notice("update: openCachedOffer v\(item.displayVersionString, privacy: .public)")
+        popup.model.resetForNewUpdate(
+            newVersion: item.displayVersionString,
+            currentVersion: Self.currentVersion()
+        )
+        if let inline = item.itemDescription, !inline.isEmpty {
+            popup.model.releaseNotesHTML = Data(inline.utf8)
+        }
+        popup.show()
+    }
+
+    var hasPendingOffer: Bool { pendingItem != nil }
 
     // MARK: - SPUUserDriver
 
@@ -103,6 +143,7 @@ final class PhotoXUserDriver: NSObject, SPUUserDriver {
     }
 
     func showUserInitiatedUpdateCheck(cancellation: @escaping () -> Void) {
+        Log.app.notice("update: showUserInitiatedUpdateCheck — appcast fetch in flight")
         // Stash the cancel block. We don't render a "checking…"
         // window — most checks resolve within ~1s and the popup
         // appears directly when the appcast lands.
@@ -114,34 +155,39 @@ final class PhotoXUserDriver: NSObject, SPUUserDriver {
         state: SPUUserUpdateState,
         reply: @escaping (SPUUserUpdateChoice) -> Void
     ) {
-        // Always update the controller's pill regardless of whether
-        // this is user-initiated or a background poll — that way the
-        // pill reflects the latest known version even if the user
-        // closes the popup without acting.
-        controller?.updateDiscovered(item: appcastItem)
+        Log.app.notice("update: showUpdateFound v\(appcastItem.displayVersionString, privacy: .public) userInitiated=\(state.userInitiated, privacy: .public)")
 
-        if !state.userInitiated {
-            // Background poll: don't open the popup. Release Sparkle
-            // immediately so the next poll can run.
-            reply(.dismiss)
-            return
-        }
-
-        // User-initiated: open the popup with the appcast info.
+        // Stash the reply + item regardless of who initiated. The
+        // pill is set via controller.updateDiscovered. We DON'T reply
+        // here — Sparkle's `.dismiss` is sticky and would silently
+        // block subsequent same-version checks. The reply stays alive
+        // until the user clicks Install in the popup, or Sparkle
+        // ends the session itself via `dismissUpdateInstallation`.
+        // Trade-off: while the reply is held, Sparkle's scheduled
+        // background poll is suppressed, so a brand-new "even newer"
+        // version won't surface mid-session — it'll be picked up on
+        // the next app launch.
         cancelCheck = nil
         availableReply = reply
-        popup.model.resetForNewUpdate(
-            newVersion: appcastItem.displayVersionString,
-            currentVersion: Self.currentVersion()
-        )
-        // If the appcast embedded release notes inline as the
-        // <description>, surface them right away. Sparkle will also
-        // call `showUpdateReleaseNotesWithDownloadData:` if the
-        // appcast linked them via <releaseNotesLink>.
-        if let inline = appcastItem.itemDescription, !inline.isEmpty {
-            popup.model.releaseNotesHTML = Data(inline.utf8)
+        pendingItem = appcastItem
+        controller?.updateDiscovered(item: appcastItem)
+
+        if state.userInitiated {
+            // User explicitly asked — open the popup immediately.
+            Log.app.notice("update: user-initiated → opening popup")
+            popup.model.resetForNewUpdate(
+                newVersion: appcastItem.displayVersionString,
+                currentVersion: Self.currentVersion()
+            )
+            if let inline = appcastItem.itemDescription, !inline.isEmpty {
+                popup.model.releaseNotesHTML = Data(inline.utf8)
+            }
+            popup.show()
+        } else {
+            // Background poll: pill is enough. Popup opens on pill
+            // click via `openCachedOffer()`.
+            Log.app.notice("update: background poll → pill set, reply held")
         }
-        popup.show()
     }
 
     func showUpdateReleaseNotes(with downloadData: SPUDownloadData) {
@@ -155,10 +201,10 @@ final class PhotoXUserDriver: NSObject, SPUUserDriver {
     }
 
     func showUpdateNotFoundWithError(_ error: Error, acknowledgement: @escaping () -> Void) {
-        // For user-initiated checks we surface a "you're up to date"
-        // alert. Background polls finish silently. We use the
-        // popup's stage as a proxy for whether a session was active.
         let userInitiated = controller?.consumePendingUserInitiated() ?? false
+        Log.app.notice("update: showUpdateNotFoundWithError userInitiated=\(userInitiated, privacy: .public) error=\(String(describing: error), privacy: .public)")
+        // For user-initiated checks we surface a "you're up to date"
+        // alert. Background polls finish silently.
         if userInitiated {
             let alert = NSAlert()
             alert.messageText = "You're up to date"
@@ -237,11 +283,18 @@ final class PhotoXUserDriver: NSObject, SPUUserDriver {
     }
 
     func dismissUpdateInstallation() {
+        Log.app.notice("update: dismissUpdateInstallation — clearing popup + pill")
         availableReply = nil
         cancelDownload = nil
         cancelCheck = nil
         retryTerminate = nil
+        pendingItem = nil
         popup.close()
+        // Sparkle ended the session — the offer is no longer
+        // actionable (typical reasons: install completed, download
+        // failed, user cancelled mid-download). Clear the pill so it
+        // doesn't pretend to be clickable.
+        controller?.clearAvailableUpdate()
     }
 
     // MARK: - Helpers

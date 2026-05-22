@@ -55,9 +55,6 @@ final class UpdaterController {
     private(set) var availableUpdate: AvailableUpdate = .none
 
     /// Mirrors `SPUUpdater.canCheckForUpdates` for the menu item.
-    /// In DEBUG (Sparkle disabled) we leave this `false` so the
-    /// menu reflects that real checks aren't running; the DEBUG
-    /// fake-popup menu item is separate and always enabled.
     var canCheckForUpdates: Bool = false
 
     /// Closure the host sets so we can capture the currently-open
@@ -65,13 +62,11 @@ final class UpdaterController {
     /// install. Optional — nil means no reopen will be staged.
     var shootURLProvider: (() -> URL?)?
 
-    /// The custom user driver. Always instantiated (even in DEBUG)
-    /// so the fake-popup harness can drive it from a menu command.
+    /// The custom user driver.
     let userDriver = PhotoXUserDriver()
 
-    /// Nil in DEBUG — see init for the rationale.
-    private let updater: SPUUpdater?
-    private let updaterDelegate: UpdaterDelegate?
+    private let updater: SPUUpdater
+    private let updaterDelegate: UpdaterDelegate
     private var canCheckObservation: NSKeyValueObservation?
     /// Set on every user-initiated `checkForUpdates()`. The user
     /// driver's `showUpdateNotFoundWithError(...)` consumes it to
@@ -87,18 +82,14 @@ final class UpdaterController {
         // the very update we want to push.
         Self.clearSkippedVersionDefaults()
 
-        #if DEBUG
-        // DEBUG / `just dev` skips Sparkle wiring entirely. The dev
-        // bundle ID differs from production's, so checking the prod
-        // appcast would either no-op (mismatched IDs) or worse,
-        // prompt to "downgrade" the dev build to the latest Release.
-        // The DEBUG-only fake-popup menu item is what dev uses to
-        // verify the UI.
-        self.updater = nil
-        self.updaterDelegate = nil
-        // Stored properties initialized — now safe to reach `self`.
-        userDriver.controller = self
-        #else
+        // Sparkle runs in both Debug and Release. Debug builds
+        // advertise CFBundleShortVersionString=0.0.0 (forced by
+        // `just dev`), so every prod-appcast item is "newer" — every
+        // `just dev` rebuild surfaces the pill within ~10 s and the
+        // full download → install → relaunch cycle works against the
+        // real prod appcast, despite the dev/prod bundle-ID split.
+        // That's the primary workflow for end-to-end verifying the
+        // self-update popup without cutting a release.
         let delegate = UpdaterDelegate()
         let sparkle = SPUUpdater(
             hostBundle: .main,
@@ -134,22 +125,43 @@ final class UpdaterController {
         // scheduled cadence so the user doesn't wait up to 5 min on
         // first launch.
         sparkle.checkForUpdatesInBackground()
-        #endif
     }
 
     /// Menu trigger + pill click. Fires an immediate user-initiated
     /// check; Sparkle's reply lands in `PhotoXUserDriver.showUpdateFound`
     /// with `state.userInitiated == true`, which opens the popup.
     /// In DEBUG (Sparkle off) this is a no-op.
+    /// Menu / pill entry point. If we still hold a live offer from a
+    /// previous showUpdateFound (whether bg poll or user-initiated),
+    /// re-open the popup using the cached item — we don't ask
+    /// Sparkle for a fresh check because its `.dismiss` memory would
+    /// silently no-op same-version checks. Otherwise issue a real
+    /// user-initiated check.
     func checkForUpdates() {
+        if userDriver.hasPendingOffer {
+            Log.app.notice("update: checkForUpdates — replaying cached offer")
+            userDriver.openCachedOffer()
+            return
+        }
+        Log.app.notice("update: checkForUpdates() — pendingUserInitiated=true")
         pendingUserInitiated = true
-        updater?.resetUpdateCycle()
-        updater?.checkForUpdates()
+        updater.resetUpdateCycle()
+        updater.checkForUpdates()
     }
 
     /// Pill click handler. Same path as the menu item.
     func userClickedAvailable() {
+        Log.app.notice("update: pill click")
         checkForUpdates()
+    }
+
+    /// Called by `PhotoXUserDriver.dismissUpdateInstallation()` when
+    /// Sparkle ends the session (install completed, error, mid-
+    /// download cancel). The pill should disappear because there's
+    /// no actionable offer left to re-open.
+    func clearAvailableUpdate() {
+        Log.app.notice("update: clearAvailableUpdate → pill hidden")
+        availableUpdate = .none
     }
 
     /// Read + reset the "user initiated this check" flag. Called by
@@ -178,6 +190,7 @@ final class UpdaterController {
     /// always reflects the latest known version.
     func updateDiscovered(item: SUAppcastItem) {
         let version = "v\(item.displayVersionString)"
+        Log.app.notice("update: updateDiscovered \(version, privacy: .public) → pill")
         availableUpdate = .available(version: version, item: item)
     }
 

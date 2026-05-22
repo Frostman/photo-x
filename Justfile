@@ -19,19 +19,19 @@ dev:
     echo "==> Regenerate .xcodeproj from project.yml"
     xcodegen
 
-    # Mirror scripts/release.sh's version derivation so dev builds carry a
-    # real, git-derived version (CFBundleShortVersionString, CFBundleVersion,
-    # GIT_DESCRIBE). The -dev suffix makes the About box unambiguous: even a
-    # clean-tree dev artifact reads "v0.X.0-<sha>-dev" so it can never be
-    # mistaken for a release.
-    echo "==> Derive version from git"
-    COMMITS=$(git rev-list --count HEAD)
+    # Dev builds advertise CFBundleShortVersionString=0.0.0 (and
+    # CFBundleVersion=0) so Sparkle always sees every prod-appcast
+    # item as "newer" — the upgrade pill surfaces within ~10 s of
+    # every `just dev` rebuild, which is the primary workflow for
+    # exercising the self-update popup against real Sparkle without
+    # cutting a release. GitDescribe stays git-derived so the About
+    # panel still reads like a real dev build.
     SHA9=$(git rev-parse --short=9 HEAD)
     DIRTY=""
     [ -n "$(git status --porcelain)" ] && DIRTY="-dirty"
-    MARKETING="0.${COMMITS}.0"
-    BUILD="${COMMITS}"
-    DESCRIBE="v${MARKETING}-${SHA9}${DIRTY}-dev"
+    MARKETING="0.0.0"
+    BUILD="0"
+    DESCRIBE="v0.0.0-dev-${SHA9}${DIRTY}"
     echo "    $DESCRIBE"
 
     echo "==> Resolve Debug build path"

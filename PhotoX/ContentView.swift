@@ -269,7 +269,7 @@ struct ContentView: View {
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
                     .background(Color(red: 1.00, green: 0.78, blue: 0.10), in: Capsule())
-                    .help("Debug build — separate bundle ID (dev.frostman.PhotoX.debug), Sparkle disabled, settings shared with production via AppDefaults")
+                    .help("Debug build — separate bundle ID (dev.frostman.PhotoX.debug), version forced to 0.0.0 so Sparkle always offers an upgrade to the latest release for popup testing, settings shared with production via AppDefaults")
             }
             #endif
 
