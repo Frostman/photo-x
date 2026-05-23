@@ -23,9 +23,10 @@ enum SettingsKey {
     /// Toggled by the rectangle.stack button in the status bar.
     static let collapseBursts = "settings.collapseBursts"
     /// Which burst siblings the `g` shortcut rejects. Values are
-    /// `GRejectScope.rawValue`: "unrated" (only siblings with no
-    /// rating / label / reject — default) or "all" (every other
-    /// member of the burst).
+    /// `GRejectScope.rawValue`: "unrated" (only siblings without a
+    /// star rating — color label alone does NOT protect, since
+    /// labels are organizational, not a culling decision) or
+    /// "all" (every other member of the burst).
     static let gRejectScope = "settings.gRejectScope"
 
     // Advanced — caches & prefetch. All three are read at startup

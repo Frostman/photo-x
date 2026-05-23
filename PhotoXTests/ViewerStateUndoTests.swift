@@ -181,6 +181,31 @@ final class ViewerStateUndoTests: XCTestCase {
         XCTAssertNil(state.entryXMPs["A"]?.label)
     }
 
+    /// `scope: .unrated` rejects every sibling without a star
+    /// rating, including ones with only a color label. Labels are
+    /// organizational, not a culling decision — they don't
+    /// "protect" a frame from the cull pass.
+    func test_burstReject_unratedScope_includesLabeledButUnscored() {
+        let state = makeState(stems: ["A1", "A2", "A3", "A4"],
+                              seq: ["A1": 1, "A2": 2, "A3": 3, "A4": 4])
+        // A2 has a 3-star rating (protected).
+        // A3 has only a color label (NOT protected — gets rejected).
+        // A4 is empty (gets rejected).
+        state.setRating(3, for: state.shoot!.entries[1])         // A2 = 3 stars
+        // Set a label on A3 directly (entryXMPs) since setLabel
+        // operates on the focused entry only.
+        state.entryXMPs["A3"] = XMPSidecar(rating: nil, label: "Red")
+        state.rejectBurstSiblings(scope: .unrated)
+        XCTAssertEqual(state.entryXMPs["A2"]?.rating, 3,
+                       "A2 has a star rating — must be skipped")
+        XCTAssertEqual(state.entryXMPs["A3"]?.rating, -1,
+                       "A3 has only a label, no star — must be rejected")
+        XCTAssertEqual(state.entryXMPs["A3"]?.label, "Red",
+                       "Reject must preserve the existing label on A3")
+        XCTAssertEqual(state.entryXMPs["A4"]?.rating, -1,
+                       "A4 is empty — must be rejected")
+    }
+
     /// Burst-reject must restore each sibling's individual prior
     /// state, not blanket-clear them all. Set up three siblings
     /// with distinct priors (one rated, one labeled, one empty)

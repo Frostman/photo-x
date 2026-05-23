@@ -1866,8 +1866,13 @@ final class ViewerState {
         }
         for sib in siblings {
             let xmp = entryXMPs[sib.stem]
-            let isUnrated = (xmp?.rating == nil || xmp?.rating == 0)
-                && (xmp?.label?.isEmpty ?? true)
+            // "Unrated" = no star rating. A color label alone does
+            // NOT protect a sibling — labels are organizational, not
+            // a culling decision, and a labeled-but-unscored sibling
+            // is still a candidate to reject. Already-rejected
+            // siblings (rating == -1) are also skipped (re-reject is
+            // a no-op).
+            let isUnrated = xmp?.rating == nil || xmp?.rating == 0
             switch scope {
             case .unrated:
                 if isUnrated { setRating(-1, for: sib) }
