@@ -78,7 +78,7 @@ final class PhotoXUserDriver: NSObject, SPUUserDriver {
             // pendingItem is also consumed — once download starts there's
             // no "re-open via pill" path; the popup transitions in-place.
             pendingItem = nil
-            Log.app.notice("update: install clicked → reply(.install)")
+            Log.updateDebug("install clicked → reply(.install)")
             reply(.install)
         }
     }
@@ -93,12 +93,12 @@ final class PhotoXUserDriver: NSObject, SPUUserDriver {
             // and then silently no-op all future `checkForUpdates()` calls
             // for the same version — that's the bug commit-message-this
             // change fixes.
-            Log.app.notice("update: cancel at Available — popup closed, reply held")
+            Log.updateDebug("cancel at Available — popup closed, reply held")
             popup.close()
         case .downloading, .extracting:
             // Hand cancel to Sparkle; it will fire
             // dismissUpdateInstallation which closes the popup.
-            Log.app.notice("update: cancel during download → cancel block")
+            Log.updateDebug("cancel during download → cancel block")
             cancelDownload?()
             cancelDownload = nil
         case .installing:
@@ -113,10 +113,10 @@ final class PhotoXUserDriver: NSObject, SPUUserDriver {
     /// previously-dismissed same-version offer).
     func openCachedOffer() {
         guard let item = pendingItem else {
-            Log.app.notice("update: openCachedOffer — no pendingItem")
+            Log.updateDebug("openCachedOffer — no pendingItem")
             return
         }
-        Log.app.notice("update: openCachedOffer v\(item.displayVersionString, privacy: .public)")
+        Log.updateDebug("openCachedOffer v\(item.displayVersionString)")
         popup.model.resetForNewUpdate(
             newVersion: item.displayVersionString,
             currentVersion: Self.currentVersion()
@@ -141,7 +141,7 @@ final class PhotoXUserDriver: NSObject, SPUUserDriver {
     /// so the brief window before the new `showUpdateFound` lands
     /// is visually consistent (no stale "vOld available" pill).
     func swapForNewerOffer() {
-        Log.app.notice("update: swapForNewerOffer — releasing held reply")
+        Log.updateDebug("swapForNewerOffer — releasing held reply")
         // Tell the controller to fire a fresh check once Sparkle's
         // session fully ends — signalled by didFinishUpdateCycleFor
         // delegate hook, NOT by dismissUpdateInstallation (which
@@ -174,7 +174,7 @@ final class PhotoXUserDriver: NSObject, SPUUserDriver {
     }
 
     func showUserInitiatedUpdateCheck(cancellation: @escaping () -> Void) {
-        Log.app.notice("update: showUserInitiatedUpdateCheck — appcast fetch in flight")
+        Log.updateDebug("showUserInitiatedUpdateCheck — appcast fetch in flight")
         // Stash the cancel block. We don't render a "checking…"
         // window — most checks resolve within ~1s and the popup
         // appears directly when the appcast lands.
@@ -186,7 +186,7 @@ final class PhotoXUserDriver: NSObject, SPUUserDriver {
         state: SPUUserUpdateState,
         reply: @escaping (SPUUserUpdateChoice) -> Void
     ) {
-        Log.app.notice("update: showUpdateFound v\(appcastItem.displayVersionString, privacy: .public) userInitiated=\(state.userInitiated, privacy: .public)")
+        Log.updateDebug("showUpdateFound v\(appcastItem.displayVersionString) userInitiated=\(state.userInitiated)")
 
         // Stash the reply + item regardless of who initiated. The
         // pill is set via controller.updateDiscovered. We DON'T reply
@@ -205,7 +205,7 @@ final class PhotoXUserDriver: NSObject, SPUUserDriver {
 
         if state.userInitiated {
             // User explicitly asked — open the popup immediately.
-            Log.app.notice("update: user-initiated → opening popup")
+            Log.updateDebug("user-initiated → opening popup")
             popup.model.resetForNewUpdate(
                 newVersion: appcastItem.displayVersionString,
                 currentVersion: Self.currentVersion()
@@ -215,7 +215,7 @@ final class PhotoXUserDriver: NSObject, SPUUserDriver {
         } else {
             // Background poll: pill is enough. Popup opens on pill
             // click via `openCachedOffer()`.
-            Log.app.notice("update: background poll → pill set, reply held")
+            Log.updateDebug("background poll → pill set, reply held")
         }
     }
 
@@ -235,7 +235,7 @@ final class PhotoXUserDriver: NSObject, SPUUserDriver {
 
     func showUpdateNotFoundWithError(_ error: Error, acknowledgement: @escaping () -> Void) {
         let userInitiated = controller?.consumePendingUserInitiated() ?? false
-        Log.app.notice("update: showUpdateNotFoundWithError userInitiated=\(userInitiated, privacy: .public) error=\(String(describing: error), privacy: .public)")
+        Log.updateDebug("showUpdateNotFoundWithError userInitiated=\(userInitiated) error=\(String(describing: error))")
         // For user-initiated checks we surface a "you're up to date"
         // alert. Background polls finish silently.
         if userInitiated {
@@ -295,7 +295,7 @@ final class PhotoXUserDriver: NSObject, SPUUserDriver {
         // AUTO-CONFIRM. The user already chose Install once; a second
         // "Install and Relaunch?" sheet would just be friction. We
         // log it so a debug session can spot the transition.
-        Log.app.notice("update: auto-confirming install + relaunch")
+        Log.updateDebug("auto-confirming install + relaunch")
         reply(.install)
     }
 
@@ -316,7 +316,7 @@ final class PhotoXUserDriver: NSObject, SPUUserDriver {
     }
 
     func dismissUpdateInstallation() {
-        Log.app.notice("update: dismissUpdateInstallation — clearing popup + pill")
+        Log.updateDebug("dismissUpdateInstallation — clearing popup + pill")
         availableReply = nil
         cancelDownload = nil
         cancelCheck = nil

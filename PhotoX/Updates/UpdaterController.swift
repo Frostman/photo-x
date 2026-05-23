@@ -194,12 +194,12 @@ final class UpdaterController {
     /// release notes / about to click Install would be hostile.
     private func handleSupplementaryTick() async {
         guard let pending = userDriver.pendingItem else {
-            Log.app.notice("update: supplementary tick → checkForUpdatesInBackground (no pending)")
+            Log.updateDebug("supplementary tick → checkForUpdatesInBackground (no pending)")
             updater.checkForUpdatesInBackground()
             return
         }
         if userDriver.isPopupOpen {
-            Log.app.notice("update: supplementary tick — popup open, skipping probe")
+            Log.updateDebug("supplementary tick — popup open, skipping probe")
             return
         }
         guard let feedURL = Self.appcastFeedURL() else {
@@ -209,11 +209,11 @@ final class UpdaterController {
         let pendingBuild = Int(pending.versionString) ?? 0
         do {
             guard let latestBuild = try await AppcastProbe.probeLatestBuildNumber(feedURL: feedURL) else {
-                Log.app.notice("update: probe — no versions parsed, skipping")
+                Log.updateDebug("probe — no versions parsed, skipping")
                 return
             }
             guard latestBuild > pendingBuild else {
-                Log.app.notice("update: probe — pending build \(pendingBuild, privacy: .public) is still latest (\(latestBuild, privacy: .public))")
+                Log.updateDebug("probe — pending build \(pendingBuild) is still latest (\(latestBuild))")
                 return
             }
             // Re-check state after the await — the popup may have
@@ -223,10 +223,10 @@ final class UpdaterController {
                   Int(stillPending.versionString) == pendingBuild,
                   !userDriver.isPopupOpen
             else {
-                Log.app.notice("update: probe — state changed during await, aborting swap")
+                Log.updateDebug("probe — state changed during await, aborting swap")
                 return
             }
-            Log.app.notice("update: probe — newer build \(latestBuild, privacy: .public) > pending \(pendingBuild, privacy: .public), swapping offer")
+            Log.updateDebug("probe — newer build \(latestBuild) > pending \(pendingBuild), swapping offer")
             // `swapForNewerOffer` sends Sparkle the .dismiss reply,
             // which triggers an ASYNC session teardown ending in
             // `dismissUpdateInstallation`. Sparkle drops any
@@ -257,11 +257,11 @@ final class UpdaterController {
     /// user-initiated check.
     func checkForUpdates() {
         if userDriver.hasPendingOffer {
-            Log.app.notice("update: checkForUpdates — replaying cached offer")
+            Log.updateDebug("checkForUpdates — replaying cached offer")
             userDriver.openCachedOffer()
             return
         }
-        Log.app.notice("update: checkForUpdates() — pendingUserInitiated=true")
+        Log.updateDebug("checkForUpdates() — pendingUserInitiated=true")
         pendingUserInitiated = true
         // Do NOT call updater.resetUpdateCycle() before this — it
         // re-arms the scheduler timer and (empirically) silently
@@ -273,7 +273,7 @@ final class UpdaterController {
 
     /// Pill click handler. Same path as the menu item.
     func userClickedAvailable() {
-        Log.app.notice("update: pill click")
+        Log.updateDebug("pill click")
         checkForUpdates()
     }
 
@@ -282,7 +282,7 @@ final class UpdaterController {
     /// download cancel). The pill should disappear because there's
     /// no actionable offer left to re-open.
     func clearAvailableUpdate() {
-        Log.app.notice("update: clearAvailableUpdate → pill hidden")
+        Log.updateDebug("clearAvailableUpdate → pill hidden")
         availableUpdate = .none
     }
 
@@ -306,7 +306,7 @@ final class UpdaterController {
     func updateCycleFinished() {
         guard pendingProbeRecheck else { return }
         pendingProbeRecheck = false
-        Log.app.notice("update: cycle ended → firing post-swap checkForUpdatesInBackground")
+        Log.updateDebug("cycle ended → firing post-swap checkForUpdatesInBackground")
         updater.checkForUpdatesInBackground()
     }
 
@@ -336,7 +336,20 @@ final class UpdaterController {
     /// always reflects the latest known version.
     func updateDiscovered(item: SUAppcastItem) {
         let version = "v\(item.displayVersionString)"
-        Log.app.notice("update: updateDiscovered \(version, privacy: .public) → pill")
+        // The ONE update-lifecycle line we keep in release builds.
+        // Every other update log is gated to DEBUG via `Log.updateDebug`
+        // — background polls re-report the same pending offer on
+        // every check, so without this guard release logs would
+        // accumulate one entry per supplementary-tick cadence.
+        let isNew: Bool = {
+            if case .available(let prev, _) = availableUpdate { return prev != version }
+            return true
+        }()
+        if isNew {
+            Log.app.notice("update: \(version, privacy: .public) newly available → pill")
+        } else {
+            Log.updateDebug("re-discovered \(version) (no change) → pill")
+        }
         availableUpdate = .available(version: version, item: item)
     }
 
@@ -356,7 +369,7 @@ final class UpdaterController {
         let latest = appcast.items
             .max { cmp.compareVersion($0.versionString, toVersion: $1.versionString) == .orderedAscending }?
             .displayVersionString ?? "?"
-        Log.app.notice("update: appcast loaded with \(appcast.items.count, privacy: .public) items, latest v\(latest, privacy: .public)")
+        Log.updateDebug("appcast loaded with \(appcast.items.count) items, latest v\(latest)")
         lastAppcast = appcast
     }
 
@@ -445,12 +458,12 @@ final class UpdaterDelegate: NSObject, SPUUpdaterDelegate {
                              didFinishUpdateCycleFor updateCheck: SPUUpdateCheck,
                              error: Error?) {
         let errStr = error.map { String(describing: $0) } ?? "nil"
-        Log.app.notice("update: cycle finished kind=\(updateCheck.rawValue, privacy: .public) error=\(errStr, privacy: .public)")
+        Log.updateDebug("cycle finished kind=\(updateCheck.rawValue) error=\(errStr)")
     }
 
     nonisolated func updater(_ updater: SPUUpdater,
                              willScheduleUpdateCheckAfterDelay delay: TimeInterval) {
-        Log.app.notice("update: scheduler armed — next check in \(Int(delay), privacy: .public)s")
+        Log.updateDebug("scheduler armed — next check in \(Int(delay))s")
         // willScheduleUpdateCheckAfterDelay fires AFTER Sparkle has
         // finished arming its next-tick scheduler — empirically the
         // very last lifecycle hook in a cycle, and the only point
@@ -464,6 +477,6 @@ final class UpdaterDelegate: NSObject, SPUUpdaterDelegate {
     }
 
     nonisolated func updaterWillNotScheduleUpdateCheck(_ updater: SPUUpdater) {
-        Log.app.notice("update: scheduler will NOT schedule further checks (auto-checks disabled?)")
+        Log.updateDebug("scheduler will NOT schedule further checks (auto-checks disabled?)")
     }
 }
