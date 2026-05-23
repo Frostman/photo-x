@@ -1748,6 +1748,14 @@ final class ViewerState {
         var updated = currentXMP
         updated.rating = rating
         currentXMP = updated
+        // Sidebar (DecisionsPanelView) reads displayedXMP to avoid
+        // showing the not-yet-visible nav-intent pair's rating
+        // during nav lag. Once the !isLoadingDisplayedPair guard
+        // above passes, displayedEntry IS the current entry, so
+        // sync the displayed snapshot too — otherwise the sidebar
+        // stars/dots/reject button would stay stale until the next
+        // navigation.
+        if displayedEntry?.stem == entry.stem { displayedXMP = updated }
         entryXMPs[entry.stem] = updated
         stemsWithXMPOnDisk.insert(entry.stem)
         invalidateSortedEntriesCache()
@@ -1813,6 +1821,13 @@ final class ViewerState {
         var updated = previous
         updated.rating = rating
         entryXMPs[target.stem] = updated
+        // If we happen to be mutating the displayed entry (e.g.,
+        // burst-reject called on a singleton-burst keeps the user
+        // on the same entry — but the displayed entry might be one
+        // of the siblings the loop hits), sync displayedXMP too so
+        // the sidebar reflects the change.
+        if displayedEntry?.stem == target.stem { displayedXMP = updated }
+        if entry?.stem == target.stem { currentXMP = updated }
         stemsWithXMPOnDisk.insert(target.stem)
         invalidateSortedEntriesCache()
         invalidateShootStatsCache()
@@ -1897,6 +1912,9 @@ final class ViewerState {
         var updated = currentXMP
         updated.label = label
         currentXMP = updated
+        // Sidebar reads displayedXMP — keep it in sync after the
+        // guard confirms displayedEntry == entry.
+        if displayedEntry?.stem == entry.stem { displayedXMP = updated }
         entryXMPs[entry.stem] = updated
         stemsWithXMPOnDisk.insert(entry.stem)
         invalidateSortedEntriesCache()
@@ -1977,6 +1995,9 @@ final class ViewerState {
             stemsWithXMPOnDisk.remove(stem)
         }
         if self.entry?.stem == stem { currentXMP = previousXMP }
+        // Sidebar reads displayedXMP — keep it in sync so undo
+        // visibly updates the stars / label / reject button.
+        if displayedEntry?.stem == stem { displayedXMP = previousXMP }
         invalidateSortedEntriesCache()
         invalidateShootStatsCache()
 
