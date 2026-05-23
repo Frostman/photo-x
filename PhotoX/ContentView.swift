@@ -117,17 +117,17 @@ struct ContentView: View {
             // `?` (help) and Esc (dismiss help) stay always-available.
             let hasShoot = state.shoot != nil
             return view
-                .onKeyPress(keys: ["z", "Z"]) { _ in
+                // Z is intentionally NOT bound — it would intercept Cmd+Z
+                // (SwiftUI's .onKeyPress matches the typed character
+                // regardless of modifiers) and break the system Undo
+                // menu item. HIF/JPG ↔ RAW moved to X; decoder cycle
+                // moved to Shift+X. Fit-to-window is still on ⌘0.
+                .onKeyPress(keys: ["x"]) { _ in
                     guard hasShoot else { return .ignored }
                     state.toggleRequestedVariant()
                     return .handled
                 }
-                .onKeyPress(keys: ["x", "X"]) { _ in
-                    guard hasShoot else { return .ignored }
-                    state.setViewportToFit()
-                    return .handled
-                }
-                .onKeyPress(keys: ["d", "D"]) { _ in
+                .onKeyPress(keys: ["X"]) { _ in
                     guard hasShoot else { return .ignored }
                     state.cycleDecoder()
                     return .handled

@@ -84,6 +84,19 @@ struct PhotoXApp: App {
                     CheckForUpdatesView(controller: updater)
                 }
             }
+            // Bind Cmd+Z / Cmd+Shift+Z to ViewerState's UndoManager.
+            // We can't use `.environment(\.undoManager, ...)` because
+            // SwiftUI's undoManager environment value is read-only
+            // (system-managed by the focus chain — TextEditor etc.
+            // pick it up). Replacing the standard Edit menu's Undo /
+            // Redo entries with our own buttons targets our stack
+            // directly. Labels read from `undoMenuItemTitle` /
+            // `redoMenuItemTitle` so the menu reads "Undo Rate 5
+            // Stars", "Undo Reject", etc.
+            CommandGroup(replacing: .undoRedo) {
+                UndoRedoMenuButtons(state: viewerState)
+            }
+
             CommandGroup(replacing: .newItem) {
                 Button("Open Folder…") {
                     Task { await openWithPanel() }
@@ -200,6 +213,34 @@ struct PhotoXApp: App {
 /// `applicationWillTerminate` instead.
 extension Notification.Name {
     static let photoxWillTerminate = Notification.Name("dev.frostman.PhotoX.willTerminate")
+}
+
+/// Edit → Undo / Redo menu items, bound to ViewerState.undoManager.
+/// Wrapped in its own View so the body re-evaluates when
+/// `state.undoStateVersion` bumps — without that, the menu's
+/// disabled state and title strings would never refresh, because
+/// NSUndoManager itself isn't `@Observable`.
+private struct UndoRedoMenuButtons: View {
+    let state: ViewerState
+
+    var body: some View {
+        // Read the observable counter to register a SwiftUI
+        // dependency. Every undo-state change bumps it, which
+        // forces this view to re-evaluate `canUndo` / `canRedo`
+        // / `undoMenuItemTitle` from the underlying UndoManager.
+        let _ = state.undoStateVersion
+        Button(state.undoManager.undoMenuItemTitle) {
+            state.undoManager.undo()
+        }
+        .keyboardShortcut("z", modifiers: .command)
+        .disabled(!state.undoManager.canUndo)
+
+        Button(state.undoManager.redoMenuItemTitle) {
+            state.undoManager.redo()
+        }
+        .keyboardShortcut("z", modifiers: [.command, .shift])
+        .disabled(!state.undoManager.canRedo)
+    }
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUserNotificationCenterDelegate {

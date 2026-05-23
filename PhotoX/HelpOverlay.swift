@@ -28,8 +28,8 @@ struct HelpOverlay: View {
             .init(keys: "G", label: "Inside a burst: reject other burst members (scope is set in Settings → Workflow)"),
         ]),
         ("Image variant", [
-            .init(keys: "Z", label: "Toggle HIF/JPG ↔ RAW (when both exist)"),
-            .init(keys: "D", label: "Cycle decoder (ImageIO / LibRaw)"),
+            .init(keys: "X", label: "Toggle HIF/JPG ↔ RAW (when both exist)"),
+            .init(keys: "⇧ X", label: "Cycle decoder (ImageIO / LibRaw)"),
         ]),
         ("Navigation", [
             .init(keys: "← / →", label: "Previous / next pair in the shoot"),
@@ -40,7 +40,6 @@ struct HelpOverlay: View {
             .init(keys: "Home / End", label: "Jump to first / last pair"),
         ]),
         ("View", [
-            .init(keys: "X", label: "Fit to window"),
             .init(keys: "⌘0", label: "Fit to window"),
             .init(keys: "Double-click", label: "Toggle fit ↔ 100%"),
             .init(keys: "Pinch / ⌘ + scroll", label: "Zoom"),

@@ -598,6 +598,22 @@ final class ViewerState {
     /// `project_xmp_write_reliability.md`.
     let xmpWriter = XMPWriteCoordinator()
 
+    /// Standard Cocoa undo stack for rating / label / reject
+    /// mutations. Cleared on shoot switch (cross-shoot undo makes
+    /// no sense). The SwiftUI menu items in PhotoXApp call
+    /// `.undo()` / `.redo()` on this directly.
+    let undoManager = UndoManager()
+
+    /// Observable counter bumped whenever the undo manager's
+    /// state changes (group close, undo, redo, action-name
+    /// change). The CommandGroup that builds Edit → Undo / Redo
+    /// reads this so SwiftUI knows to re-evaluate `canUndo` /
+    /// `canRedo` / `undoMenuItemTitle` — UndoManager itself isn't
+    /// `@Observable`, so without this signal the menu items'
+    /// enabled state and titles would never refresh.
+    private(set) var undoStateVersion: Int = 0
+    private var undoObservers: [NSObjectProtocol] = []
+
     /// Last failed XMP write per stem (older failures for the same
     /// file are overwritten — we only care about the most recent
     /// state). Populated by the failure-consumer Task started in
@@ -629,6 +645,28 @@ final class ViewerState {
             ?? SettingsKey.Defaults.afOverlayVisible
         self.overlays = initialOverlays
         startXMPFailureConsumer()
+        startUndoStateObserver()
+    }
+
+    /// Watch UndoManager for state changes and bump the observable
+    /// `undoStateVersion`. NSUndoManager posts these notifications
+    /// on its own actor (the main one for our manager) but adding
+    /// the observers explicitly on the main queue keeps the
+    /// version bump on @MainActor.
+    private func startUndoStateObserver() {
+        let nc = NotificationCenter.default
+        // Single notification that covers every meaningful undo-
+        // stack state change (group open/close, undo, redo,
+        // setActionName). The other named notifications are
+        // subsets of this one.
+        let token = nc.addObserver(
+            forName: .NSUndoManagerCheckpoint,
+            object: undoManager,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.undoStateVersion &+= 1 }
+        }
+        undoObservers.append(token)
     }
 
     /// Pump every event from `xmpWriter.failureStream` onto the
@@ -802,6 +840,10 @@ final class ViewerState {
         shootStatsCache = nil
         filmstripVisibleCache = nil
         filmstripVisibleCacheKey = nil
+        // Cross-shoot undo would be confusing (you'd be undoing
+        // ratings on a shoot that's no longer open) and the
+        // captured PhotoEntry references would dangle anyway.
+        undoManager.removeAllActions()
         indexingStatus = .idle
         indexingProgress = .init()
         indexingTimings = .init()
@@ -1727,8 +1769,31 @@ final class ViewerState {
         // tells them the write didn't make it to disk. Reverting
         // silently after a failure would look like a phantom undo.
         // See project memory `project_xmp_write_reliability.md`.
-        _ = previous; _ = xmpWasOnDisk      // kept for future undo capture
         Task { await xmpWriter.writeRating(rating, for: capturedEntry) }
+
+        // Register Cmd+Z undo. focusedStem is the entry the user
+        // was on BEFORE auto-advance — so undo brings them back to
+        // the entry they actually rated. Resolved by stem at apply
+        // time (indices may shift if sort changes meanwhile).
+        //
+        // The explicit begin/end group makes each user action its
+        // own undo step even in synchronous test contexts where
+        // groupsByEvent's auto-close-on-runloop-tick doesn't fire.
+        // Production: nested inside the event-driven group, no
+        // user-visible difference.
+        let actionName = Self.humanReadableUndoActionName(rating: rating)
+        undoManager.beginUndoGrouping()
+        undoManager.registerUndo(withTarget: self) { state in
+            state.applyXMPSnapshot(
+                stem: capturedEntry.stem,
+                previousXMP: previous,
+                previousXMPWasOnDisk: xmpWasOnDisk,
+                focusedStem: capturedEntry.stem,
+                actionName: actionName
+            )
+        }
+        undoManager.setActionName(actionName)
+        undoManager.endUndoGrouping()
     }
 
     /// R toggles rating between -1 (reject) and nil (clear). Anything else
@@ -1751,8 +1816,26 @@ final class ViewerState {
         stemsWithXMPOnDisk.insert(target.stem)
         invalidateSortedEntriesCache()
         invalidateShootStatsCache()
-        _ = previous; _ = xmpWasOnDisk      // kept for future undo capture
         Task { await xmpWriter.writeRating(rating, for: target) }
+
+        // Undo registration. focusedStem is nil — this variant
+        // doesn't move the user's selection (it's the batch path
+        // used by burst-reject), so undo shouldn't move it either.
+        // The outer beginUndoGrouping in rejectBurstSiblings
+        // collects all per-sibling groups into one Cmd+Z.
+        let actionName = Self.humanReadableUndoActionName(rating: rating)
+        undoManager.beginUndoGrouping()
+        undoManager.registerUndo(withTarget: self) { state in
+            state.applyXMPSnapshot(
+                stem: target.stem,
+                previousXMP: previous,
+                previousXMPWasOnDisk: xmpWasOnDisk,
+                focusedStem: nil,
+                actionName: actionName
+            )
+        }
+        undoManager.setActionName(actionName)
+        undoManager.endUndoGrouping()
     }
 
     /// `g` shortcut: reject other members of the displayed entry's
@@ -1766,6 +1849,20 @@ final class ViewerState {
               (burstSizesByID[id] ?? 0) >= 2 else { return }
         let siblings = sortedEntries.filter {
             $0.stem != stem && burstIDByStem[$0.stem] == id
+        }
+        // Bundle every per-sibling setRating undo registration
+        // into ONE Cmd+Z entry. Standard macOS expectation: one
+        // user keypress = one undo step. Without the grouping,
+        // the user would have to mash Cmd+Z N times to revert a
+        // single G press.
+        undoManager.beginUndoGrouping()
+        // Set the name BEFORE endUndoGrouping — with
+        // groupsByEvent=false (e.g., in tests) setActionName
+        // requires an open group; calling it after end fires an
+        // NSInternalInconsistencyException.
+        defer {
+            undoManager.setActionName("Reject Burst Siblings")
+            undoManager.endUndoGrouping()
         }
         for sib in siblings {
             let xmp = entryXMPs[sib.stem]
@@ -1806,13 +1903,150 @@ final class ViewerState {
             nextPair()
         }
 
-        _ = previous; _ = xmpWasOnDisk      // kept for future undo capture
         Task { await xmpWriter.writeLabel(label, for: capturedEntry) }
+
+        // Undo registration. Same shape as setRating — focusedStem
+        // is the labeled entry so undo brings the user back even
+        // after auto-advance.
+        let actionName = Self.humanReadableUndoActionName(label: label)
+        undoManager.beginUndoGrouping()
+        undoManager.registerUndo(withTarget: self) { state in
+            state.applyXMPSnapshot(
+                stem: capturedEntry.stem,
+                previousXMP: previous,
+                previousXMPWasOnDisk: xmpWasOnDisk,
+                focusedStem: capturedEntry.stem,
+                actionName: actionName
+            )
+        }
+        undoManager.setActionName(actionName)
+        undoManager.endUndoGrouping()
     }
 
     /// Click same color again clears.
     func toggleLabel(_ label: String, source: RatingInputSource = .keyboard) {
         setLabel(currentXMP.label == label ? nil : label, source: source)
+    }
+
+    // MARK: - Undo / Redo apply path
+    //
+    // Every XMP-mutating method registers an undo via
+    // `applyXMPSnapshot(...)`. That same method runs both undo and
+    // redo (registering its own inverse at the end) so the stack
+    // works symmetrically without separate apply/unapply pairs.
+    //
+    // **Stem-based everywhere.** No captured indices anywhere in
+    // the undo data — indices shift across sort, filter, and
+    // indexer reorders, and would silently misdirect on apply.
+    // Resolution from stem happens at apply time so the user
+    // always ends up on the right entry.
+
+    /// Apply a snapshot of a single entry's XMP state, register
+    /// the inverse for redo, and (if requested) jump selection.
+    /// Called from each undo registration in the mutators and
+    /// recursively by NSUndoManager during redo.
+    @MainActor
+    fileprivate func applyXMPSnapshot(
+        stem: String,
+        previousXMP: XMPSidecar,
+        previousXMPWasOnDisk: Bool,
+        focusedStem: String?,
+        actionName: String
+    ) {
+        guard let entry = shoot?.entries.first(where: { $0.stem == stem }) else { return }
+        // Snapshot the CURRENT state for the redo registration.
+        let nextXMP        = entryXMPs[stem] ?? .empty
+        let nextWasOnDisk  = stemsWithXMPOnDisk.contains(stem)
+        // For the inverse we want to remember where the user is
+        // RIGHT NOW (after the previous apply) so redo can bring
+        // them back. If the original action didn't request a
+        // selection jump (focusedStem == nil — e.g., the per-stem
+        // path used by burst-reject), keep nil through redo too.
+        let nextFocusedStem: String? = focusedStem.flatMap { _ in self.entry?.stem }
+
+        // Apply the reverted state in-memory.
+        entryXMPs[stem] = previousXMP
+        if previousXMPWasOnDisk {
+            stemsWithXMPOnDisk.insert(stem)
+        } else {
+            stemsWithXMPOnDisk.remove(stem)
+        }
+        if self.entry?.stem == stem { currentXMP = previousXMP }
+        invalidateSortedEntriesCache()
+        invalidateShootStatsCache()
+
+        // Reliable disk write — same path as first-time writes.
+        // Coordinator serializes per-stem, so if the original
+        // write is still in flight when undo fires, the revert
+        // queues behind it (correct: the file ends up with the
+        // reverted value, not the half-applied original).
+        Task { await xmpWriter.writeRating(previousXMP.rating, for: entry) }
+        Task { await xmpWriter.writeLabel(previousXMP.label, for: entry) }
+
+        // Ensure the reverted entry is visible under the current
+        // filters — otherwise undo would silently hide it.
+        ensureFilterShows(xmp: previousXMP)
+
+        // Jump selection if requested. Resolve from stem AT APPLY
+        // TIME so any sort/filter reorder between the action and
+        // the undo doesn't misdirect.
+        if let focusedStem,
+           let idx = sortedEntries.firstIndex(where: { $0.stem == focusedStem }) {
+            navigate(to: idx)
+        }
+
+        // Register the inverse for redo (or the next undo).
+        undoManager.registerUndo(withTarget: self) { state in
+            state.applyXMPSnapshot(
+                stem: stem,
+                previousXMP: nextXMP,
+                previousXMPWasOnDisk: nextWasOnDisk,
+                focusedStem: nextFocusedStem,
+                actionName: actionName
+            )
+        }
+        undoManager.setActionName(actionName)
+    }
+
+    /// Flip filter toggles as needed so an entry with the given
+    /// XMP would be visible. Called from `applyXMPSnapshot` so
+    /// undo never silently hides the entry it just reverted.
+    /// `showRejected` / `showUnrated` / `showStars` already have
+    /// `didSet` invalidation hooks (filmstrip auto-updates).
+    private func ensureFilterShows(xmp: XMPSidecar) {
+        switch ratingCategory(for: xmp) {
+        case .rejected:
+            if !showRejected { showRejected = true }
+        case .rated(let stars):
+            if !showStars.contains(stars) { showStars.insert(stars) }
+        case .unrated:
+            if !showUnrated { showUnrated = true }
+        }
+    }
+
+    /// `ratingCategory(for:)` takes a stem; this overload takes an
+    /// XMP directly so we can classify a snapshot that hasn't been
+    /// stored in `entryXMPs` yet (the undo apply path computes the
+    /// category from the snapshot's contents, not from current
+    /// state).
+    private func ratingCategory(for xmp: XMPSidecar) -> RatingCategory {
+        if xmp.isReject { return .rejected }
+        if let stars = xmp.starCount, stars > 0 { return .rated(stars: stars) }
+        return .unrated
+    }
+
+    fileprivate static func humanReadableUndoActionName(rating: Int?) -> String {
+        switch rating {
+        case nil: return "Clear Rating"
+        case -1:  return "Reject"
+        case 0:   return "Clear Rating"
+        case let n?: return "Rate \(n) Star\(n == 1 ? "" : "s")"
+        }
+    }
+
+    fileprivate static func humanReadableUndoActionName(label: String?) -> String {
+        if let label, !label.isEmpty { return "Set Label \(label)" }
+        return "Clear Label"
     }
 
     func cycleDecoder() {
