@@ -55,27 +55,29 @@ final class MTLTextureCacheTests: XCTestCase {
     // MARK: - LRU eviction
 
     @MainActor
-    func test_capacityCap_evictsLRU_atTwentyEntries() async throws {
-        // Use a tiny capacity-equivalent test: warm 21 distinct keys.
-        // Slot 0 should be evicted by the 21st insert.
-        for i in 0 ..< 21 {
+    func test_capacityCap_evictsLRU_atCapacity() async throws {
+        // Warm capacity+1 distinct keys; slot 0 should be evicted by
+        // the (capacity+1)-th insert.
+        let cap = MTLTextureCache.capacityForTests
+        for i in 0 ... cap {
             _ = try await MTLTextureCache.shared.warm(cgImage: tinyImage(), key: key(id: "k\(i)"), orientation: 1)
         }
-        XCTAssertEqual(MTLTextureCache.shared.count, 20)
+        XCTAssertEqual(MTLTextureCache.shared.count, cap)
         XCTAssertNil(MTLTextureCache.shared.get(key(id: "k0")),
                      "k0 should have been evicted as LRU")
-        XCTAssertNotNil(MTLTextureCache.shared.get(key(id: "k20")))
+        XCTAssertNotNil(MTLTextureCache.shared.get(key(id: "k\(cap)")))
     }
 
     @MainActor
     func test_get_bumpsMRU_protectingFromEviction() async throws {
-        // Insert k0..k19, then access k0 → k0 becomes MRU. Inserting
-        // k20 should evict k1 (now LRU), NOT k0.
-        for i in 0 ..< 20 {
+        // Insert capacity entries, then access k0 → k0 becomes MRU.
+        // Inserting one more key should evict k1 (now LRU), NOT k0.
+        let cap = MTLTextureCache.capacityForTests
+        for i in 0 ..< cap {
             _ = try await MTLTextureCache.shared.warm(cgImage: tinyImage(), key: key(id: "k\(i)"), orientation: 1)
         }
         _ = MTLTextureCache.shared.get(key(id: "k0"))   // bump
-        _ = try await MTLTextureCache.shared.warm(cgImage: tinyImage(), key: key(id: "k20"), orientation: 1)
+        _ = try await MTLTextureCache.shared.warm(cgImage: tinyImage(), key: key(id: "k\(cap)"), orientation: 1)
         XCTAssertNotNil(MTLTextureCache.shared.get(key(id: "k0")), "k0 was MRU, must not evict")
         XCTAssertNil(MTLTextureCache.shared.get(key(id: "k1")), "k1 should now be LRU and evicted")
     }

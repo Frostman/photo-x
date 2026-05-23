@@ -57,7 +57,13 @@ final class MTLTextureCache {
     private var inflight: [DecodeKey: Task<Entry, Error>] = [:]
     private let capacity: Int
 
-    private init(capacity: Int = 20) {
+    /// Test-only accessor for the shared cache's capacity. Lets the
+    /// MTLTextureCacheTests assert LRU eviction against whatever the
+    /// current cap is without hard-coding the value (which we bump as
+    /// the supported shoot sizes grow).
+    static var capacityForTests: Int { shared.capacity }
+
+    private init(capacity: Int = 32) {
         // Fail loudly if no Metal device — this is the same path the
         // existing CanvasRenderer.init takes, but earlier in startup.
         guard let device = MTLCreateSystemDefaultDevice() else {
