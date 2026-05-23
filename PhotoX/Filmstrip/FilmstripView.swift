@@ -13,65 +13,33 @@ struct FilmstripView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 6) {
                     if state.shoot != nil {
-                        // Two parallel arrays: `visible` for display + bracket
-                        // adjacency, `visibleSortedIndices` to map each thumb
-                        // back to its position in state.sortedEntries (which is
-                        // what state.currentIndex and navigate(to:) use).
-                        let allVisible = state.sortedEntries.enumerated()
-                            .filter { state.isVisible($1) }
-                        let useBrackets = state.sortMode == .name
-                        // Hoist the burst id / size tables ONCE per render.
-                        // Both are O(N over the shoot); calling the per-cell
-                        // `state.burstSegment(at:visible:)` repeatedly would
-                        // make filmstrip rendering O(visible × N) and beach
-                        // the main thread on 3 k+ entry shoots.
-                        let burstIDs   = useBrackets ? state.burstIDByStem   : [:]
-                        let burstSizes = useBrackets ? state.burstSizesByID  : [:]
-                        // Burst id of the focused entry — its burst auto-expands
-                        // in collapsed mode so the user can step through it.
-                        let currentBurstID: Int? = state.displayedEntry
-                            .flatMap { burstIDs[$0.stem] }
-                        // Collapse pass: keep singletons and the expanded
-                        // burst; for every other burst, keep only its first
-                        // visible frame. Only kicks in for .name sort, where
-                        // burst frames are contiguous.
                         // Collapse is force-off while indexing is in flight —
                         // the burst id table is still being built up batch-
                         // by-batch and collapsing would hide siblings that
                         // haven't been detected yet. `state.collapseBurstsActive`
                         // bakes the same gate in for nav handlers.
                         let collapseActive = collapseBursts && !state.isIndexingActive
-                        let enumeratedVisible: [(offset: Int, element: PhotoEntry)] = {
-                            guard collapseActive, useBrackets else { return allVisible }
-                            var seen: Set<Int> = []
-                            return allVisible.filter { _, entry in
-                                guard let id = burstIDs[entry.stem],
-                                      (burstSizes[id] ?? 0) >= 2
-                                else { return true }                  // singleton
-                                if id == currentBurstID { return true } // expanded
-                                return seen.insert(id).inserted        // 1st of burst
-                            }
-                        }()
-                        let visible = enumeratedVisible.map(\.element)
-                        let visibleSortedIndices = enumeratedVisible.map(\.offset)
-                        // Precompute first/last visible index per burst id —
-                        // O(visible) once per render. Per-cell bracket lookup
-                        // is then O(1). Replaces the previous static helper
-                        // call that walked the visible array left + right per
-                        // cell (worst case O(visible²) per render — the prime
-                        // filmstrip-perf regression since v0.182.0).
-                        let (firstByBurst, lastByBurst): ([Int: Int], [Int: Int]) = {
-                            guard useBrackets else { return ([:], [:]) }
-                            var first: [Int: Int] = [:]
-                            var last:  [Int: Int] = [:]
-                            for (vIdx, entry) in visible.enumerated() {
-                                guard let id = burstIDs[entry.stem],
-                                      (burstSizes[id] ?? 0) >= 2 else { continue }
-                                if first[id] == nil { first[id] = vIdx }
-                                last[id] = vIdx
-                            }
-                            return (first, last)
-                        }()
+                        // Cached on ViewerState — keyed by (sortMode, filters,
+                        // collapseActive, expandedBurstID, dataVersion). Plain
+                        // nav inside the same burst hits cache; on a 25 k
+                        // mixed-burst shoot this drops the per-nav filmstrip
+                        // body cost from ~15 ms to <1 ms. See
+                        // ViewerState.filmstripVisible for the invalidation
+                        // surface.
+                        let fv = state.filmstripVisible(collapseActive: collapseActive)
+                        let useBrackets = state.sortMode == .name
+                        // Hoist the burst id / size tables ONCE per render.
+                        // Per-cell bracket / collapsed-size lookups stay O(1).
+                        let burstIDs   = useBrackets ? state.burstIDByStem   : [:]
+                        let burstSizes = useBrackets ? state.burstSizesByID  : [:]
+                        // Burst id of the focused entry — its burst auto-expands
+                        // in collapsed mode so the user can step through it.
+                        let currentBurstID: Int? = state.displayedEntry
+                            .flatMap { burstIDs[$0.stem] }
+                        let visible = fv.visible.map(\.element)
+                        let visibleSortedIndices = fv.visible.map(\.offset)
+                        let firstByBurst = fv.firstByBurst
+                        let lastByBurst = fv.lastByBurst
                         let _ = {
                             PerfTracker.mark("FilmstripView.body: visible=\(visible.count), bursts=\(firstByBurst.count), brackets=\(useBrackets)")
                         }()

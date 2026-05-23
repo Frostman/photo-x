@@ -191,6 +191,139 @@ final class ViewerState {
 
     private func invalidateSortedEntriesCache() {
         sortedEntriesCache = nil
+        // The filmstrip's visible/collapse/bracket result derives from
+        // sortedEntries × filters × burst tables — anything that
+        // invalidates the sort necessarily invalidates this too.
+        invalidateFilmstripVisibleCache()
+    }
+
+    // MARK: - Filmstrip visible cache
+    //
+    // Hoist the filmstrip body's per-nav work (filter pass + collapse
+    // pass + bracket precompute) onto the state so plain nav inside
+    // the same burst is a single dict lookup. On a 25k mixed-burst
+    // shoot the per-nav cost drops from ~15 ms to <1 ms.
+    //
+    // The cache key folds in everything the result actually depends on
+    // (filter toggles, sort mode, collapse mode, expanded-burst id) so
+    // a user-visible state change automatically misses the cache and
+    // recomputes. Internal data-change events (rating mutations,
+    // burst-id rebuilds) bump `filmstripDataVersion` instead — keyed
+    // separately because they don't have a clean external signal.
+
+    struct FilmstripVisible: Sendable {
+        let allVisible: [(offset: Int, element: PhotoEntry)]
+        let visible: [(offset: Int, element: PhotoEntry)]
+        let firstByBurst: [Int: Int]
+        let lastByBurst: [Int: Int]
+    }
+
+    private struct FilmstripVisibleKey: Equatable {
+        let sortMode: SortMode
+        let showRejected: Bool
+        let showUnrated: Bool
+        let showStars: Set<Int>
+        let collapseActive: Bool
+        let expandedBurstID: Int?
+        let dataVersion: Int
+    }
+
+    private var filmstripVisibleCacheKey: FilmstripVisibleKey?
+    private var filmstripVisibleCache: FilmstripVisible?
+    private var filmstripDataVersion: Int = 0
+    /// Test-only counter — incremented every time the cache actually
+    /// recomputes (cache miss path). Tests assert it stays flat across
+    /// expected cache-hit operations and bumps on expected misses.
+    /// Visible to tests via `@testable import PhotoX`.
+    private(set) var filmstripVisibleComputesForTests: Int = 0
+
+    private func invalidateFilmstripVisibleCache() {
+        filmstripDataVersion &+= 1
+        filmstripVisibleCache = nil
+        filmstripVisibleCacheKey = nil
+    }
+
+    /// Cached compute of the filmstrip's visible/collapse/bracket
+    /// tables. All inputs are derived from `self` so the key always
+    /// matches what the compute will actually see — there's no way
+    /// to ask for "the result if showRejected were X" without first
+    /// flipping `state.showRejected` to X.
+    ///
+    /// `collapseActive` is the one exception: it folds the
+    /// `@AppStorage(SettingsKey.collapseBursts)` value (owned by
+    /// FilmstripView) with `!isIndexingActive` (owned by state). The
+    /// caller is responsible for that combination.
+    func filmstripVisible(collapseActive: Bool) -> FilmstripVisible {
+        // Expanded burst is nil when the focused entry is a singleton
+        // (or has no burst id yet) — singletons aren't subject to
+        // collapse, so the visible result is identical regardless of
+        // which one the user is currently on. This keeps the key
+        // stable while nav'ing through the standalone half of the
+        // shoot — 12 k+ keys' worth of cache hits.
+        let expandedBurstID: Int? = {
+            guard let stem = displayedEntry?.stem,
+                  let id = burstIDByStem[stem],
+                  (burstSizesByID[id] ?? 0) >= 2 else { return nil }
+            return id
+        }()
+        let key = FilmstripVisibleKey(
+            sortMode: sortMode,
+            showRejected: showRejected,
+            showUnrated: showUnrated,
+            showStars: showStars,
+            collapseActive: collapseActive,
+            expandedBurstID: expandedBurstID,
+            dataVersion: filmstripDataVersion
+        )
+        if let cached = filmstripVisibleCache, filmstripVisibleCacheKey == key {
+            return cached
+        }
+        let computed = computeFilmstripVisible(
+            collapseActive: collapseActive,
+            expandedBurstID: expandedBurstID
+        )
+        filmstripVisibleCache = computed
+        filmstripVisibleCacheKey = key
+        return computed
+    }
+
+    private func computeFilmstripVisible(
+        collapseActive: Bool,
+        expandedBurstID: Int?
+    ) -> FilmstripVisible {
+        filmstripVisibleComputesForTests &+= 1
+        let allVisible: [(offset: Int, element: PhotoEntry)] = sortedEntries
+            .enumerated()
+            .filter { isVisible($1) }
+            .map { (offset: $0.offset, element: $0.element) }
+        let useBrackets = sortMode == .name
+        let enumeratedVisible: [(offset: Int, element: PhotoEntry)] = {
+            guard collapseActive, useBrackets else { return allVisible }
+            var seen: Set<Int> = []
+            return allVisible.filter { _, entry in
+                guard let id = burstIDByStem[entry.stem],
+                      (burstSizesByID[id] ?? 0) >= 2
+                else { return true }                  // singleton
+                if id == expandedBurstID { return true } // expanded
+                return seen.insert(id).inserted       // 1st of burst
+            }
+        }()
+        var firstByBurst: [Int: Int] = [:]
+        var lastByBurst: [Int: Int] = [:]
+        if useBrackets {
+            for (vIdx, pair) in enumeratedVisible.enumerated() {
+                guard let id = burstIDByStem[pair.element.stem],
+                      (burstSizesByID[id] ?? 0) >= 2 else { continue }
+                if firstByBurst[id] == nil { firstByBurst[id] = vIdx }
+                lastByBurst[id] = vIdx
+            }
+        }
+        return FilmstripVisible(
+            allVisible: allVisible,
+            visible: enumeratedVisible,
+            firstByBurst: firstByBurst,
+            lastByBurst: lastByBurst
+        )
     }
 
     /// Numeric score for sort comparisons. Rejected (-1) sinks below unrated
@@ -216,12 +349,20 @@ final class ViewerState {
     }
 
     // Filters (session-only — not persisted). On = category is included
-    // in the filmstrip + navigation.
-    var showRejected: Bool = true
-    var showUnrated: Bool = true
+    // in the filmstrip + navigation. didSet hooks invalidate the
+    // filmstrip-visible cache so flipping a filter recomputes on the
+    // next read instead of returning stale results.
+    var showRejected: Bool = true {
+        didSet { if oldValue != showRejected { invalidateFilmstripVisibleCache() } }
+    }
+    var showUnrated: Bool = true {
+        didSet { if oldValue != showUnrated { invalidateFilmstripVisibleCache() } }
+    }
     /// Which star ratings (1...5) to include. Default: all. Toggling individual
     /// stars off in the status bar replaces the previous single "Rated" flag.
-    var showStars: Set<Int> = [1, 2, 3, 4, 5]
+    var showStars: Set<Int> = [1, 2, 3, 4, 5] {
+        didSet { if oldValue != showStars { invalidateFilmstripVisibleCache() } }
+    }
 
     enum RatingCategory: Sendable, Hashable {
         case rejected
@@ -600,6 +741,8 @@ final class ViewerState {
         burstPositionByStem.removeAll()
         sortedEntriesCache = nil
         shootStatsCache = nil
+        filmstripVisibleCache = nil
+        filmstripVisibleCacheKey = nil
         indexingStatus = .idle
         indexingProgress = .init()
         indexingTimings = .init()
@@ -1150,6 +1293,11 @@ final class ViewerState {
         burstIDByStem = ids
         burstSizesByID = sizes
         burstPositionByStem = positions
+        // Burst membership feeds the filmstrip's collapse + bracket
+        // logic; any rebuild of these tables must invalidate the
+        // filmstrip-visible cache or the strip would render against
+        // stale burst ids.
+        invalidateFilmstripVisibleCache()
         #if DEBUG
         let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
         Log.app.notice("recomputeBurstIDs: \(shoot.entries.count, privacy: .public) entries, \(ids.count, privacy: .public) burst stems, \(sizes.count, privacy: .public) bursts in \(ms, format: .fixed(precision: 1)) ms")
