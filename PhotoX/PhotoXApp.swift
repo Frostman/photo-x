@@ -44,6 +44,10 @@ struct PhotoXApp: App {
                     updater?.shootURLProvider = { [weak viewerState] in
                         viewerState?.shoot?.folderURL
                     }
+                    // Hand the state to the AppDelegate so the
+                    // quit-confirm path can inspect failed /
+                    // in-flight XMP writes.
+                    appDelegate.viewerState = viewerState
                     await bootstrap()
                 }
                 .onChange(of: scenePhase) { _, phase in
@@ -199,6 +203,12 @@ extension Notification.Name {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUserNotificationCenterDelegate {
+    /// Wired by `PhotoXApp` via `.onAppear` so the
+    /// `applicationShouldTerminate` quit-confirm can inspect failed
+    /// XMP writes + the coordinator's in-flight state. Weak so the
+    /// delegate doesn't artificially extend the state's lifetime.
+    weak var viewerState: ViewerState?
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
     }
@@ -294,15 +304,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
         return false
     }
 
-    /// Block quit while an export is in progress.
+    /// Block quit while an export is in progress, OR while XMP
+    /// writes have failed / are still in flight. Saving culling
+    /// decisions is the project's top promise (see project memory
+    /// `project_xmp_write_reliability.md`) — silently letting the
+    /// user quit with unsaved ratings would break it.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard ExportRunner.shared.isRunning else { return .terminateNow }
-        let alert = makeExportRunningAlert(verb: "quit")
-        if alert.runModal() == .alertSecondButtonReturn {
-            ExportRunner.shared.cancelAll()
-            return .terminateNow
+        // Export check first (existing behaviour). If the user picks
+        // "Cancel exports and quit", fall through to the XMP check;
+        // we can still bail on the XMP step before actually quitting.
+        if ExportRunner.shared.isRunning {
+            let alert = makeExportRunningAlert(verb: "quit")
+            if alert.runModal() == .alertSecondButtonReturn {
+                ExportRunner.shared.cancelAll()
+                // fall through to XMP check
+            } else {
+                return .terminateCancel
+            }
         }
-        return .terminateCancel
+
+        guard let state = viewerState else { return .terminateNow }
+        let failedCount = state.failedXMPWrites.count
+        if failedCount > 0 {
+            // Synchronous: we already know there are failures.
+            return runUnsavedXMPAlert(failedCount: failedCount)
+                ? .terminateNow : .terminateCancel
+        }
+        // No known failures, but writes might still be in flight on
+        // the coordinator. The actor check is async; reply via
+        // `.terminateLater` + `sender.reply(...)`.
+        Task { @MainActor in
+            let inFlight = await state.xmpWriter.hasInFlightWrites
+            guard inFlight else {
+                sender.reply(toApplicationShouldTerminate: true)
+                return
+            }
+            let proceed = self.runUnsavedXMPAlert(failedCount: 0)
+            sender.reply(toApplicationShouldTerminate: proceed)
+        }
+        return .terminateLater
+    }
+
+    /// Modal alert for the unsaved-XMP-writes case. Returns true if
+    /// the user chose to quit anyway, false if they want to stay.
+    private func runUnsavedXMPAlert(failedCount: Int) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "Unsaved rating changes"
+        alert.informativeText = failedCount > 0
+            ? "\(failedCount) write\(failedCount == 1 ? "" : "s") to XMP sidecar files have failed. Quitting now will lose them. Click \"Stay\" to review them in the Failed XMP Writes window."
+            : "Some rating writes are still being written to disk. Quitting now might lose them."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Stay")
+        let quitBtn = alert.addButton(withTitle: "Quit anyway")
+        quitBtn.hasDestructiveAction = true
+        return alert.runModal() == .alertSecondButtonReturn
     }
 
     /// Shared alert for "an export is running, are you sure you want to

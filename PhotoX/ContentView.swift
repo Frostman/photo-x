@@ -325,12 +325,14 @@ struct ContentView: View {
                 .help("Open another folder (⌘O)")
             }
 
-            // Export is its OWN ToolbarItem (not bundled with the other
-            // primaryActions) so the system treats it as a separate
-            // toolbar entry. The pill's explicit capsule background makes
-            // it visually distinct from the icon-only buttons that follow.
-            if state.shoot != nil || exportRunner.isRunning {
-                ToolbarItem(placement: .primaryAction) {
+            // Pill cluster: failed-writes (red, only when non-empty)
+            // sits LEFT of the export pill so its red colour catches
+            // the eye first. Grouped into one ToolbarItemGroup
+            // because the @ToolbarContentBuilder body caps at ~10
+            // top-level items and we're at the limit.
+            ToolbarItemGroup(placement: .primaryAction) {
+                FailedWritesToolbarPill(state: state)
+                if state.shoot != nil || exportRunner.isRunning {
                     ExportToolbarPill(state: state, showSheet: $showExportSheet)
                 }
             }

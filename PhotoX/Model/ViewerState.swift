@@ -590,6 +590,23 @@ final class ViewerState {
 
     let pipeline: DecodePipeline = DecodePipeline()
 
+    /// All XMP sidecar writes route through this actor — per-stem
+    /// serialization + retry (100 ms / 500 ms backoff) + a failure
+    /// stream that surfaces to the UI via `failedXMPWrites` and the
+    /// titlebar pill. **Never** write to XMP directly from this
+    /// class or from any other call site; see project memory
+    /// `project_xmp_write_reliability.md`.
+    let xmpWriter = XMPWriteCoordinator()
+
+    /// Last failed XMP write per stem (older failures for the same
+    /// file are overwritten — we only care about the most recent
+    /// state). Populated by the failure-consumer Task started in
+    /// `init`. Read by `FailedWritesView` (sorted by stem). When
+    /// non-empty, the red titlebar pill becomes visible.
+    var failedXMPWrites: [String: XMPWriteCoordinator.FailedWrite] = [:]
+
+    private var xmpFailureConsumerTask: Task<Void, Never>?
+
     /// Read live from UserDefaults so changes in Settings take effect on the
     /// next rating action — no app restart required.
     private func autoAdvanceAfterRating(source: RatingInputSource) -> Bool {
@@ -611,7 +628,49 @@ final class ViewerState {
         initialOverlays.afPoints = defaults.object(forKey: SettingsKey.afOverlayVisible) as? Bool
             ?? SettingsKey.Defaults.afOverlayVisible
         self.overlays = initialOverlays
+        startXMPFailureConsumer()
     }
+
+    /// Pump every event from `xmpWriter.failureStream` onto the
+    /// main actor and into `failedXMPWrites`. Started once at init
+    /// and runs for the lifetime of the ViewerState — never
+    /// cancelled. (Even after shoot switch we want to surface any
+    /// late-arriving failures for the previous shoot's writes.)
+    private func startXMPFailureConsumer() {
+        let stream = xmpWriter.failureStream
+        xmpFailureConsumerTask = Task { @MainActor [weak self] in
+            for await failure in stream {
+                guard let self else { return }
+                // Last write per stem wins — older failures for the
+                // same file get overwritten, so the list shows the
+                // current state per file, not a history.
+                self.failedXMPWrites[failure.stem] = failure
+                Log.app.error("XMP write FAILED after \(failure.attempts, privacy: .public) attempts: \(failure.stem, privacy: .public) \(failure.kind.description, privacy: .public) — \(failure.lastError, privacy: .public)")
+            }
+        }
+    }
+
+    /// Re-enqueue every currently-failed write. The dict is cleared
+    /// pre-emptively; anything that fails again will repopulate it
+    /// via the failure stream. Called by the failures-window
+    /// "Retry All" button.
+    func retryAllFailedXMPWrites() {
+        let snapshot = failedXMPWrites
+        failedXMPWrites.removeAll()
+        guard let shoot else { return }
+        for (stem, failed) in snapshot {
+            guard let entry = shoot.entries.first(where: { $0.stem == stem }) else { continue }
+            // Re-derive the intended value from the current in-memory
+            // state — that's what the user wanted; failed.kind is
+            // what the original (now-superseded) write was trying.
+            let current = entryXMPs[stem] ?? .empty
+            switch failed.kind {
+            case .rating: Task { await xmpWriter.writeRating(current.rating, for: entry) }
+            case .label:  Task { await xmpWriter.writeLabel(current.label,  for: entry) }
+            }
+        }
+    }
+
 
     /// Loads a shoot and focuses on a specific entry within it. Replaces the
     /// previous single-entry flow. Kicks off indexing BEFORE the first image
@@ -1660,28 +1719,16 @@ final class ViewerState {
             nextPair()
         }
 
-        Task {
-            do {
-                try await Task.detached(priority: .userInitiated) {
-                    try XMPSidecarWriter.updateRating(rating, for: capturedEntry)
-                }.value
-                #if DEBUG
-                Log.app.notice("XMP write OK: \(capturedEntry.stem, privacy: .public) rating=\(rating.map(String.init) ?? "nil", privacy: .public)")
-                #endif
-            } catch {
-                // Rollback. Only touch currentXMP if the user hasn't navigated
-                // away — otherwise we'd clobber unrelated state.
-                if self.entry?.id == capturedEntry.id {
-                    self.currentXMP = previous
-                }
-                self.entryXMPs[capturedEntry.stem] = previous
-                if !xmpWasOnDisk { self.stemsWithXMPOnDisk.remove(capturedEntry.stem) }
-                self.invalidateSortedEntriesCache()
-                self.invalidateShootStatsCache()
-                self.errorMessage = "Failed to write XMP for \(capturedEntry.stem): \(String(describing: error))"
-                Log.app.error("XMP write FAILED: \(capturedEntry.stem, privacy: .public) — \(String(describing: error), privacy: .public)")
-            }
-        }
+        // Reliable disk write — retry + per-stem serialization +
+        // failure surfaced via `failedXMPWrites` / titlebar pill.
+        // The optimistic in-memory mutation above is intentionally
+        // NOT reverted on failure: it reflects the user's intent
+        // and the failure surface (the persistent pill) is what
+        // tells them the write didn't make it to disk. Reverting
+        // silently after a failure would look like a phantom undo.
+        // See project memory `project_xmp_write_reliability.md`.
+        _ = previous; _ = xmpWasOnDisk      // kept for future undo capture
+        Task { await xmpWriter.writeRating(rating, for: capturedEntry) }
     }
 
     /// R toggles rating between -1 (reject) and nil (clear). Anything else
@@ -1704,20 +1751,8 @@ final class ViewerState {
         stemsWithXMPOnDisk.insert(target.stem)
         invalidateSortedEntriesCache()
         invalidateShootStatsCache()
-        Task {
-            do {
-                try await Task.detached(priority: .userInitiated) {
-                    try XMPSidecarWriter.updateRating(rating, for: target)
-                }.value
-            } catch {
-                self.entryXMPs[target.stem] = previous
-                if !xmpWasOnDisk { self.stemsWithXMPOnDisk.remove(target.stem) }
-                self.invalidateSortedEntriesCache()
-                self.invalidateShootStatsCache()
-                self.errorMessage = "Failed to write XMP for \(target.stem): \(String(describing: error))"
-                Log.app.error("XMP write FAILED: \(target.stem, privacy: .public) — \(String(describing: error), privacy: .public)")
-            }
-        }
+        _ = previous; _ = xmpWasOnDisk      // kept for future undo capture
+        Task { await xmpWriter.writeRating(rating, for: target) }
     }
 
     /// `g` shortcut: reject other members of the displayed entry's
@@ -1771,26 +1806,8 @@ final class ViewerState {
             nextPair()
         }
 
-        Task {
-            do {
-                try await Task.detached(priority: .userInitiated) {
-                    try XMPSidecarWriter.updateLabel(label, for: capturedEntry)
-                }.value
-                #if DEBUG
-                Log.app.notice("XMP label write OK: \(capturedEntry.stem, privacy: .public) label=\(label ?? "nil", privacy: .public)")
-                #endif
-            } catch {
-                if self.entry?.id == capturedEntry.id {
-                    self.currentXMP = previous
-                }
-                self.entryXMPs[capturedEntry.stem] = previous
-                if !xmpWasOnDisk { self.stemsWithXMPOnDisk.remove(capturedEntry.stem) }
-                self.invalidateSortedEntriesCache()
-                self.invalidateShootStatsCache()
-                self.errorMessage = "Failed to write XMP label for \(capturedEntry.stem): \(String(describing: error))"
-                Log.app.error("XMP label write FAILED: \(capturedEntry.stem, privacy: .public) — \(String(describing: error), privacy: .public)")
-            }
-        }
+        _ = previous; _ = xmpWasOnDisk      // kept for future undo capture
+        Task { await xmpWriter.writeLabel(label, for: capturedEntry) }
     }
 
     /// Click same color again clears.
