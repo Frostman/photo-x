@@ -508,6 +508,18 @@
         type="application/octet-stream"
         sparkle:edSignature="Qq8CIu0ZviVYjYaJcr5lmnkPBJunqa6sg2Wz0jLPexPwWVAtGcnwx+DHwC3Lv3PaNL94ETmg1PPRKLJr9Jf/Dg==" length="11313575" />
     </item>
+    <item>
+      <title>v0.259.0-326ef2985</title>
+      <pubDate>Fri, 22 May 2026 19:28:29 -0700</pubDate>
+      <sparkle:version>259</sparkle:version>
+      <sparkle:shortVersionString>0.259.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[<ul><li>Settings: expose cache sizes + prefetch radius with live memory math</li></ul>]]></description>
+      <enclosure
+        url="https://github.com/Frostman/photo-x/releases/download/v0.259.0/PhotoX-v0.259.0-326ef2985.dmg"
+        type="application/octet-stream"
+        sparkle:edSignature="9yTnrvRFJ6MyUrCa3hCtw6s0NOPQqUGhTVvRWhImV8MW3MboJl510FyS36t9M3ClPssiiyyTa/Jn4ytxKmKODg==" length="11479655" />
+    </item>
     <!-- scripts/release.sh splices new <item> entries here, just before </channel>. -->
   </channel>
 </rss>
