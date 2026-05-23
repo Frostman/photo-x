@@ -55,7 +55,11 @@ final class MTLTextureCache {
     /// Insertion order, MRU at the end. Eviction pops from the front.
     private var order: [DecodeKey] = []
     private var inflight: [DecodeKey: Task<Entry, Error>] = [:]
-    private let capacity: Int
+    /// User-tunable via Settings → Advanced. `setCapacity` mutates this
+    /// and evicts overflow. Initial value seeded from AppDefaults
+    /// (`SettingsKey.textureCacheCapacity`) so a user-tuned cap takes
+    /// effect on launch, not just after the Settings window is opened.
+    private(set) var capacity: Int
 
     /// Test-only accessor for the shared cache's capacity. Lets the
     /// MTLTextureCacheTests assert LRU eviction against whatever the
@@ -75,7 +79,50 @@ final class MTLTextureCache {
         self.device = device
         self.textureLoader = MTKTextureLoader(device: device)
         self.commandQueue = queue
-        self.capacity = capacity
+        // AppDefaults lookup with explicit fallback: `integer(forKey:)`
+        // returns 0 for missing keys, which would silently disable the
+        // cache. Use object(forKey:) to detect the missing-key case.
+        let stored = AppDefaults.shared.object(forKey: SettingsKey.textureCacheCapacity) as? Int
+        self.capacity = max(1, stored ?? capacity)
+    }
+
+    /// Set a new capacity at runtime (used by Settings → Advanced).
+    /// Clamps to ≥ 1 and evicts oldest entries until the cap is
+    /// honoured. Currently-bound textures held by `CanvasRenderer`
+    /// stay alive (strong ref outside the cache); only the cache's
+    /// ability to serve future hits is lost.
+    func setCapacity(_ newCapacity: Int) {
+        let clamped = max(1, newCapacity)
+        guard clamped != capacity else { return }
+        capacity = clamped
+        while order.count > capacity {
+            let evict = order.removeFirst()
+            entries.removeValue(forKey: evict)
+        }
+    }
+
+    /// Snapshot of cache state for the Settings → Advanced live
+    /// memory display. `meanTextureBytes` includes the standard ~33%
+    /// mipchain overhead (Metal auto-generates 5–6 mip levels per
+    /// upload in `uploadTexture`). Zero when the cache is empty.
+    struct Stats: Sendable {
+        let count: Int
+        let capacity: Int
+        let meanTextureBytes: Int
+    }
+
+    var stats: Stats {
+        let n = entries.count
+        guard n > 0 else { return Stats(count: 0, capacity: capacity, meanTextureBytes: 0) }
+        var totalBase = 0
+        for entry in entries.values {
+            let w = Int(entry.pixelSize.width)
+            let h = Int(entry.pixelSize.height)
+            totalBase += w * h * 4
+        }
+        // Mipmaps add ~1/3 (1 + 1/4 + 1/16 + ... = 4/3).
+        let withMips = (totalBase * 4) / 3
+        return Stats(count: n, capacity: capacity, meanTextureBytes: withMips / n)
     }
 
     /// Synchronous cache lookup. Returns nil if not present; bumps the

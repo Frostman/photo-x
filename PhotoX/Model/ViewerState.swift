@@ -1902,7 +1902,20 @@ final class ViewerState {
     /// gets the GPU first.
     private func prefetchNeighborHEIFs() {
         let entries = sortedEntries
-        let neighborOffsets = [-1, 1]
+        // Prefetch radius from Settings → Advanced. Clamped to [0, 3]
+        // — 0 disables prefetch entirely; >3 has never been tested and
+        // the GPU upload pipeline contention at ±2+ is already
+        // documented above. `integer(forKey:)` returns 0 for missing
+        // keys, which we explicitly fall back to the default.
+        let stored = AppDefaults.shared.object(forKey: SettingsKey.prefetchRadius) as? Int
+        let radius = max(0, min(3, stored ?? SettingsKey.Defaults.prefetchRadius))
+        guard radius > 0 else {
+            // Cancel any in-flight prefetches and bail.
+            for (_, task) in prefetchTasks { task.cancel() }
+            prefetchTasks.removeAll()
+            return
+        }
+        let neighborOffsets = (1 ... radius).flatMap { [-$0, $0] }
         let neighborIndices = neighborOffsets
             .map { currentIndex + $0 }
             .filter { entries.indices.contains($0) }

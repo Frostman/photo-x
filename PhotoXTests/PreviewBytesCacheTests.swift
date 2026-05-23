@@ -113,4 +113,57 @@ final class PreviewBytesCacheTests: XCTestCase {
         XCTAssertTrue(hasX)
         XCTAssertFalse(hasY)
     }
+
+    // MARK: - setByteCapacity (live re-tuning from Settings)
+
+    func test_setByteCapacity_evictsToNewCap() async {
+        let cache = PreviewBytesCache(byteCapacity: 1000)
+        await cache.set(Data(count: 300), for: "/a")
+        await cache.set(Data(count: 300), for: "/b")
+        await cache.set(Data(count: 300), for: "/c")
+        // 900 used, under 1000 cap → no evictions yet.
+        let before = await cache.count
+        XCTAssertEqual(before, 3)
+        // Shrink to 500. /a (oldest) + /b should evict; /c is MRU.
+        await cache.setByteCapacity(500)
+        let used = await cache.bytesUsed
+        let count = await cache.count
+        let hasA = await cache.contains("/a")
+        let hasB = await cache.contains("/b")
+        let hasC = await cache.contains("/c")
+        XCTAssertEqual(used, 300)
+        XCTAssertEqual(count, 1)
+        XCTAssertFalse(hasA, "/a should evict (oldest)")
+        XCTAssertFalse(hasB, "/b should evict")
+        XCTAssertTrue(hasC,  "/c is MRU — must stay")
+    }
+
+    func test_setByteCapacity_growthDoesNotEvict() async {
+        let cache = PreviewBytesCache(byteCapacity: 500)
+        await cache.set(Data(count: 200), for: "/a")
+        await cache.set(Data(count: 200), for: "/b")
+        await cache.setByteCapacity(5000)
+        let count = await cache.count
+        XCTAssertEqual(count, 2)
+    }
+
+    func test_setByteCapacity_clampsToOne() async {
+        let cache = PreviewBytesCache(byteCapacity: 1000)
+        await cache.set(Data(count: 100), for: "/a")
+        await cache.set(Data(count: 100), for: "/b")
+        await cache.setByteCapacity(-50)        // clamps to 1
+        // Even with cap=1, "never evict MRU" keeps /b alive.
+        let count = await cache.count
+        let hasB = await cache.contains("/b")
+        XCTAssertEqual(count, 1)
+        XCTAssertTrue(hasB)
+    }
+
+    func test_setByteCapacity_sameValue_isNoop() async {
+        let cache = PreviewBytesCache(byteCapacity: 1000)
+        await cache.set(Data(count: 100), for: "/a")
+        await cache.setByteCapacity(1000)
+        let count = await cache.count
+        XCTAssertEqual(count, 1)
+    }
 }

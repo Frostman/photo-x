@@ -68,6 +68,69 @@ final class MTLTextureCacheTests: XCTestCase {
         XCTAssertNotNil(MTLTextureCache.shared.get(key(id: "k\(cap)")))
     }
 
+    // MARK: - setCapacity (live re-tuning from Settings)
+
+    @MainActor
+    func test_setCapacity_shrink_evictsOverflow() async throws {
+        // Fill to a known-large capacity, then shrink — the oldest
+        // entries should evict immediately, MRU survives.
+        let originalCap = MTLTextureCache.capacityForTests
+        MTLTextureCache.shared.clear()
+        for i in 0 ..< 10 {
+            _ = try await MTLTextureCache.shared.warm(cgImage: tinyImage(), key: key(id: "s\(i)"), orientation: 1)
+        }
+        XCTAssertEqual(MTLTextureCache.shared.count, 10)
+        MTLTextureCache.shared.setCapacity(3)
+        XCTAssertEqual(MTLTextureCache.shared.count, 3, "Shrink to 3 must evict 7 oldest")
+        // s0..s6 should be gone; s7..s9 should survive (MRU end).
+        for i in 0 ..< 7 {
+            XCTAssertNil(MTLTextureCache.shared.get(key(id: "s\(i)")), "s\(i) should evict")
+        }
+        for i in 7 ..< 10 {
+            XCTAssertNotNil(MTLTextureCache.shared.get(key(id: "s\(i)")), "s\(i) should survive")
+        }
+        // Restore for other tests.
+        MTLTextureCache.shared.setCapacity(originalCap)
+    }
+
+    @MainActor
+    func test_setCapacity_growth_doesNotEvict() async throws {
+        let originalCap = MTLTextureCache.capacityForTests
+        MTLTextureCache.shared.clear()
+        for i in 0 ..< 4 {
+            _ = try await MTLTextureCache.shared.warm(cgImage: tinyImage(), key: key(id: "g\(i)"), orientation: 1)
+        }
+        MTLTextureCache.shared.setCapacity(100)
+        XCTAssertEqual(MTLTextureCache.shared.count, 4, "Growth must not evict")
+        MTLTextureCache.shared.setCapacity(originalCap)
+    }
+
+    @MainActor
+    func test_setCapacity_clampsToOne() async throws {
+        let originalCap = MTLTextureCache.capacityForTests
+        MTLTextureCache.shared.clear()
+        for i in 0 ..< 3 {
+            _ = try await MTLTextureCache.shared.warm(cgImage: tinyImage(), key: key(id: "c\(i)"), orientation: 1)
+        }
+        MTLTextureCache.shared.setCapacity(-5)        // clamps to 1
+        XCTAssertEqual(MTLTextureCache.shared.count, 1)
+        XCTAssertNotNil(MTLTextureCache.shared.get(key(id: "c2")),
+                        "Only the MRU (last inserted) should survive cap=1")
+        MTLTextureCache.shared.setCapacity(originalCap)
+    }
+
+    @MainActor
+    func test_setCapacity_sameValue_isNoop() async throws {
+        let originalCap = MTLTextureCache.capacityForTests
+        MTLTextureCache.shared.clear()
+        for i in 0 ..< 5 {
+            _ = try await MTLTextureCache.shared.warm(cgImage: tinyImage(), key: key(id: "n\(i)"), orientation: 1)
+        }
+        MTLTextureCache.shared.setCapacity(MTLTextureCache.capacityForTests)
+        XCTAssertEqual(MTLTextureCache.shared.count, 5)
+        MTLTextureCache.shared.setCapacity(originalCap)
+    }
+
     @MainActor
     func test_get_bumpsMRU_protectingFromEviction() async throws {
         // Insert capacity entries, then access k0 → k0 becomes MRU.

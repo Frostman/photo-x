@@ -26,8 +26,17 @@ final class DecodePipeline {
 
     private var inflight: [DecodeKey: Task<DecodedImage, Error>] = [:]
 
-    init(previewBytesCapacity: Int = 2 * 1024 * 1024 * 1024) {
-        self.previewBytes = PreviewBytesCache(byteCapacity: previewBytesCapacity)
+    init(previewBytesCapacity: Int? = nil) {
+        // Honor the user-tuned cap from Settings → Advanced. The Int?
+        // parameter override lets tests pin a specific value; nil =
+        // read from AppDefaults (with the standard Defaults fallback
+        // for missing keys). `object(forKey:) as? Int` distinguishes
+        // "unset" from "user set it to 0" — the latter would silently
+        // disable the cache via `integer(forKey:)`.
+        let configured = (AppDefaults.shared.object(forKey: SettingsKey.previewBytesCacheMB) as? Int)
+                         ?? SettingsKey.Defaults.previewBytesCacheMB
+        let cap = previewBytesCapacity ?? (max(1, configured) * 1024 * 1024)
+        self.previewBytes = PreviewBytesCache(byteCapacity: cap)
         self.previewDecoder = PreviewDecoder(bytesCache: self.previewBytes)
     }
 

@@ -16,11 +16,25 @@ actor PreviewBytesCache {
     private var entries: [String: Data] = [:]
     /// Most-recently-used at the END; eviction pops from the FRONT.
     private var order: [String] = []
-    let byteCapacity: Int
+    /// User-tunable via Settings → Advanced (see `setByteCapacity`).
+    /// `private(set)` so callers can read but only the cache itself
+    /// mutates — wrap behind setByteCapacity so eviction runs too.
+    private(set) var byteCapacity: Int
     private(set) var bytesUsed: Int = 0
 
     init(byteCapacity: Int = 2 * 1024 * 1024 * 1024) {
         self.byteCapacity = byteCapacity
+    }
+
+    /// Resize the cache. Evicts oldest entries until `bytesUsed` is
+    /// under the new cap (subject to the same "never evict the
+    /// single MRU" rule as automatic eviction). Used by Settings →
+    /// Advanced for live re-tuning without restart.
+    func setByteCapacity(_ newCap: Int) {
+        let clamped = max(1, newCap)
+        guard clamped != byteCapacity else { return }
+        byteCapacity = clamped
+        evictIfNeeded()
     }
 
     func get(_ path: String) -> Data? {

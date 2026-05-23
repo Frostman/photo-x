@@ -108,9 +108,12 @@ struct PhotoXApp: App {
         }
 
         // Standard macOS Settings scene — binds ⌘, automatically and adds
-        // "Settings…" to the app menu.
+        // "Settings…" to the app menu. The viewerState environment lets
+        // Settings → Advanced read live cache stats (per-texture bytes,
+        // current count, etc.) from the currently-loaded shoot.
         Settings {
             SettingsView()
+                .environment(viewerState)
                 .preferredColorScheme(appearance.colorScheme)
         }
     }
