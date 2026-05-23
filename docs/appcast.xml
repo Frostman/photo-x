@@ -520,6 +520,18 @@
         type="application/octet-stream"
         sparkle:edSignature="9yTnrvRFJ6MyUrCa3hCtw6s0NOPQqUGhTVvRWhImV8MW3MboJl510FyS36t9M3ClPssiiyyTa/Jn4ytxKmKODg==" length="11479655" />
     </item>
+    <item>
+      <title>v0.264.0-56c12b3e4</title>
+      <pubDate>Sat, 23 May 2026 14:22:55 -0700</pubDate>
+      <sparkle:version>264</sparkle:version>
+      <sparkle:shortVersionString>0.264.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[<ul><li>Sidebar: sync displayedXMP after rating / label / reject / undo</li><li>Burst reject: include labeled-but-unscored siblings in unrated scope</li><li>Ratings: Cmd+Z undo / Cmd+Shift+Z redo, stem-based, with selection jump</li><li>XMP writes: reliable per-stem serialization, retry, and persistent failure surface</li></ul>]]></description>
+      <enclosure
+        url="https://github.com/Frostman/photo-x/releases/download/v0.264.0/PhotoX-v0.264.0-56c12b3e4.dmg"
+        type="application/octet-stream"
+        sparkle:edSignature="gkL1XrBoP7o9+mvT6EfWCi/aiE7+osA98kfXnb2lpxHbUQFyiGBvd5yZbfo3Qv9RIUDczBb69o0pYAF62I1DDw==" length="11515521" />
+    </item>
     <!-- scripts/release.sh splices new <item> entries here, just before </channel>. -->
   </channel>
 </rss>
