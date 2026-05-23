@@ -496,6 +496,18 @@
         type="application/octet-stream"
         sparkle:edSignature="T6kRiP8VMxZmP0mLSqHLBMefn0GE/cry4wY2CSVuMrp1jkpNvwLeW5jrYtq5ecQKCeQbCJn7hz7/2kLP7v8nAg==" length="11323472" />
     </item>
+    <item>
+      <title>v0.257.0-eb1c2d0f8</title>
+      <pubDate>Fri, 22 May 2026 18:49:27 -0700</pubDate>
+      <sparkle:version>257</sparkle:version>
+      <sparkle:shortVersionString>0.257.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[<ul><li>Filmstrip: cache visible/collapse/bracket tables on ViewerState</li><li>Canvas: bump MTLTextureCache capacity 20 → 32</li></ul>]]></description>
+      <enclosure
+        url="https://github.com/Frostman/photo-x/releases/download/v0.257.0/PhotoX-v0.257.0-eb1c2d0f8.dmg"
+        type="application/octet-stream"
+        sparkle:edSignature="Qq8CIu0ZviVYjYaJcr5lmnkPBJunqa6sg2Wz0jLPexPwWVAtGcnwx+DHwC3Lv3PaNL94ETmg1PPRKLJr9Jf/Dg==" length="11313575" />
+    </item>
     <!-- scripts/release.sh splices new <item> entries here, just before </channel>. -->
   </channel>
 </rss>
