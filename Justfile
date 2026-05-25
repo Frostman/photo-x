@@ -139,6 +139,27 @@ icon:
 screenshots:
     ./scripts/screenshots.sh
 
+# Print the release version that would be produced from the current
+# tree — same derivation as scripts/release.sh:
+#   v0.<commit-count>.0-<sha9>[-dirty]
+# Useful as a dry-run before `just release` to confirm what tag /
+# MARKETING_VERSION / CURRENT_PROJECT_VERSION will land.
+version:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    COMMITS=$(git rev-list --count HEAD)
+    SHA9=$(git rev-parse --short=9 HEAD)
+    DIRTY=""
+    [ -n "$(git status --porcelain)" ] && DIRTY="-dirty"
+    MARKETING="0.${COMMITS}.0"
+    BUILD="${COMMITS}"
+    DESCRIBE="v${MARKETING}-${SHA9}${DIRTY}"
+    TAG="v${MARKETING}"
+    echo "describe:  $DESCRIBE"
+    echo "tag:       $TAG"
+    echo "marketing: $MARKETING"
+    echo "build:     $BUILD"
+
 # Cut a release via scripts/release.sh.
 #   just release              → full release (build, sign, DMG, publish)
 #   just release --verify-only → build + tests, no publish
