@@ -4,7 +4,7 @@
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
-LIBRAW_VERSION="0.21.4"
+LIBRAW_VERSION="0.22.1"
 # exiftool.org only keeps the latest production release at a known URL;
 # discover it from the homepage instead of pinning a version that 404s later.
 
