@@ -544,6 +544,18 @@
         type="application/octet-stream"
         sparkle:edSignature="H5lUP+AqYXAbxIvosF1XSX6F4i2R7ZPiWkxhVfBz221qlh5kBjyouh8LKxYlGxM+/xWF/XsJxv4TPMqBEpoRCA==" length="11529429" />
     </item>
+    <item>
+      <title>v0.276.0-a155513f7</title>
+      <pubDate>Tue, 26 May 2026 13:37:08 -0700</pubDate>
+      <sparkle:version>276</sparkle:version>
+      <sparkle:shortVersionString>0.276.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[<ul><li>Undo: burst-reject lands back on the keeper</li><li>Undo: cap stack depth at 500 (massive-shoot memory bound)</li><li>Undo observer: drop Checkpoint subscription (canRedo feedback loop)</li><li>Stats: send app_version + app_describe, add Send now, drop Reset</li><li>Telemetry: inject POSTHOG_API_KEY into Debug + Release builds</li><li>Settings: close window on Esc</li><li>Metrics: local-only counters + opt-in PostHog telemetry</li></ul>]]></description>
+      <enclosure
+        url="https://github.com/Frostman/photo-x/releases/download/v0.276.0/PhotoX-v0.276.0-a155513f7.dmg"
+        type="application/octet-stream"
+        sparkle:edSignature="XNskmZ9akxcNYaPSEvGic4fcnGRVCMj6NwyE2AmXFAzX4j3w9bMR+pn80VoG3ImoFhXc9clVgabRkpY6s5nsAg==" length="11555813" />
+    </item>
     <!-- scripts/release.sh splices new <item> entries here, just before </channel>. -->
   </channel>
 </rss>
