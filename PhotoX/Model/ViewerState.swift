@@ -1989,6 +1989,15 @@ final class ViewerState {
         // the user would have to mash Cmd+Z N times to revert a
         // single G press.
         undoManager.beginUndoGrouping()
+        // Register the keeper-jump undo FIRST. NSUndoManager
+        // invokes a group's actions in REVERSE registration order,
+        // so this runs LAST on Cmd+Z — after every per-sibling
+        // revert lands, the user is jumped back to the entry they
+        // pressed G on. The keeper navigation is symmetric on
+        // redo via recursive re-register inside the handler (the
+        // original action was rooted at the keeper, so redo lands
+        // there too).
+        registerBurstRejectKeeperJump(keeperStem: stem)
         // Set the name BEFORE endUndoGrouping — with
         // groupsByEvent=false (e.g., in tests) setActionName
         // requires an open group; calling it after end fires an
@@ -2012,6 +2021,22 @@ final class ViewerState {
             case .all:
                 setRating(-1, for: sib)
             }
+        }
+    }
+
+    /// Burst-reject keeper-navigation undo. Registered at the head
+    /// of the burst-reject group so it executes LAST on Cmd+Z; the
+    /// recursive re-register inside the handler makes redo
+    /// symmetric (both undo AND redo navigate back to the entry
+    /// the user pressed G on). Stem is resolved at apply time, so
+    /// a sort/filter reorder between the action and the undo
+    /// doesn't misdirect.
+    private func registerBurstRejectKeeperJump(keeperStem: String) {
+        undoManager.registerUndo(withTarget: self) { state in
+            if let idx = state.sortedEntries.firstIndex(where: { $0.stem == keeperStem }) {
+                state.navigate(to: idx)
+            }
+            state.registerBurstRejectKeeperJump(keeperStem: keeperStem)
         }
     }
 

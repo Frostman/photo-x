@@ -103,6 +103,73 @@ final class ViewerStateUndoTests: XCTestCase {
         XCTAssertNotEqual(state.entryXMPs["A3"]?.rating, -1)
     }
 
+    func test_burstReject_afterScoring_undoesBurstFirst_thenScore() {
+        let state = makeState(stems: ["A1", "A2", "A3"],
+                              seq: ["A1": 1, "A2": 2, "A3": 3])
+        // User sequence: navigate to A2, rate 5, then G to
+        // reject the rest of the burst.
+        state.navigate(to: 1)
+        state.displayedIndex = 1
+        state.setRating(5)
+        XCTAssertEqual(state.entryXMPs["A2"]?.rating, 5)
+        state.rejectBurstSiblings(scope: .all)
+        XCTAssertEqual(state.entryXMPs["A1"]?.rating, -1)
+        XCTAssertEqual(state.entryXMPs["A3"]?.rating, -1)
+
+        // First Cmd+Z: most recent action (burst reject) should
+        // unwind, leaving the score intact.
+        state.undoManager.undo()
+        XCTAssertNotEqual(state.entryXMPs["A1"]?.rating, -1,
+                          "first undo should revert burst reject on A1")
+        XCTAssertNotEqual(state.entryXMPs["A3"]?.rating, -1,
+                          "first undo should revert burst reject on A3")
+        XCTAssertEqual(state.entryXMPs["A2"]?.rating, 5,
+                       "score on the keeper must SURVIVE the first undo")
+
+        // Second Cmd+Z: now the score gets cleared.
+        state.undoManager.undo()
+        XCTAssertNil(state.entryXMPs["A2"]?.rating,
+                     "second undo clears the score on the keeper")
+    }
+
+    func test_undoBurstReject_jumpsBackToKeeper() {
+        let state = makeState(stems: ["A1", "A2", "A3"],
+                              seq: ["A1": 1, "A2": 2, "A3": 3])
+        // Navigate to A2. In production, displayedIndex is bumped
+        // to match by `commitDisplayed` (called from the canvas
+        // after texture bind); the test has no canvas, so mimic
+        // the post-commit state explicitly. rejectBurstSiblings
+        // captures the keeper via `displayedEntry`, not currentIndex.
+        state.navigate(to: 1)
+        state.displayedIndex = 1
+        XCTAssertEqual(state.displayedEntry?.stem, "A2")
+        state.rejectBurstSiblings(scope: .all)
+        XCTAssertEqual(state.entryXMPs["A1"]?.rating, -1)
+        XCTAssertEqual(state.entryXMPs["A3"]?.rating, -1)
+        XCTAssertEqual(state.currentIndex, 1,
+                       "G keeps the user on the keeper")
+
+        // Navigate away, then Cmd+Z. Should restore A1 + A3 AND
+        // jump back to A2 (the keeper).
+        state.navigate(to: 0)
+        XCTAssertEqual(state.currentIndex, 0)
+        state.undoManager.undo()
+        XCTAssertNotEqual(state.entryXMPs["A1"]?.rating, -1,
+                          "A1 reverted")
+        XCTAssertNotEqual(state.entryXMPs["A3"]?.rating, -1,
+                          "A3 reverted")
+        XCTAssertEqual(state.currentIndex, 1,
+                       "undo lands back on the keeper A2")
+
+        // Redo should re-reject and again land on the keeper.
+        state.navigate(to: 0)
+        state.undoManager.redo()
+        XCTAssertEqual(state.entryXMPs["A1"]?.rating, -1)
+        XCTAssertEqual(state.entryXMPs["A3"]?.rating, -1)
+        XCTAssertEqual(state.currentIndex, 1,
+                       "redo also lands on the keeper A2")
+    }
+
     // MARK: - stem-based resolution
 
     func test_undoFindsCorrectEntry_evenAfterSortChange() {
