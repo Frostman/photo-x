@@ -35,7 +35,7 @@ final class TelemetryUploaderTests: XCTestCase {
         )
         let result = await uploader.flush(
             counters: .zero, firstLaunchAt: Date(),
-            appVersion: "0.0.1", osVersion: "15.4"
+            appVersion: "0.0.1", appDescribe: "0.0.1", osVersion: "15.4"
         )
         XCTAssertFalse(result.success)
         XCTAssertEqual(StubURLProtocol.capturedRequests.count, 0,
@@ -60,7 +60,9 @@ final class TelemetryUploaderTests: XCTestCase {
 
         let result = await uploader.flush(
             counters: counters, firstLaunchAt: firstLaunch,
-            appVersion: "0.267.0", osVersion: "15.4"
+            appVersion: "0.267.0",
+            appDescribe: "v0.267.0-c4ed16809-dirty",
+            osVersion: "15.4"
         )
 
         XCTAssertTrue(result.success)
@@ -82,6 +84,8 @@ final class TelemetryUploaderTests: XCTestCase {
         XCTAssertEqual(props["$lib_version"] as? String, "0.267.0")
         XCTAssertEqual(props["$os"] as? String, "macOS")
         XCTAssertEqual(props["$os_version"] as? String, "15.4")
+        XCTAssertEqual(props["app_version"] as? String, "0.267.0")
+        XCTAssertEqual(props["app_describe"] as? String, "v0.267.0-c4ed16809-dirty")
         XCTAssertEqual(props["app_opens"] as? Int, 142)
         XCTAssertEqual(props["photos_seen"] as? Int, 9831)
         XCTAssertEqual(props["shoots_opened"] as? Int, 12)
@@ -103,9 +107,9 @@ final class TelemetryUploaderTests: XCTestCase {
         )
 
         _ = await uploader.flush(counters: .zero, firstLaunchAt: Date(),
-                                 appVersion: "1", osVersion: "1")
+                                 appVersion: "1", appDescribe: "1", osVersion: "1")
         _ = await uploader.flush(counters: .zero, firstLaunchAt: Date(),
-                                 appVersion: "1", osVersion: "1")
+                                 appVersion: "1", appDescribe: "1", osVersion: "1")
         XCTAssertEqual(StubURLProtocol.capturedBodies.count, 2)
 
         let id1 = try Self.distinctID(from: StubURLProtocol.capturedBodies[0])
@@ -130,7 +134,7 @@ final class TelemetryUploaderTests: XCTestCase {
         let c3 = UsageMetrics.Counters(appOpens: 5)
         for c in [c1, c2, c3] {
             _ = await uploader.flush(counters: c, firstLaunchAt: Date(),
-                                     appVersion: "1", osVersion: "1")
+                                     appVersion: "1", appDescribe: "1", osVersion: "1")
         }
         XCTAssertEqual(StubURLProtocol.capturedBodies.count, 3)
         let opens = try StubURLProtocol.capturedBodies.map {
@@ -152,7 +156,7 @@ final class TelemetryUploaderTests: XCTestCase {
         )
         let result = await uploader.flush(
             counters: .zero, firstLaunchAt: Date(),
-            appVersion: "1", osVersion: "1"
+            appVersion: "1", appDescribe: "1", osVersion: "1"
         )
         XCTAssertFalse(result.success)
         XCTAssertNotNil(result.error)

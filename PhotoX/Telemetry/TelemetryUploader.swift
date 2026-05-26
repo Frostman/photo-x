@@ -53,6 +53,7 @@ actor TelemetryUploader {
     func flush(counters: UsageMetrics.Counters,
                firstLaunchAt: Date,
                appVersion: String,
+               appDescribe: String,
                osVersion: String) async -> Result
     {
         guard !apiKey.isEmpty else {
@@ -65,10 +66,23 @@ actor TelemetryUploader {
             "event": "usage_snapshot",
             "distinct_id": distinctID,
             "properties": [
+                // PostHog magic prefixes: $lib / $lib_version /
+                // $os / $os_version get cohort + filter affordances
+                // in the dashboard automatically. We mirror
+                // $lib_version into the explicitly-named
+                // `app_version` for queries that prefer readable
+                // property names.
                 "$lib": "photox",
                 "$lib_version": appVersion,
                 "$os": "macOS",
                 "$os_version": osVersion,
+                "app_version":       appVersion,
+                // Full git-derived string ("v0.267.0-c4ed16809-dirty"
+                // for releases, "v0.0.0-dev-<sha>[-dirty]" for
+                // dev). Dev builds otherwise all report
+                // app_version="0.0.0" and become indistinguishable
+                // from each other in the dashboard.
+                "app_describe":      appDescribe,
                 "app_opens":         counters.appOpens,
                 "photos_seen":       counters.photosSeen,
                 "shoots_opened":     counters.shootsOpened,

@@ -6,17 +6,24 @@ import SwiftUI
 /// call (e.g. the user navigates a photo while the window is open)
 /// re-renders the grid live.
 struct StatsView: View {
-    @Bindable var metrics: UsageMetrics
+    // @Observable triggers view re-evaluation on any tracked
+    // property read automatically — no @Bindable wrapper needed,
+    // and dropping it lets us read `lastUploadedAt` (private(set))
+    // which Bindable's dynamic-member subscript refuses.
+    var metrics: UsageMetrics
+    /// Invoked when the user clicks "Send now" or — kept as the
+    /// extension point — when the periodic loop ticks. The owning
+    /// window controller passes `{ await state.uploadTelemetryNow() }`
+    /// so the button drives the same code path as the auto-flush.
+    var onSendNow: () async -> Void = {}
     /// Invoked by the Esc key. The owning window controller passes
-    /// `{ self.close() }` so Esc dismisses the floating window
-    /// instead of triggering the destructive "Reset stats" path
-    /// (which previously stole `.cancelAction`).
+    /// `{ self.close() }` so Esc dismisses the floating window.
     var onClose: () -> Void = {}
 
     @AppStorage(SettingsKey.telemetryEnabled, store: AppDefaults.shared)
     private var telemetryEnabled = SettingsKey.Defaults.telemetryEnabled
 
-    @State private var showResetConfirm = false
+    @State private var isSending = false
 
     var body: some View {
         let total = metrics.total
@@ -29,9 +36,24 @@ struct StatsView: View {
             Spacer(minLength: 0)
             HStack {
                 Spacer()
-                Button("Reset stats…") {
-                    showResetConfirm = true
+                Button {
+                    Task {
+                        isSending = true
+                        await onSendNow()
+                        isSending = false
+                    }
+                } label: {
+                    if isSending {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Text("Send now")
+                    }
                 }
+                .disabled(!telemetryEnabled || isSending)
+                .help(telemetryEnabled
+                      ? "Upload the current totals to PostHog Cloud now."
+                      : "Enable telemetry in Settings → Privacy first.")
             }
         }
         // Hidden Esc trap — fires onClose() without surfacing a
@@ -48,15 +70,6 @@ struct StatsView: View {
         }
         .padding(20)
         .frame(minWidth: 380, minHeight: 420)
-        .alert("Reset all usage stats?",
-               isPresented: $showResetConfirm) {
-            Button("Cancel", role: .cancel) {}
-            Button("Reset", role: .destructive) {
-                Task { await metrics.reset() }
-            }
-        } message: {
-            Text("This zeroes every counter and writes the zeros to disk. The anonymous telemetry ID is NOT reset — re-enabling telemetry later stitches the new uploads to the same identity.")
-        }
     }
 
     // MARK: - subviews
@@ -105,14 +118,17 @@ struct StatsView: View {
                     .fill(telemetryEnabled ? Color.green : Color.secondary)
                     .frame(width: 8, height: 8)
                 Text(telemetryEnabled ? "Enabled" : "Disabled")
-                if telemetryEnabled, let last = metrics.lastPersistedAt {
-                    Text("·  last persisted \(Self.relativeFormatter.localizedString(for: last, relativeTo: Date()))")
+                if let last = metrics.lastUploadedAt {
+                    Text("·  last sent \(Self.formatRelative(from: last))")
+                        .foregroundStyle(.secondary)
+                } else if telemetryEnabled {
+                    Text("·  never sent")
                         .foregroundStyle(.secondary)
                 }
             }
             .font(.callout)
             if telemetryEnabled {
-                Text("Counters upload every \(TelemetryConfig.uploadIntervalDescription) (and on quit).")
+                Text("Counters upload every \(TelemetryConfig.uploadIntervalDescription) (and on quit). Click \u{201C}Send now\u{201D} below to upload immediately.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
@@ -138,6 +154,18 @@ struct StatsView: View {
     private static let relativeFormatter: RelativeDateTimeFormatter = {
         let f = RelativeDateTimeFormatter()
         f.unitsStyle = .short
+        f.dateTimeStyle = .named
         return f
     }()
+
+    /// Wrap RelativeDateTimeFormatter with a "just now" guard for
+    /// sub-minute deltas. Without it the formatter says "in 0 sec"
+    /// the instant after a successful send (date == now), which
+    /// reads as a bug. Also clamps tiny clock drift in the future
+    /// direction to "just now" rather than "in 1 sec".
+    private static func formatRelative(from date: Date) -> String {
+        let delta = Date().timeIntervalSince(date)
+        if delta < 60 { return "just now" }
+        return relativeFormatter.localizedString(for: date, relativeTo: Date())
+    }
 }

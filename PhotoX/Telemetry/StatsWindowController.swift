@@ -14,7 +14,7 @@ final class StatsWindowController {
     private var window: NSWindow?
 
     @MainActor
-    func show(metrics: UsageMetrics) {
+    func show(state: ViewerState) {
         if let window {
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
@@ -24,9 +24,15 @@ final class StatsWindowController {
         // trap inside StatsView; routed back through the
         // controller's close() so the reused-window cache stays
         // consistent with the visible state.
-        let view = StatsView(metrics: metrics) { [weak self] in
-            self?.close()
-        }
+        let view = StatsView(
+            metrics: state.metrics,
+            onSendNow: { [weak state] in
+                await state?.uploadTelemetryNow()
+            },
+            onClose: { [weak self] in
+                self?.close()
+            }
+        )
         let hosting = NSHostingView(rootView: view)
         let win = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 420, height: 460),

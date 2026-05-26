@@ -694,14 +694,22 @@ final class ViewerState {
         await metrics.flushPending()
         let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString")
             as? String ?? "0.0.0"
+        // GitDescribe is injected by release.sh / `just dev` (see
+        // project.yml's Info.plist properties). Falls back to
+        // appVersion when missing so PostHog never sees an empty
+        // string for app_describe.
+        let appDescribe = Bundle.main.object(forInfoDictionaryKey: "GitDescribe")
+            as? String ?? appVersion
         let osVersion = ProcessInfo.processInfo.operatingSystemVersionString
         let result = await telemetryUploader.flush(
             counters: metrics.total,
             firstLaunchAt: metrics.firstLaunchAt,
             appVersion: appVersion,
+            appDescribe: appDescribe,
             osVersion: osVersion
         )
         if result.success {
+            metrics.markUploaded(at: Date())
             Log.app.notice("telemetry: flush ok (status=\(result.httpStatus ?? -1, privacy: .public))")
         } else {
             Log.app.warning("telemetry: flush failed: \(result.error ?? "unknown", privacy: .public)")

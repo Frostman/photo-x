@@ -53,9 +53,14 @@ final class UsageMetrics {
     }
 
     enum Key {
-        static let counters       = "metrics.counters"
-        static let firstLaunchAt  = "metrics.firstLaunchAt"
+        static let counters        = "metrics.counters"
+        static let firstLaunchAt   = "metrics.firstLaunchAt"
         static let lastPersistedAt = "metrics.lastPersistedAt"
+        /// Wall-clock of the last successful PostHog upload. Set by
+        /// `markUploaded(at:)`; reads back via UserDefaults on init.
+        /// Stays set even after a telemetry toggle-off (so the user
+        /// can see when the last upload happened).
+        static let lastUploadedAt  = "metrics.lastUploadedAt"
     }
 
     /// Last on-disk total observed by THIS process. The stats window
@@ -83,6 +88,12 @@ final class UsageMetrics {
     /// PostHog. Persisted to UserDefaults so it survives process restart.
     private(set) var lastPersistedAt: Date?
 
+    /// Wall-clock of the last successful PostHog upload. nil if never
+    /// uploaded (telemetry disabled, no API key, or hasn't ticked
+    /// once yet). Persisted to UserDefaults so the stats window's
+    /// "last sent" line survives across launches.
+    private(set) var lastUploadedAt: Date?
+
     private let store: UserDefaults
     private let persistInterval: Duration
     private var persistTask: Task<Void, Never>?
@@ -102,10 +113,20 @@ final class UsageMetrics {
             self.firstLaunchAt = now
         }
         self.lastPersistedAt = store.object(forKey: Key.lastPersistedAt) as? Date
+        self.lastUploadedAt  = store.object(forKey: Key.lastUploadedAt)  as? Date
 
         if startBackgroundLoop {
             startBackgroundPersistLoop()
         }
+    }
+
+    /// Record that a successful PostHog upload landed at `date`.
+    /// Persisted to UserDefaults so the stats window can show
+    /// "last sent" across launches. Called by ViewerState's
+    /// `uploadTelemetryNow` after the uploader returns success.
+    func markUploaded(at date: Date) {
+        lastUploadedAt = date
+        store.set(date, forKey: Key.lastUploadedAt)
     }
 
     // UsageMetrics lives for the entire app lifetime — the persist

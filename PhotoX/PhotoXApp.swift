@@ -88,7 +88,7 @@ struct PhotoXApp: App {
                 // window action. No keyboard shortcut so a stray press
                 // during fast nav can't surface it accidentally.
                 Button {
-                    appDelegate.statsWindowController.show(metrics: viewerState.metrics)
+                    appDelegate.statsWindowController.show(state: viewerState)
                 } label: {
                     Label("Usage Stats…", systemImage: "chart.bar")
                 }
