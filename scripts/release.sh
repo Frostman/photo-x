@@ -99,6 +99,7 @@ xcodebuild -project PhotoX.xcodeproj -scheme PhotoX -configuration Release \
   MARKETING_VERSION="$MARKETING" \
   CURRENT_PROJECT_VERSION="$BUILD" \
   GIT_DESCRIBE="$DESCRIBE" \
+  POSTHOG_API_KEY="${POSTHOG_API_KEY:-}" \
   CODE_SIGN_IDENTITY="-" \
   CODE_SIGNING_REQUIRED=NO \
   CODE_SIGNING_ALLOWED=NO \
@@ -153,6 +154,7 @@ if [[ $VERIFY_ONLY -eq 1 ]]; then
   # PhotoX.app, which is what the tests assert against.
   xcodebuild -project PhotoX.xcodeproj -scheme PhotoX -configuration Debug \
     test -only-testing:PhotoXTests/BundledResourcesTests \
+    POSTHOG_API_KEY="${POSTHOG_API_KEY:-}" \
     >/dev/null
   echo "[release] verify-only OK"
   exit 0

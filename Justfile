@@ -61,7 +61,8 @@ dev:
     xcodebuild -scheme "$SCHEME" -configuration "$CONFIG" -destination "$DEST" -quiet build \
         MARKETING_VERSION="$MARKETING" \
         CURRENT_PROJECT_VERSION="$BUILD" \
-        GIT_DESCRIBE="$DESCRIBE"
+        GIT_DESCRIBE="$DESCRIBE" \
+        POSTHOG_API_KEY="$(just _posthog_key)"
 
     if [ ! -x "$EXE_PATH" ]; then
         echo "Error: build did not produce $EXE_PATH" >&2
@@ -85,11 +86,29 @@ dev:
 bootstrap *args:
     ./scripts/bootstrap.sh {{args}}
 
+# Print the PostHog ingest key, sourced from $POSTHOG_API_KEY (env)
+# or scripts/release.local.env (gitignored). Empty string when
+# neither is set — TelemetryUploader treats empty as a no-op, so
+# missing-key dev builds run fine without uploading anything.
+# Used by `just build` / `just dev` to inject the key as an
+# xcodebuild override; release.sh sources release.local.env
+# directly and forwards the same setting.
+_posthog_key:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -n "${POSTHOG_API_KEY:-}" ]; then
+        printf '%s' "$POSTHOG_API_KEY"
+    elif [ -f scripts/release.local.env ]; then
+        grep -E '^POSTHOG_API_KEY=' scripts/release.local.env \
+          | head -1 | cut -d= -f2- | tr -d '"' || true
+    fi
+
 # Compile-check the Debug target. Use this while editing — it's the
 # fast path that does NOT relaunch the dev app (unlike `just dev`).
 # No clean, no version injection — just enough to surface type errors.
 build:
-    xcodebuild -scheme PhotoX -configuration Debug -destination 'platform=macOS' build
+    xcodebuild -scheme PhotoX -configuration Debug -destination 'platform=macOS' build \
+        POSTHOG_API_KEY="$(just _posthog_key)"
 
 # Run the test suite (or a slice of it).
 #   just test                                              → full suite
