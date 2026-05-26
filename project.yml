@@ -83,6 +83,11 @@ targets:
         # Human-readable git-derived version. Default value used for ad-hoc
         # dev builds; scripts/release.sh overrides via xcodebuild GIT_DESCRIBE=…
         GitDescribe: $(GIT_DESCRIBE)
+        # PostHog ingest-only key (TelemetryUploader). Empty by default
+        # → uploader short-circuits as a no-op (safe for dev / CI / forks).
+        # Release builds can inject a real key via xcodebuild
+        # POSTHOG_API_KEY=phc_… (wired in scripts/release.sh).
+        POSTHOG_API_KEY: $(POSTHOG_API_KEY)
     settings:
       base:
         # MARKETING_VERSION and CURRENT_PROJECT_VERSION are PLACEHOLDERS.
@@ -98,6 +103,10 @@ targets:
         CURRENT_PROJECT_VERSION: "0"
         # Default GitDescribe for ad-hoc dev builds; release.sh overrides.
         GIT_DESCRIBE: "0.0.0-uninitialized"
+        # PostHog ingest key default. Empty → TelemetryUploader is a
+        # no-op. Real release builds inject via xcodebuild
+        # POSTHOG_API_KEY=phc_… (see scripts/release.sh).
+        POSTHOG_API_KEY: ""
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         # Obj-C++ bridge for LibRaw
         SWIFT_OBJC_BRIDGING_HEADER: PhotoX/PhotoX-Bridging-Header.h

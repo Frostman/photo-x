@@ -15,6 +15,15 @@ import Observation
 final class ExportRunner {
     static let shared = ExportRunner()
 
+    /// Notified each time a destination finishes a run cleanly
+    /// (.done — NOT .cancelled or .failed). ViewerState wires this
+    /// at startup to feed UsageMetrics so the stats window can show
+    /// lifetime exports + images-exported counters. One callback
+    /// per destination per batch: a 3-destination batch fires 3
+    /// times. Off-spec a-priori (a batch is one user action), but
+    /// matches what the per-destination success state actually means.
+    var onDestinationCompleted: (@MainActor (Summary) -> Void)?
+
     // MARK: - Public state
 
     enum DestinationState: Sendable {
@@ -554,6 +563,7 @@ final class ExportRunner {
             perDestination[dest.id] = .failed(detail, summary)
         } else {
             perDestination[dest.id] = .done(summary)
+            onDestinationCompleted?(summary)
         }
         perDestinationCompletedAt[dest.id] = Date()
         return summary
@@ -783,6 +793,7 @@ final class ExportRunner {
                 perDestination[dest.id] = .failed(detail, summary)
             } else {
                 perDestination[dest.id] = .done(summary)
+                onDestinationCompleted?(summary)
             }
             perDestinationCompletedAt[dest.id] = Date()
             summaries.append((dest, summary))

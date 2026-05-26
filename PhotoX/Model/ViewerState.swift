@@ -598,6 +598,31 @@ final class ViewerState {
     /// `project_xmp_write_reliability.md`.
     let xmpWriter = XMPWriteCoordinator()
 
+    /// Lifetime usage counters surfaced in the Stats window and (when
+    /// the user opts in) uploaded to PostHog. Mutators tick in-memory
+    /// only; a background task persists every
+    /// `TelemetryConfig.localPersistInterval`. Counters live across
+    /// shoots / app launches — never cleared by `resetForShootSwitch`.
+    let metrics = UsageMetrics()
+
+    /// PostHog upload client. API key comes from Info.plist
+    /// (`POSTHOG_API_KEY`); empty in dev builds without an injected
+    /// key — `flush` short-circuits as a no-op. Periodic flush task
+    /// kicked off in `init` reads `telemetryEnabled` from
+    /// UserDefaults at each tick, so toggling the setting takes
+    /// effect on the next 6-hour boundary without restart.
+    let telemetryUploader: TelemetryUploader = {
+        let key = Bundle.main.object(forInfoDictionaryKey: "POSTHOG_API_KEY")
+            as? String ?? ""
+        return TelemetryUploader(apiKey: key)
+    }()
+
+    /// Long-lived periodic telemetry-flush task. Always running;
+    /// each tick gates on `settings.telemetryEnabled`. Toggle-on
+    /// from Settings → Privacy also calls `uploadTelemetryNow()`
+    /// directly so the user sees an event in PostHog right away.
+    private var telemetryPeriodicTask: Task<Void, Never>?
+
     /// Standard Cocoa undo stack for rating / label / reject
     /// mutations. Cleared on shoot switch (cross-shoot undo makes
     /// no sense). The SwiftUI menu items in PhotoXApp call
@@ -646,6 +671,57 @@ final class ViewerState {
         self.overlays = initialOverlays
         startXMPFailureConsumer()
         startUndoStateObserver()
+        // Wire ExportRunner's per-destination completion event into
+        // UsageMetrics. Set after `metrics` is initialised — a
+        // captured weak self avoids the runner clinging to us if
+        // ViewerState is ever re-init'd (tests).
+        ExportRunner.shared.onDestinationCompleted = { [weak self] summary in
+            self?.metrics.recordExportCompleted(imageCount: summary.copied)
+        }
+        startTelemetryPeriodicLoop()
+    }
+
+    // MARK: - Telemetry
+
+    /// Snapshot the current totals (after a forced metrics persist) and
+    /// upload to PostHog. Called from the Settings → Privacy toggle on
+    /// the way ON, and from `startTelemetryPeriodicLoop`.
+    /// Returns immediately if telemetry is disabled or no API key
+    /// is present in the bundle.
+    func uploadTelemetryNow() async {
+        let enabled = AppDefaults.shared.bool(forKey: SettingsKey.telemetryEnabled)
+        guard enabled else { return }
+        await metrics.flushPending()
+        let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString")
+            as? String ?? "0.0.0"
+        let osVersion = ProcessInfo.processInfo.operatingSystemVersionString
+        let result = await telemetryUploader.flush(
+            counters: metrics.total,
+            firstLaunchAt: metrics.firstLaunchAt,
+            appVersion: appVersion,
+            osVersion: osVersion
+        )
+        if result.success {
+            Log.app.notice("telemetry: flush ok (status=\(result.httpStatus ?? -1, privacy: .public))")
+        } else {
+            Log.app.warning("telemetry: flush failed: \(result.error ?? "unknown", privacy: .public)")
+        }
+    }
+
+    /// Periodic background flush. Awakens every
+    /// `TelemetryConfig.uploadInterval`, checks the toggle, uploads
+    /// if enabled. Always running for the lifetime of the
+    /// ViewerState — no need to start / stop with the toggle since
+    /// `uploadTelemetryNow` gates internally and is cheap when
+    /// disabled.
+    private func startTelemetryPeriodicLoop() {
+        telemetryPeriodicTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: TelemetryConfig.uploadInterval)
+                if Task.isCancelled { return }
+                await self?.uploadTelemetryNow()
+            }
+        }
     }
 
     /// Watch UndoManager for state changes and bump the observable
@@ -720,6 +796,7 @@ final class ViewerState {
         // app relaunch) lands them back where they were.
         captureLastEntryToStores()
         resetForShootSwitch()
+        metrics.recordShootOpened()
         // Every shoot opens with collapse-bursts off — the indexer
         // hasn't started yet and the burst table will only be
         // complete once indexing finishes (the StatusBarView button
@@ -1247,6 +1324,7 @@ final class ViewerState {
         displayedAFSettings = af?.settings ?? AFSettings()
         displayedXMP = entryXMPs[stem] ?? .empty
         displayedPixelSize = pixelSize
+        metrics.recordPhotoSeen()
     }
 
     // MARK: progress
@@ -1743,6 +1821,7 @@ final class ViewerState {
     func setRating(_ rating: Int?, source: RatingInputSource = .keyboard) {
         guard !isLoadingDisplayedPair else { return }
         guard let entry else { return }
+        metrics.recordScoreSet()
         let previous = currentXMP
         let xmpWasOnDisk = stemsWithXMPOnDisk.contains(entry.stem)
         var updated = currentXMP
@@ -1816,6 +1895,7 @@ final class ViewerState {
     /// on the keeper while the rest of the burst gets ✗-ed. Mirrors
     /// `setRating`'s optimistic + write + rollback shape.
     func setRating(_ rating: Int?, for target: PhotoEntry) {
+        metrics.recordScoreSet()
         let previous = entryXMPs[target.stem] ?? .empty
         let xmpWasOnDisk = stemsWithXMPOnDisk.contains(target.stem)
         var updated = previous
@@ -1907,6 +1987,7 @@ final class ViewerState {
     func setLabel(_ label: String?, source: RatingInputSource = .keyboard) {
         guard !isLoadingDisplayedPair else { return }
         guard let entry else { return }
+        metrics.recordScoreSet()
         let previous = currentXMP
         let xmpWasOnDisk = stemsWithXMPOnDisk.contains(entry.stem)
         var updated = currentXMP

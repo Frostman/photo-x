@@ -83,6 +83,15 @@ struct PhotoXApp: App {
                 if let updater {
                     CheckForUpdatesView(controller: updater)
                 }
+                // Sits in the PhotoX menu directly below "Check for
+                // Updates" — it's a long-lived inspector, not a file /
+                // window action. No keyboard shortcut so a stray press
+                // during fast nav can't surface it accidentally.
+                Button {
+                    appDelegate.statsWindowController.show(metrics: viewerState.metrics)
+                } label: {
+                    Label("Usage Stats…", systemImage: "chart.bar")
+                }
             }
             // Bind Cmd+Z / Cmd+Shift+Z to ViewerState's UndoManager.
             // We can't use `.environment(\.undoManager, ...)` because
@@ -248,7 +257,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
     /// `applicationShouldTerminate` quit-confirm can inspect failed
     /// XMP writes + the coordinator's in-flight state. Weak so the
     /// delegate doesn't artificially extend the state's lifetime.
-    weak var viewerState: ViewerState?
+    weak var viewerState: ViewerState? {
+        didSet {
+            // Fires once per process on the first wire-up — the
+            // WindowGroup .task runs after launch and assigns from
+            // nil to non-nil. Subsequent File -> New Window calls
+            // re-fire the .task but viewerState is already set; the
+            // didRecordAppOpen flag gates double-counting.
+            guard !didRecordAppOpen, let viewerState else { return }
+            didRecordAppOpen = true
+            // recordAppOpen is MainActor-isolated; didSet runs in a
+            // nonisolated context (Swift can't statically prove the
+            // setter caller is on MainActor). Trampoline via Task to
+            // satisfy the compiler. The .task block doing the
+            // assignment is already on MainActor, so this is a
+            // single hop with no real cross-actor cost.
+            Task { @MainActor [viewerState] in
+                viewerState.metrics.recordAppOpen()
+            }
+        }
+    }
+    private var didRecordAppOpen = false
+
+    /// Single floating Usage Stats window for the lifetime of the
+    /// app. Reusing one instance across clicks (rather than spawning
+    /// a new window each time) mirrors `FailedWritesWindowController`.
+    let statsWindowController = StatsWindowController()
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
@@ -365,16 +399,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
         }
 
         guard let state = viewerState else { return .terminateNow }
-        let failedCount = state.failedXMPWrites.count
-        if failedCount > 0 {
-            // Synchronous: we already know there are failures.
-            return runUnsavedXMPAlert(failedCount: failedCount)
-                ? .terminateNow : .terminateCancel
-        }
-        // No known failures, but writes might still be in flight on
-        // the coordinator. The actor check is async; reply via
-        // `.terminateLater` + `sender.reply(...)`.
+        // Always go through the .terminateLater path now: we need an
+        // await for the metrics flush regardless of the XMP-failure
+        // decision, so consolidating the branches keeps the
+        // termination contract simple.
         Task { @MainActor in
+            // Drain any in-memory counter deltas to disk before
+            // quit so the next launch's stats window reflects this
+            // session's activity. Best-effort, expected to land in
+            // tens of ms; failures here never block termination.
+            await state.metrics.flushPending()
+
+            let failedCount = state.failedXMPWrites.count
+            if failedCount > 0 {
+                let proceed = self.runUnsavedXMPAlert(failedCount: failedCount)
+                sender.reply(toApplicationShouldTerminate: proceed)
+                return
+            }
             let inFlight = await state.xmpWriter.hasInFlightWrites
             guard inFlight else {
                 sender.reply(toApplicationShouldTerminate: true)

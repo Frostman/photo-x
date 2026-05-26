@@ -44,6 +44,18 @@ enum SettingsKey {
     /// testing).
     static let prefetchRadius       = "settings.prefetchRadius"
 
+    // Privacy — opt-in telemetry. Counters always accumulate locally
+    // (see UsageMetrics) and the stats window is always on; this gate
+    // controls only whether the snapshot is uploaded to PostHog.
+    /// Bool — default false. Flip in Settings -> Privacy.
+    static let telemetryEnabled     = "settings.telemetryEnabled"
+    /// String — random UUID generated lazily on first telemetry
+    /// upload. Write-once for the lifetime of the install; never
+    /// cleared by toggle-off or "Reset stats". A fresh ID requires
+    /// `defaults delete dev.frostman.PhotoX settings.telemetryAnonymousID`
+    /// (or an uninstall).
+    static let telemetryAnonymousID = "settings.telemetryAnonymousID"
+
     enum Defaults {
         static let appearance = AppearanceMode.system.rawValue
         static let sidebarVisible = true
@@ -59,6 +71,7 @@ enum SettingsKey {
         static let textureCacheCapacity = 32
         static let previewBytesCacheMB  = 2048    // 2 GB
         static let prefetchRadius       = 1
+        static let telemetryEnabled     = false
     }
 }
 
@@ -132,6 +145,7 @@ struct SettingsView: View {
     @AppStorage(SettingsKey.textureCacheCapacity, store: AppDefaults.shared) private var textureCacheCapacity = SettingsKey.Defaults.textureCacheCapacity
     @AppStorage(SettingsKey.previewBytesCacheMB,  store: AppDefaults.shared) private var previewBytesCacheMB  = SettingsKey.Defaults.previewBytesCacheMB
     @AppStorage(SettingsKey.prefetchRadius,       store: AppDefaults.shared) private var prefetchRadius       = SettingsKey.Defaults.prefetchRadius
+    @AppStorage(SettingsKey.telemetryEnabled,     store: AppDefaults.shared) private var telemetryEnabled     = SettingsKey.Defaults.telemetryEnabled
 
     /// Injected by `PhotoXApp` so Settings → Advanced can read live
     /// cache stats from the currently-loaded shoot. nil means no
@@ -204,6 +218,14 @@ struct SettingsView: View {
                 Toggle("Show loading spinner on canvas during nav", isOn: $showCanvasLoadingIndicator)
                     .help("Adds a small centred spinner over the image whenever the canvas is loading a different pair than the one you've navigated to. Off by default — most nav is fast enough that the spinner would just flash.")
             }
+
+            Section("Privacy") {
+                Toggle("Send anonymous usage stats to PostHog Cloud", isOn: $telemetryEnabled)
+                    .help("Off by default. When on, PhotoX uploads the same integer counters shown in Window → Usage Stats… every \(TelemetryConfig.uploadIntervalDescription) and on quit. Toggle off any time.")
+                Text("Only the counters (app opens, photos seen, ratings/labels set, shoots opened, exports run, images exported) and a random anonymous ID leave your device. No filenames, ratings values, photos, EXIF, or paths are ever sent. The anonymous ID is generated the first time you opt in and persists for the life of the install so stats stitch across toggle-off/on cycles. Counters are always saved locally every \(TelemetryConfig.localPersistIntervalDescription) regardless of this toggle.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
         .task {
@@ -220,6 +242,15 @@ struct SettingsView: View {
         .onChange(of: previewBytesCacheMB) { _, new in
             let pipeline = state.pipeline
             Task { await pipeline.previewBytes.setByteCapacity(max(1, new) * 1024 * 1024) }
+        }
+        .onChange(of: telemetryEnabled) { _, newValue in
+            // Toggle ON: fire an immediate flush so the user sees an
+            // event land in PostHog without waiting a full
+            // `TelemetryConfig.uploadInterval` for the periodic
+            // loop. Toggle OFF: nothing to do — the next periodic
+            // tick gates on the setting and stays quiet.
+            guard newValue else { return }
+            Task { await state.uploadTelemetryNow() }
         }
         // prefetchRadius is read at prefetch time, so no apply needed.
         .frame(width: 620, height: 660)
