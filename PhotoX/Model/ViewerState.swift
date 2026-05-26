@@ -627,7 +627,18 @@ final class ViewerState {
     /// mutations. Cleared on shoot switch (cross-shoot undo makes
     /// no sense). The SwiftUI menu items in PhotoXApp call
     /// `.undo()` / `.redo()` on this directly.
-    let undoManager = UndoManager()
+    ///
+    /// Capped at 500 top-level groups so a 10-20k-image culling
+    /// session can't accumulate an unbounded snapshot history —
+    /// each registered undo captures a whole XMPSidecar plus a
+    /// few small fields, ~a couple-hundred bytes; 500 entries
+    /// stays well under 1 MB. At ~1-2 actions/sec that's still
+    /// 5-10 minutes of work the user can walk back.
+    let undoManager: UndoManager = {
+        let m = UndoManager()
+        m.levelsOfUndo = 500
+        return m
+    }()
 
     /// Observable counter bumped whenever the undo manager's
     /// state changes (group close, undo, redo, action-name

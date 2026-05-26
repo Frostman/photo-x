@@ -234,6 +234,18 @@ final class ViewerStateUndoTests: XCTestCase {
         XCTAssertEqual(state.entryXMPs["A1"]?.label, "Red")
     }
 
+    // MARK: - bounded undo depth
+
+    /// Massive shoots (10–20 k images) can't be allowed to grow an
+    /// unbounded snapshot history — NSUndoManager.levelsOfUndo
+    /// drops the oldest groups as the cap is exceeded. Verify the
+    /// cap is set to the documented value.
+    func test_undoStack_isCappedAt500() {
+        let state = makeState(stems: ["A"])
+        XCTAssertEqual(state.undoManager.levelsOfUndo, 500,
+                       "undo depth should be bounded for massive-shoot safety")
+    }
+
     // MARK: - shoot switch clears stack
 
     func test_shootSwitch_clearsUndoStack() {
