@@ -737,20 +737,35 @@ final class ViewerState {
     /// on its own actor (the main one for our manager) but adding
     /// the observers explicitly on the main queue keeps the
     /// version bump on @MainActor.
+    ///
+    /// CRITICAL: do NOT observe `NSUndoManagerCheckpoint`. Per
+    /// Apple docs that notification posts on every `canRedo`
+    /// query — and SwiftUI's menu rebuild reads `canRedo`. The
+    /// resulting feedback loop (render → query canRedo →
+    /// checkpoint → undoStateVersion bump → render → ...) pegged
+    /// the CPU at ~95 % on idle whenever a second window (e.g.
+    /// Stats) sat in the responder chain and triggered menu
+    /// validations. Subscribe only to mutation notifications.
+    /// `resetForShootSwitch`'s explicit `removeAllActions`
+    /// produces no notification, so it bumps undoStateVersion
+    /// directly.
     private func startUndoStateObserver() {
         let nc = NotificationCenter.default
-        // Single notification that covers every meaningful undo-
-        // stack state change (group open/close, undo, redo,
-        // setActionName). The other named notifications are
-        // subsets of this one.
-        let token = nc.addObserver(
-            forName: .NSUndoManagerCheckpoint,
-            object: undoManager,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in self?.undoStateVersion &+= 1 }
+        let names: [Notification.Name] = [
+            .NSUndoManagerDidUndoChange,
+            .NSUndoManagerDidRedoChange,
+            .NSUndoManagerDidCloseUndoGroup,
+        ]
+        for name in names {
+            let token = nc.addObserver(
+                forName: name,
+                object: undoManager,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in self?.undoStateVersion &+= 1 }
+            }
+            undoObservers.append(token)
         }
-        undoObservers.append(token)
     }
 
     /// Pump every event from `xmpWriter.failureStream` onto the
@@ -929,6 +944,10 @@ final class ViewerState {
         // ratings on a shoot that's no longer open) and the
         // captured PhotoEntry references would dangle anyway.
         undoManager.removeAllActions()
+        // removeAllActions doesn't post DidUndoChange / DidRedoChange
+        // / DidCloseUndoGroup, so the observer wouldn't see it. Bump
+        // manually so the menu items re-render to disabled.
+        undoStateVersion &+= 1
         indexingStatus = .idle
         indexingProgress = .init()
         indexingTimings = .init()
