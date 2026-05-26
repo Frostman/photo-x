@@ -255,6 +255,20 @@ struct SettingsView: View {
         // prefetchRadius is read at prefetch time, so no apply needed.
         .frame(width: 620, height: 660)
         .navigationTitle("PhotoX Settings")
+        // Esc closes the Settings window. SwiftUI's Settings scene
+        // doesn't wire `.dismiss` (no responder-chain dismiss), so
+        // route through AppKit by performing the standard close on
+        // the key window. Hidden 0x0 button keeps it out of layout
+        // and accessibility — same pattern as StatsView.
+        .background {
+            Button("") {
+                NSApp.keyWindow?.performClose(nil)
+            }
+            .keyboardShortcut(.cancelAction)
+            .opacity(0)
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
+        }
     }
 
     private func pickFolder() {
