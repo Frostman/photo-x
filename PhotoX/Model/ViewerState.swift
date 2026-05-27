@@ -887,9 +887,16 @@ final class ViewerState {
     }
 
     /// True iff the URL looks like a DCIM shoot folder mounted under
-    /// `/Volumes/<NAME>/DCIM/<100MSDCF-style>`. Reuses the same DCIM-
-    /// name check VolumeScanner uses to populate the Cards section, so
-    /// the "is this from a card?" definition stays single-sourced.
+    /// `/Volumes/<NAME>/DCIM/<100MSDCF-style>` AND the underlying
+    /// volume is a locally-mounted removable device (i.e. an actual
+    /// SD / CFExpress card or USB reader).
+    ///
+    /// Path-shape alone isn't enough — NAS shares (SMB / AFP / NFS)
+    /// that happen to mirror the DCIM folder structure (a common
+    /// backup pattern) match the path heuristic but the user
+    /// definitely wants them in Recents. Combining the path check
+    /// with `volumeIsLocal && volumeIsRemovable` distinguishes
+    /// "card in a reader" from "network archive of a card."
     static func isCardShootPath(_ url: URL) -> Bool {
         let comps = url.pathComponents
         guard comps.count >= 5,
@@ -898,7 +905,12 @@ final class ViewerState {
               let leaf = comps.last,
               VolumeScanner.isDCIMConventionName(leaf)
         else { return false }
-        return true
+        let vals = try? url.resourceValues(forKeys: [
+            .volumeIsLocalKey, .volumeIsRemovableKey,
+        ])
+        let isLocal = vals?.volumeIsLocal ?? false
+        let isRemovable = vals?.volumeIsRemovable ?? false
+        return isLocal && isRemovable
     }
 
     /// E2E-test only: rewind every user-visible piece of state to
