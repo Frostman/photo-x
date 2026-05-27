@@ -273,6 +273,116 @@ class PhotoXUITestCase: XCTestCase {
         return ""
     }
 
+    /// Poll until the XMP sidecar for `stem` either doesn't
+    /// exist OR exists but no longer contains `substring`.
+    /// Used by undo tests to verify a previously-written
+    /// attribute has been reverted — `XMPWriteCoordinator`
+    /// may rewrite the file without the attribute OR leave
+    /// it alone depending on the other fields present, so
+    /// either shape counts as success.
+    func waitForXMPSidecarWithout(forPairNamed stem: String,
+                                   substring: String,
+                                   timeout: TimeInterval = 2,
+                                   file: StaticString = #file,
+                                   line: UInt = #line) throws {
+        let url = xmpSidecar(forPairNamed: stem)
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if !FileManager.default.fileExists(atPath: url.path) { return }
+            if let body = try? String(contentsOf: url, encoding: .utf8),
+               !body.contains(substring) {
+                return
+            }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        XCTFail("XMP sidecar for \(stem) still contains \"\(substring)\" after \(timeout)s",
+                file: file, line: line)
+    }
+
+    /// Snapshot the set of stems whose `.xmp` files exist in
+    /// the fixture right now. Used by burst-detection helpers
+    /// to compute which siblings got newly-rejected after a G
+    /// keypress.
+    func xmpSidecarStems() -> Set<String> {
+        guard let names = try? FileManager.default
+                .contentsOfDirectory(atPath: tempFixtureURL.path) else { return [] }
+        var out: Set<String> = []
+        for name in names where (name as NSString).pathExtension == "xmp" {
+            out.insert((name as NSString).deletingPathExtension)
+        }
+        return out
+    }
+
+    /// After navigation, wait briefly for the displayed pair
+    /// to bind to the canvas AND re-anchor focus before issuing
+    /// a mutation key press. `setRating` / `setLabel` bail out
+    /// when `isLoadingDisplayedPair` is true (the canvas hasn't
+    /// yet shown the new entry's texture); also re-clicking
+    /// the canvas defends against arrow-key navigation
+    /// implicitly moving focus.
+    func waitForDisplayedPairReady(timeout: TimeInterval = 3) {
+        let pill = app.staticTexts["canvas.stemPill.stem"]
+        _ = pill.waitForExistence(timeout: timeout)
+        // Brief settle — the pill exists from launch, but the
+        // currentImage / texture binding isn't accessibility-
+        // exposed. ~300 ms covers the typical bind latency
+        // after a nav keypress in the shared-session class.
+        Thread.sleep(forTimeInterval: 0.3)
+        // Re-anchor focus onto the canvas — arrow keys
+        // sometimes get routed before the @FocusState rebind
+        // settles.
+        let window = app.windows.firstMatch
+        window.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.4)).click()
+    }
+
+    /// Step forward N entries, settling the canvas between
+    /// each press. Rapid-fire arrow keys outpace the texture
+    /// binder and a subsequent mutation key (`R`, `G`, …) can
+    /// fire on a still-loading pair, where it'll be silently
+    /// dropped by `isLoadingDisplayedPair`.
+    func navigateForward(by steps: Int) {
+        let total = totalPairsFromPill()
+        let startIndex = currentIndexFromPill()
+        for i in 0 ..< steps {
+            pressKey(.rightArrow)
+            waitForPillIndex(min(startIndex + i + 1, total))
+            waitForDisplayedPairReady()
+        }
+    }
+
+    /// Trigger Redo via the Edit-menu item. Tests don't use
+    /// the Cmd+Shift+Z keyboard shortcut because some other
+    /// apps capture it system-wide and swallow the event
+    /// before XCUITest delivers it. The menu click still
+    /// routes through `CommandGroup(replacing: .undoRedo)` →
+    /// `state.undoManager.redo()`, so the binding is
+    /// exercised. The menu title is dynamic ("Redo Reject",
+    /// "Redo Set Rating", …), so we match by title prefix.
+    func clickRedoMenu() {
+        let editMenu = app.menuBars.menuBarItems["Edit"]
+        XCTAssertTrue(editMenu.waitForExistence(timeout: 2),
+                      "Edit menu bar item didn't appear")
+        editMenu.click()
+        let pred = NSPredicate(format: "title BEGINSWITH 'Redo'")
+        let item = app.menuItems.matching(pred).firstMatch
+        XCTAssertTrue(item.waitForExistence(timeout: 2),
+                      "menu item with title starting 'Redo' didn't appear")
+        item.click()
+    }
+
+    /// Block until the indexer status chip flips to `.done`.
+    /// Mirrors `waitForShootLoaded` but waits for the heavier
+    /// advanced-EXIF pipeline to finish too — needed by tests
+    /// that depend on burst tables (`entrySequenceNumber`).
+    func waitForIndexingDone(timeout: TimeInterval = 60,
+                              file: StaticString = #file,
+                              line: UInt = #line) {
+        let chip = app.buttons["indexer.statusChip.done"]
+        XCTAssertTrue(chip.waitForExistence(timeout: timeout),
+                      "indexer didn't reach .done within \(timeout)s",
+                      file: file, line: line)
+    }
+
     /// Type a single keyboard shortcut at the main window. Wraps the
     /// XCUIElement API in something concise. `@nonobjc` on both so
     /// the two overloads don't collide on the same Obj-C selector.

@@ -123,13 +123,6 @@ final class RelaunchTests: PhotoXFreshLaunchUITestCase {
         return prefix.isEmpty ? nil : String(prefix)
     }
 
-    /// Block until `indexer.statusChip.done` exists.
-    private func waitForIndexingDone(timeout: TimeInterval) {
-        let chip = app.buttons["indexer.statusChip.done"]
-        XCTAssertTrue(chip.waitForExistence(timeout: timeout),
-                      "indexer didn't reach .done within \(timeout)s")
-    }
-
     /// Post the `captureNow` Darwin notification and wait for the
     /// app's completion sentinel. After completion, the in-app
     /// `captureLastEntryToStores` + `AppDefaults.synchronize` have
