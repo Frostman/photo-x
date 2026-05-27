@@ -1,7 +1,7 @@
 import CoreGraphics
 import Foundation
 
-struct ExifSummary: Hashable, Sendable {
+struct ExifSummary: Hashable, Sendable, Codable {
     var camera: String?
     var lens: String?
     var shutterSpeed: String?

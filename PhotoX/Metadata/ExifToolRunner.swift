@@ -31,7 +31,7 @@ enum ExifToolRunner {
         case parseFailed
     }
 
-    struct AFData: Sendable {
+    struct AFData: Sendable, Codable {
         var regions: [AFRegion] = []
         var settings: AFSettings = AFSettings()
     }

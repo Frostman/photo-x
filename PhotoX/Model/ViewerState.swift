@@ -605,6 +605,15 @@ final class ViewerState {
     /// shoots / app launches — never cleared by `resetForShootSwitch`.
     let metrics = UsageMetrics()
 
+    /// On-disk indexer cache scoped to the currently-open shoot.
+    /// Recreated by `loadShoot` for each new shoot. Pipelines check
+    /// `cache.entry(for:sourceURL:)` first; on hit they skip their
+    /// pipeline work and stuff the cached data into the in-memory
+    /// maps. On miss they run as before and call `cache.updateEntry`
+    /// on flush to capture the result for next time.
+    private(set) var cache: IndexerCache = IndexerCache(
+        shootFolder: URL(fileURLWithPath: "/"))
+
     /// PostHog upload client. API key comes from Info.plist
     /// (`POSTHOG_API_KEY`); empty in dev builds without an injected
     /// key — `flush` short-circuits as a no-op. Periodic flush task
@@ -829,8 +838,16 @@ final class ViewerState {
         // last position so a future reopen (favorite / recent click,
         // app relaunch) lands them back where they were.
         captureLastEntryToStores()
+        // Persist the previous shoot's indexer cache before tearing
+        // down. Best-effort — quit-time hook is a backstop.
+        let oldCache = cache
+        Task { await oldCache.close() }
         resetForShootSwitch()
         metrics.recordShootOpened()
+        // Swap in a cache scoped to the new shoot. Reading the
+        // existing .plist (if any) happens synchronously in the
+        // initializer — typically <100 ms even for 20 k entries.
+        cache = IndexerCache(shootFolder: shoot.folderURL)
         // Every shoot opens with collapse-bursts off — the indexer
         // hasn't started yet and the burst table will only be
         // complete once indexing finishes (the StatusBarView button
@@ -911,8 +928,16 @@ final class ViewerState {
         // Save the user's position before tearing down so reopening
         // this shoot (favorite / recent click) lands on the same entry.
         captureLastEntryToStores()
+        // Final flush of the indexer cache. Detached so the cleanup
+        // doesn't block the UI; cache.close handles its own
+        // background encode.
+        let oldCache = cache
+        Task { await oldCache.close() }
         resetForShootSwitch()
         shoot = nil
+        // Replace with a no-op cache so subsequent calls don't
+        // touch the previous shoot's data.
+        cache = IndexerCache(shootFolder: URL(fileURLWithPath: "/"))
         // Reset session-only filter + sort to defaults so the next
         // shoot opens with a clean slate instead of inheriting the
         // last shoot's culling state (which usually wasn't relevant).
@@ -1158,16 +1183,51 @@ final class ViewerState {
         while let id = await queue.popNext() {
             if Task.isCancelled || shootGeneration != gen { return }
             let batch = advancedExifBatches[id]
-            let urls = batch.map(\.previewURL)
-            let (result, stats) = await MetadataBatchLoader.readInstrumented(urls)
-            var afByStem:  [String: ExifToolRunner.AFData] = [:]
-            var seqByStem: [String: Int] = [:]
+            // Cache hit fast-path: entries whose previewURL hasn't
+            // changed since the last cache flush get served from
+            // the cache; only the misses go through exiftool. For
+            // a fully-cached re-open this skips the whole
+            // subprocess spawn for the batch.
+            var afFromCache:  [String: ExifToolRunner.AFData] = [:]
+            var seqFromCache: [String: Int] = [:]
+            var misses: [PhotoEntry] = []
             for entry in batch {
-                if let v = result.af [entry.previewURL.path] { afByStem [entry.stem] = v }
-                if let v = result.seq[entry.previewURL.path] { seqByStem[entry.stem] = v }
+                if let hit = cache.entry(for: entry.stem,
+                                         sourceURL: entry.previewURL) {
+                    if let af  = hit.afData          { afFromCache[entry.stem]  = af }
+                    if let seq = hit.sequenceNumber  { seqFromCache[entry.stem] = seq }
+                    // If neither field is in the cache for this
+                    // entry, treat it as a miss so the pipeline
+                    // populates them.
+                    if hit.afData != nil || hit.sequenceNumber != nil {
+                        continue
+                    }
+                }
+                misses.append(entry)
+            }
+
+            var afByStem  = afFromCache
+            var seqByStem = seqFromCache
+            if !misses.isEmpty {
+                let urls = misses.map(\.previewURL)
+                let (result, stats) = await MetadataBatchLoader.readInstrumented(urls)
+                for entry in misses {
+                    let af  = result.af [entry.previewURL.path]
+                    let seq = result.seq[entry.previewURL.path]
+                    if let af  { afByStem [entry.stem] = af }
+                    if let seq { seqByStem[entry.stem] = seq }
+                    // Cache whatever we learned — even partial
+                    // entries (AF only / seq only) round-trip.
+                    if af != nil || seq != nil {
+                        cache.updateEntry(stem: entry.stem,
+                                           sourceURL: entry.previewURL,
+                                           afData: af,
+                                           sequenceNumber: seq)
+                    }
+                }
+                logAdvancedExifBatchStats(id: id, stats: stats)
             }
             flushAdvancedExifBatch(af: afByStem, seq: seqByStem, generation: gen)
-            logAdvancedExifBatchStats(id: id, stats: stats)
             await queue.markDone(id)
         }
     }
@@ -1206,33 +1266,79 @@ final class ViewerState {
         while let id = await queue.popNext() {
             if Task.isCancelled || shootGeneration != gen { return }
             let batch = basicExifBatches[id]
-            typealias Result = (stem: String,
+            typealias Result = (entry: PhotoEntry,
                                 image: CGImage?,
                                 exif: ExifSummary?,
+                                jpegBytes: Data?,
+                                exifOrientation: Int?,
                                 stats: ThumbnailLoader.Stats?)
-            let results: [Result] = await withTaskGroup(of: Result.self,
-                                                        returning: [Result].self) { group in
-                for entry in batch {
+
+            // Cache hit fast-path: for entries with cached JPEG
+            // bytes + EXIF AND a matching file fingerprint, decode
+            // the cached thumbnail (no HEIF box parse, no fresh
+            // file read). Cache misses or partial cache entries
+            // (missing thumb bytes / EXIF) fall through to the
+            // existing pipeline.
+            var cachedResults: [Result] = []
+            var misses: [PhotoEntry] = []
+            for entry in batch {
+                if let hit = cache.entry(for: entry.stem, sourceURL: entry.previewURL),
+                   let bytes = hit.thumbnailJPEG,
+                   let exif = hit.exif {
+                    // EXIF orientation (tag 0x0112) applies to both
+                    // the full image AND the embedded thumbnail —
+                    // they're rotated together by the camera. Use
+                    // the parsed value with a fallback of 1
+                    // (identity) for files that didn't store one.
+                    let orientation = exif.orientation ?? 1
+                    if let img = ThumbnailLoader.loadFromJPEGBytes(
+                        bytes, exifOrientation: orientation)
+                    {
+                        cachedResults.append((entry, img, exif,
+                                              bytes, orientation, nil))
+                        continue
+                    }
+                }
+                misses.append(entry)
+            }
+
+            let pipelineResults: [Result] = await withTaskGroup(of: Result.self,
+                                                                returning: [Result].self) { group in
+                for entry in misses {
                     let url = entry.previewURL
-                    let stem = entry.stem
                     group.addTask {
-                        let (img, exif, stats) = await Task.detached(priority: .utility) {
+                        let r = await Task.detached(priority: .utility) {
                             ThumbnailLoader.loadInstrumented(from: url)
                         }.value
-                        return (stem, img, exif, stats)
+                        return (entry, r.image, r.exif,
+                                r.jpegBytes, r.exifOrientation, r.stats)
                     }
                 }
                 var out: [Result] = []
                 for await r in group { out.append(r) }
                 return out
             }
+            let results = cachedResults + pipelineResults
             let thumbs: [(String, CGImage)] = results.compactMap {
                 guard let img = $0.image else { return nil }
-                return ($0.stem, img)
+                return ($0.entry.stem, img)
             }
             let exifs: [(String, ExifSummary)] = results.compactMap {
                 guard let ex = $0.exif else { return nil }
-                return ($0.stem, ex)
+                return ($0.entry.stem, ex)
+            }
+            // Capture per-entry thumbnail bytes for the on-disk
+            // indexer cache. Only entries we actually got both
+            // exif + thumb bytes from get cached.
+            for r in results {
+                if let ex = r.exif, let bytes = r.jpegBytes {
+                    cache.updateEntry(
+                        stem: r.entry.stem,
+                        sourceURL: r.entry.previewURL,
+                        exif: ex,
+                        thumbnailJPEG: bytes
+                    )
+                }
             }
             flushBasicExifAndThumbsBatch(thumbs: thumbs, exifs: exifs, generation: gen)
             logBasicExifAndThumbsBatchStats(id: id, results: results)
@@ -1245,9 +1351,11 @@ final class ViewerState {
     /// decode since each step is sub-ms. DEBUG-only.
     private nonisolated func logBasicExifAndThumbsBatchStats(
         id: Int,
-        results: [(stem: String,
+        results: [(entry: PhotoEntry,
                    image: CGImage?,
                    exif: ExifSummary?,
+                   jpegBytes: Data?,
+                   exifOrientation: Int?,
                    stats: ThumbnailLoader.Stats?)]
     ) {
         #if DEBUG
@@ -1447,6 +1555,12 @@ final class ViewerState {
         guard shootGeneration == generation else { return }
         indexingStatus = .done
         indexingCompletedAt = Date()
+        // Persist the indexer cache once indexing has fully
+        // settled. cache.flush is a no-op when nothing changed
+        // since the last flush; on a cold open with a fully
+        // empty cache it writes everything we just learned.
+        let snapshotCache = cache
+        Task { await snapshotCache.flush() }
 
         // One production summary line per indexing run — has everything
         // needed to diagnose performance later: entry count + per-pipeline

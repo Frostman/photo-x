@@ -294,6 +294,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
         // the line below so the writes definitely hit disk.
         NotificationCenter.default.post(name: .photoxWillTerminate, object: nil)
         AppDefaults.shared.synchronize()
+        // Best-effort indexer-cache flush. Most of the time the
+        // cache was already flushed by finishIndexing; this catches
+        // any pending writes (e.g. partial indexing interrupted by
+        // quit). RunLoop spin lets the detached encode complete
+        // before the process exits — hard-capped at 2 s so a hung
+        // disk can't deadlock quit.
+        if let state = viewerState {
+            let cache = state.cache
+            let flushDone = DispatchSemaphore(value: 0)
+            Task {
+                await cache.flush()
+                flushDone.signal()
+            }
+            _ = flushDone.wait(timeout: .now() + .seconds(2))
+        }
     }
 
     /// Disable title-bar double-click action (minimize / zoom). NSWindow reads
@@ -323,6 +338,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
         if LaunchFlags.uiTestMode, let state = viewerState {
             UITestResetObserver.install(viewerState: state)
         }
+
+        // Sync the indexer cache policy from saved settings BEFORE
+        // any shoot opens. The Settings UI's `.onChange` handlers
+        // catch later toggle flips; this is the cold-start path.
+        IndexerCache.reloadPolicyFromDefaults()
 
         DispatchQueue.main.async {
             guard let window = NSApplication.shared.windows.first(where: { $0.canBecomeMain })

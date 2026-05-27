@@ -52,6 +52,7 @@ struct StatusBarView: View {
                     progress: state.indexingProgress,
                     timings: state.indexingTimings,
                     completedAt: state.indexingCompletedAt,
+                    shootFolder: state.shoot?.folderURL,
                     onReindex: { state.reIndex() }
                 )
                 .padding(14)
@@ -254,7 +255,14 @@ private struct IndexingProgressPopover: View {
     let progress: ViewerState.IndexingProgress
     let timings: ViewerState.PipelineTimings
     let completedAt: Date?
+    /// nil when no shoot is open. Drives the cache-size row +
+    /// the "delete this shoot" menu item.
+    let shootFolder: URL?
     let onReindex: () -> Void
+
+    @State private var thisShootSize: Int64 = 0
+    @State private var totalCacheSize: Int64 = 0
+    @State private var showDeleteChoices = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -284,9 +292,11 @@ private struct IndexingProgressPopover: View {
                 value: progress.xmpSidecars,
                 timing: timings.xmpSidecars,
                 icon: "tag")
+            Divider().padding(.vertical, 2)
+            cacheSection
             if completedAt != nil {
-                Divider().padding(.vertical, 2)
-                HStack {
+                HStack(alignment: .center) {
+                    deleteCacheButton
                     Spacer()
                     Button {
                         onReindex()
@@ -298,9 +308,92 @@ private struct IndexingProgressPopover: View {
                     .controlSize(.small)
                     .help("Re-read EXIF, AF data, XMP sidecars and thumbnails from disk")
                 }
+            } else {
+                HStack { deleteCacheButton; Spacer() }
             }
         }
         .frame(minWidth: 360)
+        .task { refreshCacheSizes() }
+    }
+
+    // MARK: Cache UI
+
+    private var cacheSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Image(systemName: "externaldrive")
+                    .frame(width: 18)
+                    .foregroundStyle(.secondary)
+                Text("Cache")
+                    .font(.caption.bold())
+                Spacer()
+            }
+            if shootFolder != nil {
+                HStack(spacing: 8) {
+                    Text("  This shoot:")
+                    Text(Self.formatBytes(thisShootSize))
+                        .font(.caption.monospacedDigit())
+                    Spacer()
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+            HStack(spacing: 8) {
+                Text("  Total:")
+                Text("\(Self.formatBytes(totalCacheSize)) / \(Self.formatBytes(IndexerCache.policy.maxTotalBytes))")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(totalCacheSize > IndexerCache.policy.maxTotalBytes
+                                     ? .red : .secondary)
+                Spacer()
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    private var deleteCacheButton: some View {
+        // Plain Button (matches Re-index style) → user picks scope
+        // via a confirmationDialog. Earlier Menu variants drew an
+        // auto-focused highlight on popover open because Menu is
+        // the first focusable element.
+        Button {
+            showDeleteChoices = true
+        } label: {
+            Label("Delete cache", systemImage: "trash")
+                .font(.caption.bold())
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .help("Remove cached indexer data. Next open re-reads from source.")
+        .confirmationDialog("Delete indexer cache",
+                            isPresented: $showDeleteChoices,
+                            titleVisibility: .visible) {
+            if let shootFolder {
+                Button("Delete this shoot's cache") {
+                    IndexerCache.deleteCache(for: shootFolder)
+                    refreshCacheSizes()
+                }
+            }
+            Button("Delete all caches", role: .destructive) {
+                IndexerCache.deleteAllCaches()
+                refreshCacheSizes()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Cached indexer data only — the photos themselves are unaffected. The next open will re-read EXIF / AF / thumbnails from the source files.")
+        }
+    }
+
+    private func refreshCacheSizes() {
+        thisShootSize = shootFolder.map { IndexerCache.cacheSize(for: $0) } ?? 0
+        totalCacheSize = IndexerCache.totalSize()
+    }
+
+    private static func formatBytes(_ n: Int64) -> String {
+        let f = ByteCountFormatter()
+        f.allowedUnits = [.useKB, .useMB, .useGB]
+        f.countStyle = .file
+        return f.string(fromByteCount: n)
     }
 
     private func row(_ label: String,

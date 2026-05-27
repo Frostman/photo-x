@@ -44,6 +44,16 @@ enum SettingsKey {
     /// testing).
     static let prefetchRadius       = "settings.prefetchRadius"
 
+    // Indexer cache — see IndexerCache.swift. Toggles control which
+    // datums get persisted per file. Max size caps the LRU GC.
+    static let cacheExifSummary  = "settings.indexerCache.cacheExifSummary"
+    static let cacheAFData       = "settings.indexerCache.cacheAFData"
+    static let cacheSequence     = "settings.indexerCache.cacheSequence"
+    static let cacheThumbnail    = "settings.indexerCache.cacheThumbnail"
+    /// Max cache size in GIGABYTES (Int). Converted to bytes when
+    /// pushed into IndexerCache.policy.maxTotalBytes.
+    static let indexerCacheMaxSizeGB = "settings.indexerCache.maxSizeGB"
+
     // Privacy — opt-in telemetry. Counters always accumulate locally
     // (see UsageMetrics) and the stats window is always on; this gate
     // controls only whether the snapshot is uploaded to PostHog.
@@ -72,6 +82,11 @@ enum SettingsKey {
         static let previewBytesCacheMB  = 2048    // 2 GB
         static let prefetchRadius       = 1
         static let telemetryEnabled     = false
+        static let cacheExifSummary     = true
+        static let cacheAFData          = true
+        static let cacheSequence        = true
+        static let cacheThumbnail       = true
+        static let indexerCacheMaxSizeGB = 2
     }
 }
 
@@ -146,6 +161,11 @@ struct SettingsView: View {
     @AppStorage(SettingsKey.previewBytesCacheMB,  store: AppDefaults.shared) private var previewBytesCacheMB  = SettingsKey.Defaults.previewBytesCacheMB
     @AppStorage(SettingsKey.prefetchRadius,       store: AppDefaults.shared) private var prefetchRadius       = SettingsKey.Defaults.prefetchRadius
     @AppStorage(SettingsKey.telemetryEnabled,     store: AppDefaults.shared) private var telemetryEnabled     = SettingsKey.Defaults.telemetryEnabled
+    @AppStorage(SettingsKey.cacheExifSummary,     store: AppDefaults.shared) private var cacheExifSummary     = SettingsKey.Defaults.cacheExifSummary
+    @AppStorage(SettingsKey.cacheAFData,          store: AppDefaults.shared) private var cacheAFData          = SettingsKey.Defaults.cacheAFData
+    @AppStorage(SettingsKey.cacheSequence,        store: AppDefaults.shared) private var cacheSequence        = SettingsKey.Defaults.cacheSequence
+    @AppStorage(SettingsKey.cacheThumbnail,       store: AppDefaults.shared) private var cacheThumbnail       = SettingsKey.Defaults.cacheThumbnail
+    @AppStorage(SettingsKey.indexerCacheMaxSizeGB, store: AppDefaults.shared) private var indexerCacheMaxSizeGB = SettingsKey.Defaults.indexerCacheMaxSizeGB
 
     /// Injected by `PhotoXApp` so Settings → Advanced can read live
     /// cache stats from the currently-loaded shoot. nil means no
@@ -219,6 +239,25 @@ struct SettingsView: View {
                     .help("Adds a small centred spinner over the image whenever the canvas is loading a different pair than the one you've navigated to. Off by default — most nav is fast enough that the spinner would just flash.")
             }
 
+            Section("Indexer cache") {
+                Toggle("Cache basic EXIF",            isOn: $cacheExifSummary)
+                Toggle("Cache AF data",                isOn: $cacheAFData)
+                Toggle("Cache burst sequence numbers", isOn: $cacheSequence)
+                Toggle("Cache thumbnail bytes",        isOn: $cacheThumbnail)
+                Stepper(value: $indexerCacheMaxSizeGB, in: 1 ... 50) {
+                    Text("Max cache size: \(indexerCacheMaxSizeGB) GB")
+                }
+                HStack {
+                    Spacer()
+                    Button("Clear all caches") {
+                        IndexerCache.deleteAllCaches()
+                    }
+                }
+                Text("Cached per file: basic EXIF (~500 B), AF data (~1.5 KB), sequence number (8 B), embedded thumbnail JPEG (~8 KB). Histograms are NOT cached — computed lazily on first sidebar view. Files larger than the max size are LRU-evicted whole-shoot.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Privacy") {
                 Toggle("Send anonymous usage stats to PostHog Cloud", isOn: $telemetryEnabled)
                     .help("Off by default. When on, PhotoX uploads the same integer counters shown in Window → Usage Stats… every \(TelemetryConfig.uploadIntervalDescription) and on quit. Toggle off any time.")
@@ -242,6 +281,14 @@ struct SettingsView: View {
         .onChange(of: previewBytesCacheMB) { _, new in
             let pipeline = state.pipeline
             Task { await pipeline.previewBytes.setByteCapacity(max(1, new) * 1024 * 1024) }
+        }
+        .onChange(of: cacheExifSummary)      { _, new in IndexerCache.policy.cacheExifSummary  = new }
+        .onChange(of: cacheAFData)            { _, new in IndexerCache.policy.cacheAFData       = new }
+        .onChange(of: cacheSequence)          { _, new in IndexerCache.policy.cacheSequence     = new }
+        .onChange(of: cacheThumbnail)         { _, new in IndexerCache.policy.cacheThumbnail    = new }
+        .onChange(of: indexerCacheMaxSizeGB)  { _, new in
+            IndexerCache.policy.maxTotalBytes = Int64(new) * 1024 * 1024 * 1024
+            IndexerCache.gcIfNeeded()
         }
         .onChange(of: telemetryEnabled) { _, newValue in
             // Toggle ON: fire an immediate flush so the user sees an

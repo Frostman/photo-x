@@ -1,6 +1,6 @@
 import Foundation
 
-struct AFSettings: Hashable, Sendable {
+struct AFSettings: Hashable, Sendable, Codable {
     var focusMode: String?         // AF-S / AF-C / MF / DMF
     var afAreaMode: String?        // Wide / Spot / Tracking / Zone …
     var afTracking: String?        // On / Off

@@ -37,7 +37,9 @@ enum ThumbnailLoader {
     /// until the advanced-EXIF pipeline catches up. Returns
     /// `(nil, nil, nil)` only if every path fails.
     static func loadInstrumented(from url: URL, maxPixelSize: Int = 240)
-        -> (image: CGImage?, exif: ExifSummary?, stats: Stats?)
+        -> (image: CGImage?, exif: ExifSummary?,
+            jpegBytes: Data?, exifOrientation: Int?,
+            stats: Stats?)
     {
         let t0 = CFAbsoluteTimeGetCurrent()
         let ext = url.pathExtension.lowercased()
@@ -57,11 +59,13 @@ enum ThumbnailLoader {
             // Parse the TIFF block from the extracted EXIF.
             let exif: ExifSummary? = extracted.exifBytes.flatMap(TIFFEXIFParser.parse)
             let elapsed = (CFAbsoluteTimeGetCurrent() - t0) * 1000.0
-            return (img, exif, Stats(
-                fileBytes: extracted.jpeg.count + (extracted.exifBytes?.count ?? 0),
-                readMS:    0,
-                decodeMS:  elapsed
-            ))
+            return (img, exif,
+                    extracted.jpeg, extracted.exifOrientation,
+                    Stats(
+                        fileBytes: extracted.jpeg.count + (extracted.exifBytes?.count ?? 0),
+                        readMS:    0,
+                        decodeMS:  elapsed
+                    ))
         }
         // FALLBACK: ImageIO. No ExifSummary in this path — by the
         // time we're here the file isn't a camera preview we
@@ -73,16 +77,28 @@ enum ThumbnailLoader {
         do {
             data = try Data(contentsOf: url)
         } catch {
-            return (nil, nil, nil)
+            return (nil, nil, nil, nil, nil)
         }
         let t1 = CFAbsoluteTimeGetCurrent()
         let img = decode(data: data, maxPixelSize: maxPixelSize)
         let t2 = CFAbsoluteTimeGetCurrent()
-        return (img, nil, Stats(
+        return (img, nil, nil, nil, Stats(
             fileBytes: data.count,
             readMS:    (t1 - t0) * 1000.0,
             decodeMS:  (t2 - t1) * 1000.0
         ))
+    }
+
+    /// Decode-only path for cache hits: the cached embedded JPEG
+    /// bytes are already in hand, no HEIF box parse needed. Mirrors
+    /// the cropping + orientation handling the fast path does so
+    /// the cached + freshly-extracted thumbnails are byte-identical.
+    static func loadFromJPEGBytes(_ data: Data,
+                                  exifOrientation: Int,
+                                  maxPixelSize: Int = 240) -> CGImage? {
+        guard let raw = decode(data: data, maxPixelSize: maxPixelSize) else { return nil }
+        let cropped = cropToCameraAspect3by2(raw)
+        return OrientationApplier.apply(orientation: exifOrientation, to: cropped)
     }
 
     /// Common shape for the HEIF and JPEG embedded-thumb paths so
@@ -105,8 +121,9 @@ enum ThumbnailLoader {
         return nil
     }
 
-    /// Convenience: throw away the stats and exif. Kept for any caller
-    /// that just wants the image (tests, debugging).
+    /// Convenience: throw away the stats / exif / cache fields.
+    /// Kept for any caller that just wants the image (tests,
+    /// debugging).
     static func load(from url: URL, maxPixelSize: Int = 240) -> CGImage? {
         loadInstrumented(from: url, maxPixelSize: maxPixelSize).image
     }
