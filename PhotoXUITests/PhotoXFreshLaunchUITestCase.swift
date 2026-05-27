@@ -23,8 +23,23 @@ class PhotoXFreshLaunchUITestCase: PhotoXUITestCase {
         try Self.cloneSampleFixture(into: tempFixtureURL)
         manifest = try Self.fingerprintFixture(at: tempFixtureURL)
 
+        // Per-test sandbox for the app's IndexerCache plists.
+        // Lives under tempFixtureURL so the existing teardown
+        // removeItem also cleans it up. Without this, e2e runs
+        // would write plists into the user's real
+        // ~/Library/Caches/PhotoX/IndexerCache/ and `gcIfNeeded`
+        // could evict legitimate caches. The launchEnvironment
+        // entry persists across the in-test `app.terminate()` +
+        // `app.launch()` cycle so the cache survives the relaunch
+        // — matches the production cache-survival contract that
+        // `test_relaunch_servesIndexerCacheHits` asserts.
+        let cacheDir = tempFixtureURL.appendingPathComponent(".photox-indexer-cache")
+        try FileManager.default.createDirectory(at: cacheDir,
+                                                 withIntermediateDirectories: true)
+
         app = XCUIApplication()
         app.launchEnvironment["PHOTOX_SAMPLE_DIR"] = tempFixtureURL.path
+        app.launchEnvironment["PHOTOX_TEST_CACHE_DIR"] = cacheDir.path
         app.launchArguments = [
             "-photoxDisableSparkle",          "YES",
             "-photoxUITestMode",              "YES",

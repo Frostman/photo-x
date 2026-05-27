@@ -218,6 +218,21 @@ final class IndexerCache {
 
     static var rootDirectory: URL {
         if let override = _rootDirectoryOverride { return override }
+        // E2E test isolation: `PhotoXSessionUITestCase` /
+        // `PhotoXFreshLaunchUITestCase` set this env var on the
+        // app's launchEnvironment so test runs never touch the
+        // user's real cache dir. Checked here (not in a launch
+        // hook) so the redirect lands BEFORE the first IndexerCache
+        // instance is constructed regardless of init order —
+        // ViewerState's `private(set) var cache = IndexerCache(...)`
+        // property initialiser fires before `application
+        // DidFinishLaunching`, and a startup-hook override would
+        // miss that initial cache.
+        if let envPath = ProcessInfo.processInfo
+            .environment["PHOTOX_TEST_CACHE_DIR"],
+           !envPath.isEmpty {
+            return URL(fileURLWithPath: envPath)
+        }
         return URL.cachesDirectory
             .appendingPathComponent("PhotoX/IndexerCache")
     }

@@ -42,6 +42,13 @@ class PhotoXSessionUITestCase: PhotoXUITestCase {
     // XCTest in practice runs everything on main.
     nonisolated(unsafe) private static var sharedApp: XCUIApplication?
     nonisolated(unsafe) private static var sharedFixtureURL: URL?
+    /// Per-session sandbox for the app's IndexerCache plists. Passed
+    /// to the app via `PHOTOX_TEST_CACHE_DIR` env var so the running
+    /// process redirects `IndexerCache.rootDirectory` here instead
+    /// of `~/Library/Caches/PhotoX/IndexerCache/`. Without this,
+    /// e2e runs would leak cache files into the user's real cache
+    /// dir and `gcIfNeeded` could even evict legitimate caches.
+    nonisolated(unsafe) private static var sharedCacheDirURL: URL?
     nonisolated(unsafe) private static var sharedManifest: [String: FileFingerprint] = [:]
     nonisolated(unsafe) private static var observerRegistered = false
     nonisolated(unsafe) private static var keepFixtureOnTeardown = false
@@ -60,9 +67,15 @@ class PhotoXSessionUITestCase: PhotoXUITestCase {
         }
         if sharedApp != nil, let url = sharedFixtureURL {
             // The shared process is gone but the fixture is still
-            // there. Relaunch against it.
+            // there. Relaunch against it. Reuse the existing cache
+            // dir so any plists written before the process died are
+            // still seen by the next launch (matches the per-launch
+            // cache survival contract production users rely on).
             let app = XCUIApplication()
             app.launchEnvironment["PHOTOX_SAMPLE_DIR"] = url.path
+            if let cache = sharedCacheDirURL {
+                app.launchEnvironment["PHOTOX_TEST_CACHE_DIR"] = cache.path
+            }
             app.launchArguments = [
                 "-photoxDisableSparkle", "YES",
                 "-photoxUITestMode",     "YES",
@@ -73,19 +86,24 @@ class PhotoXSessionUITestCase: PhotoXUITestCase {
             return
         }
         let url = PhotoXUITestCase.makeTempFixtureURL()
+        let cacheDir = url.appendingPathComponent(".photox-indexer-cache")
         do {
             try FileManager.default.createDirectory(at: url,
                                                      withIntermediateDirectories: true)
             try PhotoXUITestCase.cloneSampleFixture(into: url)
             sharedManifest = try PhotoXUITestCase.fingerprintFixture(at: url)
+            try FileManager.default.createDirectory(at: cacheDir,
+                                                     withIntermediateDirectories: true)
         } catch {
             XCTFail("session setUp: fixture clone failed: \(error)")
             return
         }
         sharedFixtureURL = url
+        sharedCacheDirURL = cacheDir
 
         let app = XCUIApplication()
         app.launchEnvironment["PHOTOX_SAMPLE_DIR"] = url.path
+        app.launchEnvironment["PHOTOX_TEST_CACHE_DIR"] = cacheDir.path
         app.launchArguments = [
             "-photoxDisableSparkle", "YES",
             "-photoxUITestMode",     "YES",
@@ -125,8 +143,12 @@ class PhotoXSessionUITestCase: PhotoXUITestCase {
                 try? FileManager.default.removeItem(at: url)
             }
         }
+        // sharedCacheDirURL lives under sharedFixtureURL, so the
+        // removeItem above already cleaned it up. Just clear the
+        // slot so the next session allocates a fresh one.
         sharedApp = nil
         sharedFixtureURL = nil
+        sharedCacheDirURL = nil
         sharedManifest = [:]
         keepFixtureOnTeardown = false
     }
