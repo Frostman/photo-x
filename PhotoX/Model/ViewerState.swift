@@ -1188,12 +1188,17 @@ final class ViewerState {
             // the cache; only the misses go through exiftool. For
             // a fully-cached re-open this skips the whole
             // subprocess spawn for the batch.
+            //
+            // stat() each entry ONCE here — the fingerprint we
+            // compute drives BOTH the cache lookup AND the
+            // subsequent cache.updateEntry on a miss.
             var afFromCache:  [String: ExifToolRunner.AFData] = [:]
             var seqFromCache: [String: Int] = [:]
-            var misses: [PhotoEntry] = []
+            var misses: [(entry: PhotoEntry, fingerprint: IndexerCache.Fingerprint?)] = []
             for entry in batch {
-                if let hit = cache.entry(for: entry.stem,
-                                         sourceURL: entry.previewURL) {
+                let fp = try? IndexerCache.fingerprint(of: entry.previewURL)
+                if let fp,
+                   let hit = cache.entry(for: entry.stem, fingerprint: fp) {
                     if let af  = hit.afData          { afFromCache[entry.stem]  = af }
                     if let seq = hit.sequenceNumber  { seqFromCache[entry.stem] = seq }
                     // If neither field is in the cache for this
@@ -1203,24 +1208,24 @@ final class ViewerState {
                         continue
                     }
                 }
-                misses.append(entry)
+                misses.append((entry, fp))
             }
 
             var afByStem  = afFromCache
             var seqByStem = seqFromCache
             if !misses.isEmpty {
-                let urls = misses.map(\.previewURL)
+                let urls = misses.map(\.entry.previewURL)
                 let (result, stats) = await MetadataBatchLoader.readInstrumented(urls)
-                for entry in misses {
+                for (entry, fp) in misses {
                     let af  = result.af [entry.previewURL.path]
                     let seq = result.seq[entry.previewURL.path]
                     if let af  { afByStem [entry.stem] = af }
                     if let seq { seqByStem[entry.stem] = seq }
                     // Cache whatever we learned — even partial
                     // entries (AF only / seq only) round-trip.
-                    if af != nil || seq != nil {
+                    if (af != nil || seq != nil), let fp {
                         cache.updateEntry(stem: entry.stem,
-                                           sourceURL: entry.previewURL,
+                                           fingerprint: fp,
                                            afData: af,
                                            sequenceNumber: seq)
                     }
@@ -1279,10 +1284,18 @@ final class ViewerState {
             // file read). Cache misses or partial cache entries
             // (missing thumb bytes / EXIF) fall through to the
             // existing pipeline.
+            //
+            // stat() each entry ONCE here — the fingerprint we
+            // compute drives BOTH the cache lookup AND the
+            // subsequent cache.updateEntry on a miss. Entries
+            // whose source file is missing get a nil fingerprint
+            // and skip caching entirely.
             var cachedResults: [Result] = []
-            var misses: [PhotoEntry] = []
+            var misses: [(entry: PhotoEntry, fingerprint: IndexerCache.Fingerprint?)] = []
             for entry in batch {
-                if let hit = cache.entry(for: entry.stem, sourceURL: entry.previewURL),
+                let fp = try? IndexerCache.fingerprint(of: entry.previewURL)
+                if let fp,
+                   let hit = cache.entry(for: entry.stem, fingerprint: fp),
                    let bytes = hit.thumbnailJPEG,
                    let exif = hit.exif {
                     // EXIF orientation (tag 0x0112) applies to both
@@ -1299,12 +1312,12 @@ final class ViewerState {
                         continue
                     }
                 }
-                misses.append(entry)
+                misses.append((entry, fp))
             }
 
             let pipelineResults: [Result] = await withTaskGroup(of: Result.self,
                                                                 returning: [Result].self) { group in
-                for entry in misses {
+                for (entry, _) in misses {
                     let url = entry.previewURL
                     group.addTask {
                         let r = await Task.detached(priority: .utility) {
@@ -1329,12 +1342,19 @@ final class ViewerState {
             }
             // Capture per-entry thumbnail bytes for the on-disk
             // indexer cache. Only entries we actually got both
-            // exif + thumb bytes from get cached.
-            for r in results {
-                if let ex = r.exif, let bytes = r.jpegBytes {
+            // exif + thumb bytes from get cached. Reuse the
+            // fingerprint we computed during the miss-detection
+            // pass above — no extra stat() here.
+            let missFingerprints = Dictionary(uniqueKeysWithValues:
+                misses.compactMap { miss in
+                    miss.fingerprint.map { fp in (miss.entry.stem, fp) }
+                })
+            for r in pipelineResults {
+                if let ex = r.exif, let bytes = r.jpegBytes,
+                   let fp = missFingerprints[r.entry.stem] {
                     cache.updateEntry(
                         stem: r.entry.stem,
-                        sourceURL: r.entry.previewURL,
+                        fingerprint: fp,
                         exif: ex,
                         thumbnailJPEG: bytes
                     )

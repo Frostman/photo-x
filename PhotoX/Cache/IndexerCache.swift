@@ -103,37 +103,40 @@ final class IndexerCache {
 
     // MARK: - Lookups + updates (per-shoot)
 
-    /// Returns the cached entry for `stem` IF its on-disk
-    /// fingerprint still matches the source file. Returns nil
-    /// if the entry is missing, the file is missing, or the
-    /// file's size/mtime no longer match (the indexer will
-    /// re-run for it).
-    func entry(for stem: String, sourceURL: URL) -> Entry? {
+    /// Returns the cached entry for `stem` IF its stored
+    /// fingerprint matches the provided one. Returns nil on
+    /// miss or fingerprint divergence — caller's indexer should
+    /// then re-run for this entry.
+    ///
+    /// Callers pass the fingerprint they already stat'd for the
+    /// file rather than us re-stat'ing here, so the same file
+    /// isn't stat'd by both `entry(for:)` and the matching
+    /// `updateEntry`.
+    func entry(for stem: String, fingerprint: Fingerprint) -> Entry? {
         guard let cached = payload.entries[stem] else { return nil }
-        guard let now = try? Self.fingerprint(of: sourceURL) else { return nil }
-        return cached.fingerprint == now ? cached : nil
+        return cached.fingerprint == fingerprint ? cached : nil
     }
 
     /// Merge new indexer outputs into the in-memory cache. Only
     /// the fields the policy enables get stored — others stay
     /// nil. Caller passes only what they have; pre-existing
     /// fields on the entry (e.g. a basic-EXIF result from a
-    /// previous batch) are preserved.
+    /// previous batch) are preserved IF the fingerprint matches.
     func updateEntry(
         stem: String,
-        sourceURL: URL,
+        fingerprint: Fingerprint,
         exif: ExifSummary? = nil,
         afData: ExifToolRunner.AFData? = nil,
         sequenceNumber: Int? = nil,
         thumbnailJPEG: Data? = nil
     ) {
-        guard let fp = try? Self.fingerprint(of: sourceURL) else { return }
         var entry = payload.entries[stem]
-            ?? Entry(fingerprint: fp)
-        // If the file changed under us between read and update,
-        // bump the fingerprint and treat the entry as fresh.
-        if entry.fingerprint != fp {
-            entry = Entry(fingerprint: fp)
+            ?? Entry(fingerprint: fingerprint)
+        // If the file changed since the entry was first cached,
+        // bump the fingerprint and start a fresh entry — the
+        // stale fields would otherwise outlive the file.
+        if entry.fingerprint != fingerprint {
+            entry = Entry(fingerprint: fingerprint)
         }
         let p = Self.policy
         if let exif, p.cacheExifSummary           { entry.exif = exif }
@@ -160,15 +163,15 @@ final class IndexerCache {
                 let encoder = PropertyListEncoder()
                 encoder.outputFormat = .binary
                 let data = try encoder.encode(snapshot)
-                // Atomic write via tmp + rename — partial files
-                // can never confuse the next launch.
-                let tmp = url.appendingPathExtension("tmp-\(UUID().uuidString)")
-                try data.write(to: tmp, options: .atomic)
-                _ = try? FileManager.default.replaceItemAt(url, withItemAt: tmp)
-                // Touch mtime so GC's LRU ordering reflects
-                // recent use.
-                try? FileManager.default.setAttributes(
-                    [.modificationDate: Date()], ofItemAtPath: url.path)
+                // Data.write(.atomic) handles tmp + rename
+                // internally and works whether or not the
+                // target exists. Sets mtime to "now" natively —
+                // good enough for GC's LRU ordering (resolution
+                // is whatever the file system supports; in
+                // practice shoots aren't opened within the same
+                // second of each other, so the ordering is
+                // unambiguous).
+                try data.write(to: url, options: .atomic)
             } catch {
                 Log.app.error("IndexerCache flush failed: \(String(describing: error), privacy: .public)")
             }
@@ -191,10 +194,23 @@ final class IndexerCache {
 
     // MARK: - Disk path resolution
 
-    /// `~/Library/Caches/PhotoX/IndexerCache/`
+    /// `~/Library/Caches/PhotoX/IndexerCache/` in production.
+    /// Test-overridable via `setRootDirectoryForTests(_:)` so the
+    /// GC + delete-all tests don't trample the user's real cache
+    /// files (which sit in the same default location).
+    private static var _rootDirectoryOverride: URL?
+
     static var rootDirectory: URL {
-        URL.cachesDirectory
+        if let override = _rootDirectoryOverride { return override }
+        return URL.cachesDirectory
             .appendingPathComponent("PhotoX/IndexerCache")
+    }
+
+    /// Point the cache at a sandboxed directory for the duration
+    /// of a test. Pass nil to restore the production default.
+    /// NEVER call this in production code.
+    static func setRootDirectoryForTests(_ url: URL?) {
+        _rootDirectoryOverride = url
     }
 
     /// Cache file URL for a given shoot folder. Stable: same
