@@ -47,12 +47,26 @@ struct StatusBarView: View {
             }
             .buttonStyle(.plain)
             .help("Click for indexing details")
+            // E2E hook: status visible to XCUITest as the
+            // button's accessibility identifier. `indexing` /
+            // `done` change as the pipelines progress; tests
+            // wait for `done` before asserting cache behaviour.
+            .accessibilityIdentifier({
+                switch state.indexingStatus {
+                case .idle:       return "indexer.statusChip.idle"
+                case .indexing:   return "indexer.statusChip.indexing"
+                case .done:       return "indexer.statusChip.done"
+                case .cancelled:  return "indexer.statusChip.cancelled"
+                }
+            }())
             .popover(isPresented: $showIndexingDetails, arrowEdge: .bottom) {
                 IndexingProgressPopover(
                     progress: state.indexingProgress,
                     timings: state.indexingTimings,
                     completedAt: state.indexingCompletedAt,
                     shootFolder: state.shoot?.folderURL,
+                    cacheHits: state.indexerCacheHitsThisOpen,
+                    cacheMisses: state.indexerCacheMissesThisOpen,
                     onReindex: { state.reIndex() }
                 )
                 .padding(14)
@@ -258,6 +272,12 @@ private struct IndexingProgressPopover: View {
     /// nil when no shoot is open. Drives the cache-size row +
     /// the "delete this shoot" menu item.
     let shootFolder: URL?
+    /// How many cache hits / misses the current indexer run
+    /// observed. Surfaced in the Cache section + exposed via
+    /// accessibility identifiers so RelaunchTests can verify
+    /// the indexer cache is actually being read on a warm reopen.
+    let cacheHits: Int
+    let cacheMisses: Int
     let onReindex: () -> Void
 
     @State private var thisShootSize: Int64 = 0
@@ -344,6 +364,19 @@ private struct IndexingProgressPopover: View {
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(totalCacheSize > IndexerCache.policy.maxTotalBytes
                                      ? .red : .secondary)
+                Spacer()
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                Text("  This open:")
+                Text("\(cacheHits) hits")
+                    .font(.caption.monospacedDigit())
+                    .accessibilityIdentifier("indexer.cache.hits")
+                Text("·")
+                Text("\(cacheMisses) misses")
+                    .font(.caption.monospacedDigit())
+                    .accessibilityIdentifier("indexer.cache.misses")
                 Spacer()
             }
             .font(.caption)

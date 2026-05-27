@@ -58,6 +58,78 @@ final class RelaunchTests: PhotoXFreshLaunchUITestCase {
                        "relaunch should restore the last-viewed entry, not snap back to index 0")
     }
 
+    /// Indexer cache survives a process restart and the warm
+    /// reopen serves entries from the cache (not from a full
+    /// re-index). Reads the cache hits / misses counters exposed
+    /// in the indexer popover via accessibility identifiers.
+    func test_relaunch_servesIndexerCacheHits() throws {
+        // First open: indexing runs cold → all misses, zero hits.
+        waitForShootLoaded()
+        waitForIndexingDone(timeout: 60)
+        let (firstHits, firstMisses) = try readCacheCounters()
+        XCTAssertEqual(firstHits, 0,
+                       "first open has no cache to read from")
+        XCTAssertGreaterThan(firstMisses, 0,
+                             "first open should miss for every fixture entry")
+
+        // Terminate (no captureNow needed — we're testing the
+        // cache, not last-entry restore). The cache file is
+        // flushed by finishIndexing, which already ran above.
+        app.terminate()
+        app.launch()
+        Self.promoteToKey(app)
+
+        // Second open: same fixture path, same env. The cache
+        // file written by the first launch is still on disk;
+        // indexing should serve every entry from cache.
+        waitForShootLoaded()
+        waitForIndexingDone(timeout: 60)
+        let (secondHits, secondMisses) = try readCacheCounters()
+        XCTAssertGreaterThan(secondHits, 0,
+                             "warm reopen must serve cache hits")
+        XCTAssertEqual(secondHits, firstMisses,
+                       "every miss the first launch saw should hit on the second")
+        XCTAssertLessThan(secondMisses, firstMisses,
+                          "second launch should miss less than the first (cold)")
+    }
+
+    /// Open the indexer popover, parse the hits + misses values
+    /// from the accessibility-identified Text elements, dismiss
+    /// the popover. Both counters are aggregated across all
+    /// pipelines in `ViewerState.indexerCacheHitsThisOpen`.
+    private func readCacheCounters() throws -> (hits: Int, misses: Int) {
+        let chip = app.buttons["indexer.statusChip.done"]
+        XCTAssertTrue(chip.waitForExistence(timeout: 30),
+                      "indexer didn't reach .done in time")
+        chip.click()
+        defer { chip.click() }    // close the popover
+        let hitsText = app.staticTexts["indexer.cache.hits"]
+        let missText = app.staticTexts["indexer.cache.misses"]
+        XCTAssertTrue(hitsText.waitForExistence(timeout: 3))
+        // staticText surfaces its displayed string via either
+        // .label OR .value depending on the SwiftUI primitive +
+        // OS version; check both.
+        let hitsRaw = (hitsText.value as? String) ?? hitsText.label
+        let missRaw = (missText.value as? String) ?? missText.label
+        let hits  = Int(parseLeadingInt(from: hitsRaw) ?? "") ?? -1
+        let miss  = Int(parseLeadingInt(from: missRaw) ?? "") ?? -1
+        return (hits, miss)
+    }
+
+    /// Read just the leading integer from an accessibility
+    /// label like "1247 hits" or "0 misses".
+    private func parseLeadingInt(from raw: String) -> String? {
+        let prefix = raw.prefix(while: { $0.isNumber })
+        return prefix.isEmpty ? nil : String(prefix)
+    }
+
+    /// Block until `indexer.statusChip.done` exists.
+    private func waitForIndexingDone(timeout: TimeInterval) {
+        let chip = app.buttons["indexer.statusChip.done"]
+        XCTAssertTrue(chip.waitForExistence(timeout: timeout),
+                      "indexer didn't reach .done within \(timeout)s")
+    }
+
     /// Post the `captureNow` Darwin notification and wait for the
     /// app's completion sentinel. After completion, the in-app
     /// `captureLastEntryToStores` + `AppDefaults.synchronize` have

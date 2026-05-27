@@ -544,6 +544,22 @@ final class ViewerState {
     /// when a new indexing run starts or a shoot is closed.
     var indexingCompletedAt: Date?
 
+    /// Count of cache hits since the most recent shoot load. Reset
+    /// to 0 in `resetForShootSwitch`; incremented by the basic +
+    /// advanced pipelines whenever `cache.entry(for:fingerprint:)`
+    /// returns a usable hit. Surfaced in the indexer popover so
+    /// the user can see how much work was skipped, and consumed
+    /// by RelaunchTests to verify the cache is actually being read
+    /// after a process restart.
+    private(set) var indexerCacheHitsThisOpen: Int = 0
+
+    /// Count of cache misses since the most recent shoot load.
+    /// Same reset / lifecycle as `indexerCacheHitsThisOpen`. A
+    /// miss is any entry the pipeline had to do real work for
+    /// (no cached entry OR cached entry without the fields this
+    /// pipeline needed). Surfaced alongside hits in the popover.
+    private(set) var indexerCacheMissesThisOpen: Int = 0
+
     private var indexingTask: Task<Void, Never>?
     /// Per-neighbour prefetch tasks (warm decode + texture upload),
     /// keyed by entry stem. Cancelled when the stem leaves the
@@ -886,10 +902,23 @@ final class ViewerState {
         FavoriteShoots.shared.setLastEntry(stem, for: path)
     }
 
-    /// True iff the URL looks like a DCIM shoot folder mounted under
-    /// `/Volumes/<NAME>/DCIM/<100MSDCF-style>` AND the underlying
-    /// volume is a locally-mounted removable device (i.e. an actual
-    /// SD / CFExpress card or USB reader).
+    /// Pure path-shape check: does the URL look like
+    /// `/Volumes/<NAME>/DCIM/<100MSDCF-style>`?
+    /// Easy to unit-test against fake paths.
+    static func hasCardShootPathShape(_ url: URL) -> Bool {
+        let comps = url.pathComponents
+        guard comps.count >= 5,
+              comps[1] == "Volumes",
+              comps[comps.count - 2] == "DCIM",
+              let leaf = comps.last,
+              VolumeScanner.isDCIMConventionName(leaf)
+        else { return false }
+        return true
+    }
+
+    /// True iff the URL looks like a DCIM shoot folder AND the
+    /// underlying volume is a locally-mounted removable device
+    /// (i.e. an actual SD / CFExpress card or USB reader).
     ///
     /// Path-shape alone isn't enough — NAS shares (SMB / AFP / NFS)
     /// that happen to mirror the DCIM folder structure (a common
@@ -898,13 +927,7 @@ final class ViewerState {
     /// with `volumeIsLocal && volumeIsRemovable` distinguishes
     /// "card in a reader" from "network archive of a card."
     static func isCardShootPath(_ url: URL) -> Bool {
-        let comps = url.pathComponents
-        guard comps.count >= 5,
-              comps[1] == "Volumes",
-              comps[comps.count - 2] == "DCIM",
-              let leaf = comps.last,
-              VolumeScanner.isDCIMConventionName(leaf)
-        else { return false }
+        guard hasCardShootPathShape(url) else { return false }
         let vals = try? url.resourceValues(forKeys: [
             .volumeIsLocalKey, .volumeIsRemovableKey,
         ])
@@ -1022,6 +1045,8 @@ final class ViewerState {
         indexingProgress = .init()
         indexingTimings = .init()
         indexingCompletedAt = nil
+        indexerCacheHitsThisOpen = 0
+        indexerCacheMissesThisOpen = 0
 
         // 4) Reset per-entry UI state.
         currentIndex = 0
@@ -1207,6 +1232,7 @@ final class ViewerState {
             var afFromCache:  [String: ExifToolRunner.AFData] = [:]
             var seqFromCache: [String: Int] = [:]
             var misses: [(entry: PhotoEntry, fingerprint: IndexerCache.Fingerprint?)] = []
+            var batchHits = 0
             for entry in batch {
                 let fp = try? IndexerCache.fingerprint(of: entry.previewURL)
                 if let fp,
@@ -1217,11 +1243,16 @@ final class ViewerState {
                     // entry, treat it as a miss so the pipeline
                     // populates them.
                     if hit.afData != nil || hit.sequenceNumber != nil {
+                        batchHits += 1
                         continue
                     }
                 }
                 misses.append((entry, fp))
             }
+            // Bump the @Observable counters ONCE per batch (not
+            // per entry) — see the basic-pipeline comment above.
+            indexerCacheHitsThisOpen   += batchHits
+            indexerCacheMissesThisOpen += misses.count
 
             var afByStem  = afFromCache
             var seqByStem = seqFromCache
@@ -1290,19 +1321,18 @@ final class ViewerState {
                                 exifOrientation: Int?,
                                 stats: ThumbnailLoader.Stats?)
 
-            // Cache hit fast-path: for entries with cached JPEG
-            // bytes + EXIF AND a matching file fingerprint, decode
-            // the cached thumbnail (no HEIF box parse, no fresh
-            // file read). Cache misses or partial cache entries
-            // (missing thumb bytes / EXIF) fall through to the
-            // existing pipeline.
-            //
-            // stat() each entry ONCE here — the fingerprint we
-            // compute drives BOTH the cache lookup AND the
-            // subsequent cache.updateEntry on a miss. Entries
-            // whose source file is missing get a nil fingerprint
-            // and skip caching entirely.
-            var cachedResults: [Result] = []
+            // Categorize each entry as hit / miss. stat() each
+            // file ONCE here — the fingerprint drives both the
+            // cache lookup AND the subsequent updateEntry on a
+            // miss. Entries whose file is missing get a nil
+            // fingerprint and skip caching entirely.
+            struct CachedHit {
+                let entry: PhotoEntry
+                let exif: ExifSummary
+                let bytes: Data
+                let orientation: Int
+            }
+            var hits: [CachedHit] = []
             var misses: [(entry: PhotoEntry, fingerprint: IndexerCache.Fingerprint?)] = []
             for entry in batch {
                 let fp = try? IndexerCache.fingerprint(of: entry.previewURL)
@@ -1310,25 +1340,40 @@ final class ViewerState {
                    let hit = cache.entry(for: entry.stem, fingerprint: fp),
                    let bytes = hit.thumbnailJPEG,
                    let exif = hit.exif {
-                    // EXIF orientation (tag 0x0112) applies to both
-                    // the full image AND the embedded thumbnail —
-                    // they're rotated together by the camera. Use
-                    // the parsed value with a fallback of 1
-                    // (identity) for files that didn't store one.
-                    let orientation = exif.orientation ?? 1
-                    if let img = ThumbnailLoader.loadFromJPEGBytes(
-                        bytes, exifOrientation: orientation)
-                    {
-                        cachedResults.append((entry, img, exif,
-                                              bytes, orientation, nil))
-                        continue
+                    // EXIF orientation (tag 0x0112) applies to
+                    // both the full image AND the embedded
+                    // thumbnail — they're rotated together by the
+                    // camera. Use the parsed value with a fallback
+                    // of 1 (identity) for files that didn't store one.
+                    hits.append(CachedHit(entry: entry, exif: exif,
+                                          bytes: bytes,
+                                          orientation: exif.orientation ?? 1))
+                } else {
+                    misses.append((entry, fp))
+                }
+            }
+            // Bump the @Observable counters ONCE per batch (not
+            // per entry) — per-entry mutations caused the popover
+            // to re-render 60+ times during indexing.
+            indexerCacheHitsThisOpen   += hits.count
+            indexerCacheMissesThisOpen += misses.count
+
+            // Decode BOTH hits AND misses off-main in parallel.
+            // The cache-hit branch previously decoded on the main
+            // thread inside this for-loop (~5 ms/entry × N hits
+            // = visible UI lag on warm reopen).
+            let results: [Result] = await withTaskGroup(of: Result.self,
+                                                        returning: [Result].self) { group in
+                for hit in hits {
+                    group.addTask {
+                        let img = await Task.detached(priority: .utility) {
+                            ThumbnailLoader.loadFromJPEGBytes(
+                                hit.bytes, exifOrientation: hit.orientation)
+                        }.value
+                        return (hit.entry, img, hit.exif,
+                                hit.bytes, hit.orientation, nil)
                     }
                 }
-                misses.append((entry, fp))
-            }
-
-            let pipelineResults: [Result] = await withTaskGroup(of: Result.self,
-                                                                returning: [Result].self) { group in
                 for (entry, _) in misses {
                     let url = entry.previewURL
                     group.addTask {
@@ -1343,7 +1388,6 @@ final class ViewerState {
                 for await r in group { out.append(r) }
                 return out
             }
-            let results = cachedResults + pipelineResults
             let thumbs: [(String, CGImage)] = results.compactMap {
                 guard let img = $0.image else { return nil }
                 return ($0.entry.stem, img)
@@ -1353,24 +1397,27 @@ final class ViewerState {
                 return ($0.entry.stem, ex)
             }
             // Capture per-entry thumbnail bytes for the on-disk
-            // indexer cache. Only entries we actually got both
-            // exif + thumb bytes from get cached. Reuse the
-            // fingerprint we computed during the miss-detection
-            // pass above — no extra stat() here.
+            // indexer cache. Only the miss-path results get
+            // cached (hits are already cached by definition).
+            // Reuse the fingerprint we computed during the
+            // miss-detection pass — no extra stat() here.
             let missFingerprints = Dictionary(uniqueKeysWithValues:
                 misses.compactMap { miss in
                     miss.fingerprint.map { fp in (miss.entry.stem, fp) }
                 })
-            for r in pipelineResults {
-                if let ex = r.exif, let bytes = r.jpegBytes,
-                   let fp = missFingerprints[r.entry.stem] {
-                    cache.updateEntry(
-                        stem: r.entry.stem,
-                        fingerprint: fp,
-                        exif: ex,
-                        thumbnailJPEG: bytes
-                    )
-                }
+            for r in results {
+                // Only the miss-path returns `stats` (the hit
+                // path passes nil) — cheap way to identify which
+                // results came from the indexer vs. the cache.
+                guard r.stats != nil,
+                      let ex = r.exif, let bytes = r.jpegBytes,
+                      let fp = missFingerprints[r.entry.stem] else { continue }
+                cache.updateEntry(
+                    stem: r.entry.stem,
+                    fingerprint: fp,
+                    exif: ex,
+                    thumbnailJPEG: bytes
+                )
             }
             flushBasicExifAndThumbsBatch(thumbs: thumbs, exifs: exifs, generation: gen)
             logBasicExifAndThumbsBatchStats(id: id, results: results)

@@ -152,33 +152,35 @@ final class VolumeScannerTests: XCTestCase {
         XCTAssertTrue(found.isEmpty)
     }
 
-    // MARK: ViewerState.isCardShootPath (matches whichever paths get
-    // skipped from RecentShoots)
+    // MARK: ViewerState.hasCardShootPathShape (pure path-shape
+    // check; isCardShootPath additionally requires volume
+    // properties that fake test paths can't carry, so it's
+    // covered by the e2e suite instead).
 
     @MainActor
-    func test_isCardShootPath_acceptsCanonicalCardLayout() {
-        XCTAssertTrue(ViewerState.isCardShootPath(
+    func test_hasCardShootPathShape_acceptsCanonicalCardLayout() {
+        XCTAssertTrue(ViewerState.hasCardShootPathShape(
             URL(fileURLWithPath: "/Volumes/Untitled/DCIM/100MSDCF")))
-        XCTAssertTrue(ViewerState.isCardShootPath(
+        XCTAssertTrue(ViewerState.hasCardShootPathShape(
             URL(fileURLWithPath: "/Volumes/MyCard/DCIM/101MSDCF")))
-        XCTAssertTrue(ViewerState.isCardShootPath(
+        XCTAssertTrue(ViewerState.hasCardShootPathShape(
             URL(fileURLWithPath: "/Volumes/SD/DCIM/100APPLE")))
     }
 
     @MainActor
-    func test_isCardShootPath_rejectsRegularPaths() {
-        XCTAssertFalse(ViewerState.isCardShootPath(
+    func test_hasCardShootPathShape_rejectsRegularPaths() {
+        XCTAssertFalse(ViewerState.hasCardShootPathShape(
             URL(fileURLWithPath: "/Users/me/Pictures/2026-05-18")))
-        XCTAssertFalse(ViewerState.isCardShootPath(
+        XCTAssertFalse(ViewerState.hasCardShootPathShape(
             URL(fileURLWithPath: "/Users/me/Pictures/DCIM/100MSDCF")),
-            "DCIM at non-/Volumes location is NOT a card path")
-        XCTAssertFalse(ViewerState.isCardShootPath(
+            "DCIM at non-/Volumes location isn't card shape")
+        XCTAssertFalse(ViewerState.hasCardShootPathShape(
             URL(fileURLWithPath: "/Volumes/Untitled/DCIM/MISC")),
             "MISC isn't a DCIM-convention folder")
-        XCTAssertFalse(ViewerState.isCardShootPath(
+        XCTAssertFalse(ViewerState.hasCardShootPathShape(
             URL(fileURLWithPath: "/Volumes/Untitled/Photos/100MSDCF")),
             "second-to-last segment must be DCIM")
-        XCTAssertFalse(ViewerState.isCardShootPath(
+        XCTAssertFalse(ViewerState.hasCardShootPathShape(
             URL(fileURLWithPath: "/Volumes/Untitled")),
             "card root isn't a shoot")
     }
