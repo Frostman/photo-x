@@ -1,4 +1,3 @@
-import CryptoKit
 import XCTest
 
 /// Shared HELPERS for every PhotoXUITests test. Provides:
@@ -12,11 +11,19 @@ import XCTest
 ///    (auto-loads the shoot, kills Sparkle's auto-check timer, skips
 ///    the launch-time window maximize that races XCUITest queries).
 /// 3. A **no-mutation invariant** check: every non-`.xmp` file in the
-///    fixture must be byte-identical to its source state
-///    (size + mtime + sha256). XMP sidecars may be created or modified
-///    but must remain well-formed XML. This bakes the project-wide
-///    "no original-image mutation" rule into CI rather than relying
+///    fixture must match its initial **size + nanosecond mtime**.
+///    XMP sidecars may be created or modified but must remain
+///    well-formed XML. This bakes the project-wide "no
+///    original-image mutation" rule into CI rather than relying
 ///    on code review.
+///
+///    Size + mtime (not SHA256) is intentional: the threat model is
+///    "did the app accidentally write to a photo file", and any
+///    write through Foundation / ImageIO / Metal updates mtime. A
+///    SHA256 walk over the 3 GB fixture cost ~9 s per run for no
+///    additional safety against realistic mutations — the only
+///    failure mode (writer that preserves both size AND mtime via
+///    `touch -r`) doesn't show up accidentally.
 ///
 /// **This base class does NOT own the app/fixture lifecycle.** Two
 /// concrete subclasses pick the launch model:
@@ -95,7 +102,6 @@ class PhotoXUITestCase: XCTestCase {
     struct FileFingerprint: Equatable {
         let size: Int64
         let mtimeNanos: Int64
-        let sha256: Data
     }
 
     /// Walk the fixture at `url` and capture a fingerprint per
@@ -125,27 +131,12 @@ class PhotoXUITestCase: XCTestCase {
         let size = (attrs[.size] as? NSNumber)?.int64Value ?? 0
         let mtime = (attrs[.modificationDate] as? Date) ?? .distantPast
         let mtimeNanos = Int64(mtime.timeIntervalSince1970 * 1_000_000_000)
-
-        var hasher = SHA256()
-        let handle = try FileHandle(forReadingFrom: url)
-        defer { try? handle.close() }
-        let chunkSize = 1 << 20    // 1 MB chunks so multi-hundred-MB ARWs don't balloon memory
-        while autoreleasepool(invoking: {
-            guard let chunk = try? handle.read(upToCount: chunkSize), !chunk.isEmpty else {
-                return false
-            }
-            hasher.update(data: chunk)
-            return true
-        }) {}
-        let digest = hasher.finalize()
-        return FileFingerprint(size: size,
-                               mtimeNanos: mtimeNanos,
-                               sha256: Data(digest))
+        return FileFingerprint(size: size, mtimeNanos: mtimeNanos)
     }
 
     /// Walk the fixture at `url` and assert:
     /// 1. Every file in `manifest` still exists and matches
-    ///    (size, mtime, sha256). Mismatch → XCTFail with rel path.
+    ///    (size + mtime). Mismatch → XCTFail with rel path.
     /// 2. Any new non-`.xmp` file → XCTFail.
     /// 3. Every `.xmp` file is parseable as XML and contains the XMP
     ///    root namespace.
@@ -178,9 +169,8 @@ class PhotoXUITestCase: XCTestCase {
             if now != original {
                 XCTFail("""
                     fixture mutated: '\(rel)' changed
-                      size:   \(original.size) → \(now.size)
-                      mtime:  \(original.mtimeNanos) → \(now.mtimeNanos)
-                      sha256: \(original.sha256.map { String(format: "%02x", $0) }.joined()) → \(now.sha256.map { String(format: "%02x", $0) }.joined())
+                      size:  \(original.size) → \(now.size)
+                      mtime: \(original.mtimeNanos) → \(now.mtimeNanos)
                     """)
             }
         }
