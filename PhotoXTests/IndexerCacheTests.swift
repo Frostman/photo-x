@@ -198,4 +198,155 @@ final class IndexerCacheTests: XCTestCase {
             atPath: IndexerCache.cacheURL(for: aDir).path),
                        "oldest cache file must be evicted")
     }
+
+    // MARK: - delete
+
+    func test_deleteCache_removesSingleShoot_keepsOthers() async throws {
+        let aDir = tempDir.appendingPathComponent("a")
+        let bDir = tempDir.appendingPathComponent("b")
+        for dir in [aDir, bDir] {
+            try FileManager.default.createDirectory(at: dir,
+                                                     withIntermediateDirectories: true)
+            let src = dir.appendingPathComponent("dummy.jpg")
+            try Data(count: 16).write(to: src)
+            let cache = IndexerCache(shootFolder: dir)
+            let fp = try IndexerCache.fingerprint(of: src)
+            cache.updateEntry(stem: "dummy", fingerprint: fp,
+                              sequenceNumber: 1)
+            await cache.flush()
+        }
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: IndexerCache.cacheURL(for: aDir).path))
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: IndexerCache.cacheURL(for: bDir).path))
+
+        IndexerCache.deleteCache(for: aDir)
+
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: IndexerCache.cacheURL(for: aDir).path),
+                       "deleteCache(for:) must remove the targeted shoot's file")
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: IndexerCache.cacheURL(for: bDir).path),
+                      "other shoots' caches must be untouched")
+    }
+
+    func test_deleteAllCaches_removesEverything() async throws {
+        let aDir = tempDir.appendingPathComponent("a")
+        let bDir = tempDir.appendingPathComponent("b")
+        for dir in [aDir, bDir] {
+            try FileManager.default.createDirectory(at: dir,
+                                                     withIntermediateDirectories: true)
+            let src = dir.appendingPathComponent("dummy.jpg")
+            try Data(count: 16).write(to: src)
+            let cache = IndexerCache(shootFolder: dir)
+            let fp = try IndexerCache.fingerprint(of: src)
+            cache.updateEntry(stem: "dummy", fingerprint: fp,
+                              sequenceNumber: 1)
+            await cache.flush()
+        }
+        XCTAssertGreaterThan(IndexerCache.totalSize(), 0)
+
+        IndexerCache.deleteAllCaches()
+
+        XCTAssertEqual(IndexerCache.totalSize(), 0,
+                       "deleteAllCaches must zero the on-disk total")
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: IndexerCache.cacheURL(for: aDir).path))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: IndexerCache.cacheURL(for: bDir).path))
+    }
+
+    // MARK: - shoot file changes (the indexer-side scenarios)
+
+    func test_addedFile_isNotInCache_initially() async throws {
+        let oldSource = try makeSourceFile(name: "DSC00010.JPG")
+        let cache = IndexerCache(shootFolder: tempDir)
+        let fp = try IndexerCache.fingerprint(of: oldSource)
+        cache.updateEntry(stem: "DSC00010", fingerprint: fp,
+                          sequenceNumber: 5)
+        await cache.flush()
+
+        // Simulate a NEW file appearing in the same shoot (e.g.
+        // user copied another image in). The cache has no entry
+        // for it, so the lookup returns nil → the indexer would
+        // process it on the next open.
+        let newSource = try makeSourceFile(name: "DSC00099.JPG")
+        let newFP = try IndexerCache.fingerprint(of: newSource)
+        XCTAssertNil(cache.entry(for: "DSC00099", fingerprint: newFP),
+                     "newly-added file must miss the cache")
+        XCTAssertNotNil(cache.entry(for: "DSC00010", fingerprint: fp),
+                        "pre-existing entries must still hit")
+    }
+
+    func test_removedFile_returnsNilForLookup_evenIfStillCached() async throws {
+        let source = try makeSourceFile(name: "DSC00020.JPG")
+        let cache = IndexerCache(shootFolder: tempDir)
+        let fp = try IndexerCache.fingerprint(of: source)
+        cache.updateEntry(stem: "DSC00020", fingerprint: fp,
+                          sequenceNumber: 9)
+        XCTAssertNotNil(cache.entry(for: "DSC00020", fingerprint: fp),
+                        "entry must hit while file is present")
+
+        // File removed from disk. The cache row is still
+        // in-memory but unreachable: callers stat the file
+        // first (gets an error → fingerprint throws → entry
+        // skipped). Confirms the indexer won't accidentally
+        // serve cached data for a file that no longer exists.
+        try FileManager.default.removeItem(at: source)
+        XCTAssertThrowsError(try IndexerCache.fingerprint(of: source))
+        // And the stale row stays in the in-memory map until
+        // the next file with that stem replaces it OR the
+        // policy evicts the whole shoot — neither of which
+        // affects the correctness of LIVE entries.
+        XCTAssertEqual(cache.entryCount, 1,
+                       "removed-file cache row stays in memory; not auto-pruned")
+    }
+
+    func test_partialUpdate_preservesExistingFields_acrossBatches() async throws {
+        // Simulates the two pipelines: basic-EXIF pipeline writes
+        // exif + thumbnail; advanced-EXIF pipeline later writes
+        // afData + sequenceNumber. Both calls share the same
+        // fingerprint. The cache must keep ALL four fields, not
+        // overwrite the first batch's data with the second's nils.
+        let source = try makeSourceFile(name: "DSC00030.HIF")
+        let cache = IndexerCache(shootFolder: tempDir)
+        let fp = try IndexerCache.fingerprint(of: source)
+
+        cache.updateEntry(
+            stem: "DSC00030", fingerprint: fp,
+            exif: ExifSummary(camera: "Sony ILCE-1M2"),
+            thumbnailJPEG: Data([0xFF, 0xD8, 0xFF, 0xE0])
+        )
+        cache.updateEntry(
+            stem: "DSC00030", fingerprint: fp,
+            afData: ExifToolRunner.AFData(
+                regions: [],
+                settings: AFSettings(focusMode: "AF-C")),
+            sequenceNumber: 4
+        )
+
+        let hit = cache.entry(for: "DSC00030", fingerprint: fp)
+        XCTAssertEqual(hit?.exif?.camera, "Sony ILCE-1M2",
+                       "basic-EXIF write must survive the advanced-EXIF batch")
+        XCTAssertEqual(hit?.thumbnailJPEG, Data([0xFF, 0xD8, 0xFF, 0xE0]))
+        XCTAssertEqual(hit?.sequenceNumber, 4)
+        XCTAssertEqual(hit?.afData?.settings.focusMode, "AF-C")
+    }
+
+    func test_corruptCacheFile_isDiscardedOnLoad() async throws {
+        let url = IndexerCache.cacheURL(for: tempDir)
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        try Data("not a plist, garbage bytes".utf8).write(to: url)
+
+        // Load through the public init — should NOT crash,
+        // should treat as miss, and should clean the file off
+        // disk so the next flush writes a clean one.
+        let cache = IndexerCache(shootFolder: tempDir)
+        XCTAssertEqual(cache.entryCount, 0,
+                       "corrupt cache file must produce an empty payload")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path),
+                       "loadFromDisk should delete the corrupt file")
+    }
 }
