@@ -58,7 +58,14 @@ final class IndexerCache {
     /// Bump on any breaking schema change (field type changes,
     /// removed fields, etc.). Decoders see the bump and treat
     /// the entire file as a miss → full re-index.
-    nonisolated static let currentSchemaVersion = 1
+    ///
+    /// v2: added `Entry.thumbnailOrientation` so the hit path
+    /// rotates the cached JPEG with the value the miss path
+    /// used (HEIF `irot` / JPEG IFD0 tag) rather than the
+    /// Exif item's TIFF orientation, which can differ or be
+    /// absent — previously caused HEIF cache hits to render
+    /// rotated thumbnails the wrong way up.
+    nonisolated static let currentSchemaVersion = 2
 
     struct Payload: Codable {
         var version: Int
@@ -78,6 +85,17 @@ final class IndexerCache {
         var afData: ExifToolRunner.AFData?
         var sequenceNumber: Int?
         var thumbnailJPEG: Data?
+        /// Orientation actually used to rotate the cached
+        /// `thumbnailJPEG` at decode time — NOT necessarily the
+        /// same as `exif?.orientation`. For HEIF the source is
+        /// the container's `irot` box (mapped to TIFF 1/3/6/8);
+        /// for JPEG it's IFD0's Orientation tag. Stored
+        /// separately because the HEIF `irot` and the
+        /// EXIF-item's TIFF Orientation can disagree (or the
+        /// TIFF can omit Orientation entirely), and the hit
+        /// path must rotate with the value the miss path used
+        /// or the cached thumb shows the wrong way up.
+        var thumbnailOrientation: Int?
     }
 
     struct Fingerprint: Codable, Equatable {
@@ -128,7 +146,8 @@ final class IndexerCache {
         exif: ExifSummary? = nil,
         afData: ExifToolRunner.AFData? = nil,
         sequenceNumber: Int? = nil,
-        thumbnailJPEG: Data? = nil
+        thumbnailJPEG: Data? = nil,
+        thumbnailOrientation: Int? = nil
     ) {
         var entry = payload.entries[stem]
             ?? Entry(fingerprint: fingerprint)
@@ -143,6 +162,11 @@ final class IndexerCache {
         if let afData, p.cacheAFData              { entry.afData = afData }
         if let sequenceNumber, p.cacheSequence    { entry.sequenceNumber = sequenceNumber }
         if let thumbnailJPEG, p.cacheThumbnail    { entry.thumbnailJPEG = thumbnailJPEG }
+        // Orientation rides along with the cached JPEG bytes
+        // — no value caching it without the bytes that need it.
+        if let thumbnailOrientation, p.cacheThumbnail {
+            entry.thumbnailOrientation = thumbnailOrientation
+        }
         payload.entries[stem] = entry
         dirty = true
     }

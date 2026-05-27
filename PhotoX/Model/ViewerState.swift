@@ -1411,14 +1411,16 @@ final class ViewerState {
                    let hit = cache.entry(for: entry.stem, fingerprint: fp),
                    let bytes = hit.thumbnailJPEG,
                    let exif = hit.exif {
-                    // EXIF orientation (tag 0x0112) applies to
-                    // both the full image AND the embedded
-                    // thumbnail — they're rotated together by the
-                    // camera. Use the parsed value with a fallback
-                    // of 1 (identity) for files that didn't store one.
+                    // Orientation comes from the dedicated cache
+                    // field that captures the value the miss path
+                    // used (HEIF irot / JPEG IFD0). NOT
+                    // `exif.orientation` — that's the Exif item's
+                    // TIFF Orientation, which can be absent or
+                    // disagree with HEIF irot, rendering the
+                    // cached thumb the wrong way up.
                     hits.append(CachedHit(entry: entry, exif: exif,
                                           bytes: bytes,
-                                          orientation: exif.orientation ?? 1))
+                                          orientation: hit.thumbnailOrientation ?? 1))
                 } else {
                     misses.append((entry, fp))
                 }
@@ -1487,7 +1489,14 @@ final class ViewerState {
                     stem: r.entry.stem,
                     fingerprint: fp,
                     exif: ex,
-                    thumbnailJPEG: bytes
+                    thumbnailJPEG: bytes,
+                    // Persist the orientation the miss path
+                    // actually used to rotate `bytes` — not
+                    // `ex.orientation`, which is the Exif item's
+                    // TIFF tag and can disagree with HEIF irot.
+                    // r.exifOrientation is sourced from
+                    // HEIF irot / JPEG IFD0 by ThumbnailLoader.
+                    thumbnailOrientation: r.exifOrientation
                 )
             }
             flushBasicExifAndThumbsBatch(thumbs: thumbs, exifs: exifs, generation: gen)
