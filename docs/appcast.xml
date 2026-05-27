@@ -556,6 +556,18 @@
         type="application/octet-stream"
         sparkle:edSignature="XNskmZ9akxcNYaPSEvGic4fcnGRVCMj6NwyE2AmXFAzX4j3w9bMR+pn80VoG3ImoFhXc9clVgabRkpY6s5nsAg==" length="11555813" />
     </item>
+    <item>
+      <title>v0.290.0-bf41fc617</title>
+      <pubDate>Wed, 27 May 2026 16:01:15 -0700</pubDate>
+      <sparkle:version>290</sparkle:version>
+      <sparkle:shortVersionString>0.290.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[<ul><li>Lower macOS deployment target: 26 (Tahoe) → 15 (Sequoia)</li><li>Indexer: bounded-parallel stat pre-pass off MainActor</li><li>Tests: e2e coverage for undo + redo (single, multi-step, burst)</li><li>Indexer cache: hits/misses counters + e2e relaunch coverage</li><li>Recents: include SMB / network DCIM mirrors</li><li>Indexer cache: prune entries for files removed from the shoot</li><li>Tests: cover indexer cache delete, add/remove/modify file scenarios</li><li>Indexer cache: stat once per pipeline + isolate tests from prod cache</li><li>Indexer cache: per-shoot on-disk cache (configurable, GC'd)</li><li>E2E: tighten waits, drop fixed sleeps — 2:31 → 1:35</li><li>E2E: drop SHA256 from fixture integrity check, keep size+mtime</li><li>E2E: bundle-wide single launch + suite-end integrity check</li><li>E2E: shared-session base class + dual launch model</li></ul>]]></description>
+      <enclosure
+        url="https://github.com/Frostman/photo-x/releases/download/v0.290.0/PhotoX-v0.290.0-bf41fc617.dmg"
+        type="application/octet-stream"
+        sparkle:edSignature="RaKqfw1ZsQwPclGN8ZYpFEGYdYAAgNuTYMWk/9f2eA9uOFDKyz8ADO9fSzCloc61H5XrmkQuoESZFCEh772UBw==" length="11512531" />
+    </item>
     <!-- scripts/release.sh splices new <item> entries here, just before </channel>. -->
   </channel>
 </rss>
