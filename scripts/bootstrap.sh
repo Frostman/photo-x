@@ -5,6 +5,16 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 LIBRAW_VERSION="0.22.1"
+# Pull the macOS deployment floor from project.yml so the .a is
+# built against the same SDK the app links against. Without this,
+# clang defaults to the current SDK's max (macOS 26 today) and ld
+# emits "object file was built for newer macOS version" warnings
+# on every link.
+MACOS_MIN=$(awk -F'"' '/MACOSX_DEPLOYMENT_TARGET:/ {print $2; exit}' project.yml)
+if [[ -z "$MACOS_MIN" ]]; then
+  echo "[bootstrap] could not parse MACOSX_DEPLOYMENT_TARGET from project.yml" >&2
+  exit 1
+fi
 # exiftool.org only keeps the latest production release at a known URL;
 # discover it from the homepage instead of pinning a version that 404s later.
 
@@ -36,7 +46,8 @@ if [[ $FORCE -eq 1 || ! -f ThirdParty/libraw/lib/libraw_r.a ]]; then
       --disable-examples \
       --disable-jpeg --disable-jasper --disable-lcms \
       --disable-openmp \
-      CFLAGS="-arch arm64 -O3" CXXFLAGS="-arch arm64 -O3" >/dev/null
+      CFLAGS="-arch arm64 -O3 -mmacosx-version-min=${MACOS_MIN}" \
+      CXXFLAGS="-arch arm64 -O3 -mmacosx-version-min=${MACOS_MIN}" >/dev/null
     make -j"$(sysctl -n hw.ncpu)" >/dev/null
   )
   rm -rf ThirdParty/libraw
