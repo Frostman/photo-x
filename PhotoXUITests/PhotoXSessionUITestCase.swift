@@ -1,41 +1,77 @@
 import XCTest
 
-/// XCUITest base class that launches a SINGLE `XCUIApplication` and
-/// clones the sample fixture ONCE per test class. Each test in the
-/// class is rewound to a "fresh launch" baseline via a Darwin
-/// notification handler installed in the running app.
+/// XCUITest base class that shares a SINGLE `XCUIApplication` and
+/// fixture clone across **the entire test bundle** — not just per
+/// class. The app launches on the first session-class test method
+/// and survives until `XCTestObservation.testBundleDidFinish` fires
+/// at suite end (where the integrity check + teardown also run).
 ///
-/// Trade-off: avoids the ~25 s cold-start tax per test (15 tests
-/// × 25 s = ~6 min) at the cost of state leakage risk between
-/// tests within a class. The reset path consolidates every UI
-/// surface the existing test suite mutates; if you add a new
-/// stateful toggle, make sure `ViewerState.resetForUITest()`
-/// covers it.
+/// Why: even with a per-class launch we paid ~25 s of cold-start
+/// overhead per class. 6 session classes × 25 s = ~150 s purely on
+/// launches. A bundle-singleton drops that to a single launch and
+/// trims the E2E wall time substantially.
 ///
-/// Fixture mutation: the fixture is shared across the class, so an
-/// XMP write from test 1 IS visible to test 2. The reset path
-/// clears the in-memory `entryXMPs`/`stemsWithXMPOnDisk` so the
-/// indexer re-discovers the on-disk state, but does NOT delete the
-/// XMP files themselves (matches the "no original mutation" rule
-/// and XMP is the user-decision artefact). Tests that assert "this
-/// entry has no XMP" must use an entry whose XMP no earlier test
-/// in the class created.
+/// Each test rewinds via a Darwin notification handler installed in
+/// the running app (`UITestResetObserver`). The reset clears
+/// in-memory ViewerState + reopens the fixture; it does NOT delete
+/// XMP files (matches the "no original mutation" rule). Tests that
+/// assert "this entry has no XMP" must use an entry no earlier test
+/// in the bundle rated.
 ///
-/// Use `PhotoXFreshLaunchUITestCase` instead for tests that need a
-/// fresh app process per test (relaunch / launch-cycle tests).
+/// Trade-offs vs per-class launch:
+/// - Fixture XMP writes persist across ALL tests in the bundle, not
+///   just within a class. Today the only writers are RatingTests'
+///   two tests; the rest are read-only.
+/// - A crash in any test takes out every subsequent test (the app
+///   is gone). Per-class launch isolated each class from crashes.
+/// - Integrity check is suite-end only, not per-test. A mid-bundle
+///   mutation isn't pinpointed to a specific test, only to "some
+///   test in the bundle".
+///
+/// Use `PhotoXFreshLaunchUITestCase` for tests that genuinely need
+/// a per-test launch (relaunch lifecycle, app-open counter, etc.).
 class PhotoXSessionUITestCase: PhotoXUITestCase {
 
-    // MARK: shared per-class state
+    // MARK: - bundle-shared session
 
-    private static var sharedApp: XCUIApplication?
-    private static var sharedFixtureURL: URL?
-    private static var sharedManifest: [String: FileFingerprint] = [:]
-    private static var sharedTeardownShouldKeepFixture = false
+    // nonisolated(unsafe) because XCTestObservation's
+    // testBundleDidFinish can be invoked off the main thread; the
+    // XCTest harness serialises test execution so the only real
+    // concurrent writer to these slots is shutdown vs first-test
+    // setUp, and both paths gate on `sharedApp == nil`. macOS
+    // XCTest in practice runs everything on main.
+    nonisolated(unsafe) private static var sharedApp: XCUIApplication?
+    nonisolated(unsafe) private static var sharedFixtureURL: URL?
+    nonisolated(unsafe) private static var sharedManifest: [String: FileFingerprint] = [:]
+    nonisolated(unsafe) private static var observerRegistered = false
+    nonisolated(unsafe) private static var keepFixtureOnTeardown = false
 
-    // MARK: class-level launch / teardown
-
-    override class func setUp() {
-        super.setUp()
+    /// Lazily launch the app and clone the fixture on first call;
+    /// no-op once `sharedApp` is populated AND still running.
+    /// If a prior interleaved PhotoXFreshLaunchUITestCase test left
+    /// `sharedApp.state == .notRunning` (XCUITest reuses XCUIApplication
+    /// instances by bundle id, so terminating the fresh-launch app
+    /// can clobber the session app's process), we fall through and
+    /// relaunch with the existing fixture.
+    private static func ensureSessionLaunched() {
+        if let app = sharedApp,
+           app.state == .runningForeground || app.state == .runningBackground {
+            return
+        }
+        if sharedApp != nil, let url = sharedFixtureURL {
+            // The shared process is gone but the fixture is still
+            // there. Relaunch against it.
+            let app = XCUIApplication()
+            app.launchEnvironment["PHOTOX_SAMPLE_DIR"] = url.path
+            app.launchArguments = [
+                "-photoxDisableSparkle", "YES",
+                "-photoxUITestMode",     "YES",
+            ]
+            app.launch()
+            PhotoXUITestCase.promoteToKey(app)
+            sharedApp = app
+            return
+        }
         let url = PhotoXUITestCase.makeTempFixtureURL()
         do {
             try FileManager.default.createDirectory(at: url,
@@ -43,7 +79,7 @@ class PhotoXSessionUITestCase: PhotoXUITestCase {
             try PhotoXUITestCase.cloneSampleFixture(into: url)
             sharedManifest = try PhotoXUITestCase.fingerprintFixture(at: url)
         } catch {
-            XCTFail("class setUp: fixture clone failed: \(error)")
+            XCTFail("session setUp: fixture clone failed: \(error)")
             return
         }
         sharedFixtureURL = url
@@ -57,44 +93,52 @@ class PhotoXSessionUITestCase: PhotoXUITestCase {
         app.launch()
         PhotoXUITestCase.promoteToKey(app)
         sharedApp = app
+
+        if !observerRegistered {
+            observerRegistered = true
+            XCTestObservationCenter.shared.addTestObserver(SessionObserver.shared)
+        }
     }
 
-    override class func tearDown() {
-        // Final integrity check at class-level teardown — belt and
-        // braces over the per-test checks. If it fails, keep the
-        // fixture for inspection.
+    /// Tear down the bundle session: terminate the app, run the
+    /// final integrity check, delete the fixture (or keep it on
+    /// failure for inspection). Called from `SessionObserver.test
+    /// BundleDidFinish` once XCTest finishes the whole bundle.
+    fileprivate static func shutdown() {
         if let url = sharedFixtureURL {
             do {
                 try PhotoXUITestCase.assertFixtureIntegrity(at: url,
                                                              against: sharedManifest)
             } catch {
-                sharedTeardownShouldKeepFixture = true
-                XCTContext.runActivity(named: "class tearDown fixture mutation: \(error)") { _ in }
+                keepFixtureOnTeardown = true
+                XCTContext.runActivity(named: "suite-end fixture mutation: \(error)") { _ in }
             }
         }
         if let app = sharedApp,
            app.state == .runningForeground || app.state == .runningBackground {
             app.terminate()
         }
-        if let url = sharedFixtureURL, !sharedTeardownShouldKeepFixture {
-            try? FileManager.default.removeItem(at: url)
-        } else if let url = sharedFixtureURL, sharedTeardownShouldKeepFixture {
-            XCTContext.runActivity(named: "fixture kept at \(url.path)") { _ in }
+        if let url = sharedFixtureURL {
+            if keepFixtureOnTeardown {
+                XCTContext.runActivity(named: "fixture kept at \(url.path)") { _ in }
+            } else {
+                try? FileManager.default.removeItem(at: url)
+            }
         }
         sharedApp = nil
         sharedFixtureURL = nil
         sharedManifest = [:]
-        sharedTeardownShouldKeepFixture = false
-        super.tearDown()
+        keepFixtureOnTeardown = false
     }
 
-    // MARK: per-test reset + integrity check
+    // MARK: - per-test reset (no launch, no integrity check)
 
     override func setUpWithError() throws {
         continueAfterFailure = false
+        Self.ensureSessionLaunched()
         guard let app = Self.sharedApp,
               let url = Self.sharedFixtureURL else {
-            XCTFail("PhotoXSessionUITestCase: class setUp didn't populate shared state")
+            XCTFail("PhotoXSessionUITestCase: session launch didn't populate shared state")
             return
         }
         self.app = app
@@ -104,36 +148,20 @@ class PhotoXSessionUITestCase: PhotoXUITestCase {
     }
 
     override func tearDownWithError() throws {
-        // Per-test integrity check; the app stays alive for the
-        // next test. Fail-fast surfaces XMP mutation within the
-        // failing test rather than burying it in class teardown.
-        do {
-            try Self.assertFixtureIntegrity(at: tempFixtureURL,
-                                             against: manifest)
-        } catch {
-            Self.sharedTeardownShouldKeepFixture = true
-            throw error
-        }
+        // Per-test integrity check intentionally dropped — runs
+        // once at suite end via SessionObserver. The cost (SHA256
+        // of ~3 GB of fixture per test) was the largest non-launch
+        // overhead in the old design.
         try super.tearDownWithError()
     }
 
-    // MARK: reset via Darwin notification
+    // MARK: - reset via Darwin notification
 
-    /// Post the reset Darwin notification and block until the
-    /// in-app observer posts the completion sentinel back.
-    /// Re-promotes the window to key + waits for the shoot to
-    /// reload so the next test can assume the canvas is focused
-    /// on the first pair.
     private func resetAppState() throws {
         let completed = expectation(description: "uitest.resetCompleted")
         let center = CFNotificationCenterGetDarwinNotifyCenter()
-        let observerName = UUID().uuidString as CFString
         let completedName = "dev.frostman.PhotoX.uitest.resetCompleted" as CFString
 
-        // Convert the C callback into a swift-callable closure via
-        // an Unmanaged box. CFNotificationCenter doesn't carry
-        // userInfo cross-process, so we route through a per-call
-        // sentinel pointer that maps to the XCTestExpectation.
         let box = Unmanaged.passRetained(SentinelBox(expectation: completed))
         defer {
             CFNotificationCenterRemoveObserver(center,
@@ -147,8 +175,9 @@ class PhotoXSessionUITestCase: PhotoXUITestCase {
             box.toOpaque(),
             { _, observer, _, _, _ in
                 guard let observer else { return }
-                let unwrapped = Unmanaged<SentinelBox>.fromOpaque(observer).takeUnretainedValue()
-                unwrapped.expectation.fulfill()
+                Unmanaged<SentinelBox>.fromOpaque(observer)
+                    .takeUnretainedValue()
+                    .expectation.fulfill()
             },
             completedName,
             nil,
@@ -163,24 +192,28 @@ class PhotoXSessionUITestCase: PhotoXUITestCase {
             nil,
             true
         )
-
         wait(for: [completed], timeout: 15)
         // Re-promote the window in case the previous test left
-        // focus elsewhere (e.g. opened the Stats or failed-XMP
-        // window). The reset observer closes those, but
-        // CFNotificationCenter delivery is async; click into the
-        // canvas to anchor focus before any keystroke runs.
+        // focus elsewhere (Stats / failed-XMP / Settings windows
+        // were closed by the reset observer, but bring the canvas
+        // back to key explicitly).
         Self.promoteToKey(app)
         waitForShootLoaded()
-        _ = observerName    // silence unused warning if extracted later
     }
 
-    /// Reference box so CFNotificationCenter's pointer-based
-    /// observer registration can find the XCTestExpectation again.
     private class SentinelBox {
         let expectation: XCTestExpectation
         init(expectation: XCTestExpectation) {
             self.expectation = expectation
+        }
+    }
+
+    // MARK: - bundle-end observer
+
+    private class SessionObserver: NSObject, XCTestObservation {
+        nonisolated(unsafe) static let shared = SessionObserver()
+        func testBundleDidFinish(_ testBundle: Bundle) {
+            PhotoXSessionUITestCase.shutdown()
         }
     }
 }
