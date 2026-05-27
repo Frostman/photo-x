@@ -560,6 +560,19 @@ final class ViewerState {
     /// pipeline needed). Surfaced alongside hits in the popover.
     private(set) var indexerCacheMissesThisOpen: Int = 0
 
+    /// Per-entry (size, mtimeNanos) pre-fetched once at the
+    /// start of every indexing run, before any pipeline begins
+    /// (see `prefetchFingerprints` + the pre-pass in
+    /// `startIndexing`). The basic- and advanced-EXIF
+    /// pipelines read fingerprints from this map (O(1) dict
+    /// lookup) instead of stat'ing files per-batch on the
+    /// MainActor. Missing key = the file couldn't be stat'd at
+    /// pre-pass time (deleted between shoot load and indexing
+    /// start), so the pipeline treats it like a cache miss
+    /// with a nil fingerprint. Cleared on shoot switch /
+    /// re-index.
+    private(set) var entryFingerprints: [String: IndexerCache.Fingerprint] = [:]
+
     private var indexingTask: Task<Void, Never>?
     /// Per-neighbour prefetch tasks (warm decode + texture upload),
     /// keyed by entry stem. Cancelled when the stem leaves the
@@ -1047,6 +1060,7 @@ final class ViewerState {
         indexingCompletedAt = nil
         indexerCacheHitsThisOpen = 0
         indexerCacheMissesThisOpen = 0
+        entryFingerprints.removeAll()
 
         // 4) Reset per-entry UI state.
         currentIndex = 0
@@ -1128,7 +1142,21 @@ final class ViewerState {
         Log.app.notice("Indexing \(shoot.entries.count, privacy: .public) entries: \(advancedExifCount, privacy: .public) advanced exif/xmp batches × \(Self.advancedExifBatchSize, privacy: .public), \(basicExifCount, privacy: .public) basic exif + thumbs batches × \(Self.basicExifBatchSize, privacy: .public), \(Self.advancedExifWorkerCount, privacy: .public) advanced exif workers")
         #endif
 
+        let entries = shoot.entries
         indexingTask = Task(priority: .utility) { [weak self] in
+            // Bounded-parallel stat pre-pass — runs entirely on
+            // GCD utility queue (NOT cooperative pool) so sync
+            // FileManager IO can't starve canvas decode or
+            // other Swift concurrency tasks. Typical shoot:
+            // 50–200 ms; 5k-entry shoot: ~500 ms. Pipelines
+            // launch with a fully-populated fingerprint map
+            // and never pay a sync stat on main.
+            let fps = await Self.prefetchFingerprints(for: entries)
+            await MainActor.run { [weak self] in
+                guard let self, self.shootGeneration == gen else { return }
+                self.entryFingerprints = fps
+            }
+
             await withTaskGroup(of: Void.self) { group in
                 // N parallel advanced-EXIF workers, each spawning a
                 // one-shot exiftool per batch. They safely share one
@@ -1184,6 +1212,7 @@ final class ViewerState {
         indexingTimings = .init()
         indexingCompletedAt = nil
         batchQueues = nil
+        entryFingerprints.removeAll()
         // advancedExifBatches + stemToAdvancedExifBatchID will be rebuilt
         // by startIndexing.
         startIndexing()
@@ -1226,15 +1255,18 @@ final class ViewerState {
             // a fully-cached re-open this skips the whole
             // subprocess spawn for the batch.
             //
-            // stat() each entry ONCE here — the fingerprint we
-            // compute drives BOTH the cache lookup AND the
-            // subsequent cache.updateEntry on a miss.
+            // Fingerprints were pre-fetched off-main at the
+            // top of startIndexing (see prefetchFingerprints);
+            // read from `entryFingerprints` instead of paying
+            // a sync stat per batch on the MainActor. Missing
+            // key = file couldn't be stat'd at pre-pass time,
+            // treated as a miss with nil fp.
             var afFromCache:  [String: ExifToolRunner.AFData] = [:]
             var seqFromCache: [String: Int] = [:]
             var misses: [(entry: PhotoEntry, fingerprint: IndexerCache.Fingerprint?)] = []
             var batchHits = 0
             for entry in batch {
-                let fp = try? IndexerCache.fingerprint(of: entry.previewURL)
+                let fp = entryFingerprints[entry.stem]
                 if let fp,
                    let hit = cache.entry(for: entry.stem, fingerprint: fp) {
                     if let af  = hit.afData          { afFromCache[entry.stem]  = af }
@@ -1280,6 +1312,45 @@ final class ViewerState {
         }
     }
 
+    /// Bounded-parallel `stat()` pre-pass executed once at
+    /// the top of `startIndexing` before any pipeline starts.
+    /// Runs entirely on a GCD utility queue (NOT the Swift
+    /// cooperative pool) — sync `FileManager.attributesOfItem`
+    /// can block its GCD thread without starving Swift
+    /// concurrency tasks like canvas decode. Concurrency is
+    /// capped at 8 via `DispatchSemaphore` so SD/SMB volumes
+    /// don't get hammered while still parallelising well on
+    /// SSD/NVMe. Files that fail to stat (deleted between
+    /// shoot load and indexing start) are absent from the
+    /// returned map; pipelines treat that as a cache miss with
+    /// nil fp. Mirrors the project's `DispatchQueue.global` +
+    /// `withCheckedContinuation` pattern in
+    /// `MetadataBatchLoader.spawnExiftool`.
+    nonisolated private static func prefetchFingerprints(
+        for entries: [PhotoEntry]
+    ) async -> [String: IndexerCache.Fingerprint] {
+        await withCheckedContinuation { (cont: CheckedContinuation<[String: IndexerCache.Fingerprint], Never>) in
+            let lock = NSLock()
+            var out: [String: IndexerCache.Fingerprint] = [:]
+            out.reserveCapacity(entries.count)
+            let sema = DispatchSemaphore(value: 8)
+            let group = DispatchGroup()
+            let queue = DispatchQueue.global(qos: .utility)
+            for entry in entries {
+                sema.wait()
+                group.enter()
+                queue.async {
+                    defer { sema.signal(); group.leave() }
+                    guard let fp = try? IndexerCache.fingerprint(of: entry.previewURL) else { return }
+                    lock.lock()
+                    out[entry.stem] = fp
+                    lock.unlock()
+                }
+            }
+            group.notify(queue: queue) { cont.resume(returning: out) }
+        }
+    }
+
     /// Per-batch log: includes exiftool subprocess startup + scan time
     /// in `rt ms`. DEBUG-only.
     private nonisolated func logAdvancedExifBatchStats(id: Int,
@@ -1321,11 +1392,11 @@ final class ViewerState {
                                 exifOrientation: Int?,
                                 stats: ThumbnailLoader.Stats?)
 
-            // Categorize each entry as hit / miss. stat() each
-            // file ONCE here — the fingerprint drives both the
-            // cache lookup AND the subsequent updateEntry on a
-            // miss. Entries whose file is missing get a nil
-            // fingerprint and skip caching entirely.
+            // Categorize each entry as hit / miss. Fingerprints
+            // were pre-fetched off-main at the top of
+            // startIndexing (see prefetchFingerprints); read
+            // from `entryFingerprints` instead of stat'ing per
+            // batch on the MainActor.
             struct CachedHit {
                 let entry: PhotoEntry
                 let exif: ExifSummary
@@ -1335,7 +1406,7 @@ final class ViewerState {
             var hits: [CachedHit] = []
             var misses: [(entry: PhotoEntry, fingerprint: IndexerCache.Fingerprint?)] = []
             for entry in batch {
-                let fp = try? IndexerCache.fingerprint(of: entry.previewURL)
+                let fp = entryFingerprints[entry.stem]
                 if let fp,
                    let hit = cache.entry(for: entry.stem, fingerprint: fp),
                    let bytes = hit.thumbnailJPEG,

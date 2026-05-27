@@ -338,8 +338,11 @@ final class IndexerCache {
     // MARK: - Fingerprint
 
     /// (size, mtimeNanos) of the file at `url`. Throws if the
-    /// file is missing.
-    static func fingerprint(of url: URL) throws -> Fingerprint {
+    /// file is missing. `nonisolated` so the indexing
+    /// pre-pass can stat() entries off the MainActor — body
+    /// only touches `FileManager` (thread-safe nonisolated
+    /// API).
+    nonisolated static func fingerprint(of url: URL) throws -> Fingerprint {
         let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
         let size = (attrs[.size] as? NSNumber)?.int64Value ?? 0
         let mtime = (attrs[.modificationDate] as? Date) ?? .distantPast
