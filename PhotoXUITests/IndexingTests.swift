@@ -17,7 +17,7 @@ import XCTest
 ///    `.accessibilityValue("1"/"0")` on the star buttons (small
 ///    code change) — added together with the next round of
 ///    indexer tests.
-final class IndexingTests: PhotoXUITestCase {
+final class IndexingTests: PhotoXSessionUITestCase {
 
     func test_indexer_findsEveryPair() throws {
         let total = waitForShootLoaded()

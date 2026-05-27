@@ -315,6 +315,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
         // the export sheet.
         UNUserNotificationCenter.current().delegate = self
 
+        // E2E shared-session test support: install a Darwin
+        // notification listener that the test runner uses to rewind
+        // ViewerState to a fresh-launch baseline between tests
+        // (avoids the ~25 s per-test cold-start tax). Gated on the
+        // launch flag — production never registers an observer.
+        if LaunchFlags.uiTestMode, let state = viewerState {
+            UITestResetObserver.install(viewerState: state)
+        }
+
         DispatchQueue.main.async {
             guard let window = NSApplication.shared.windows.first(where: { $0.canBecomeMain })
             else { return }

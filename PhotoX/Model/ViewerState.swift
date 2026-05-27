@@ -884,6 +884,28 @@ final class ViewerState {
         return true
     }
 
+    /// E2E-test only: rewind every user-visible piece of state to
+    /// a freshly-launched baseline so the shared-session XCUITest
+    /// suite can run consecutive tests without an app restart.
+    /// `closeShoot()` covers the shoot + filter/sort/undo reset
+    /// already; the extras here are the toggles and surfaces that
+    /// individual tests are allowed to mutate. NEVER call in
+    /// production — there's no UI surface for it and the
+    /// `failedXMPWrites` wipe would silently swallow real errors.
+    func resetForUITest() {
+        closeShoot()
+        // Failed XMP writes deliberately persist across shoots in
+        // production (the user must see them). For tests we want
+        // a clean slate so the titlebar pill doesn't leak.
+        failedXMPWrites.removeAll()
+        // Toggles the existing E2E suite mutates (B, T, X, A).
+        sidebarVisible    = SettingsKey.Defaults.sidebarVisible
+        filmstripVisible  = SettingsKey.Defaults.filmstripVisible
+        autoSwapEnabled   = SettingsKey.Defaults.autoSwapToRAW
+        overlays          = .init()
+        requestedVariant  = .preview
+    }
+
     /// Drop the current shoot and return to the empty starter state.
     func closeShoot() {
         // Save the user's position before tearing down so reopening

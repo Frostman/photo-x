@@ -7,7 +7,7 @@ import XCTest
 /// expectation) — XCUITest's a11y snapshot cache doesn't refresh on
 /// SwiftUI value-only updates, so a direct read after `pressKey`
 /// returns the stale prior value.
-final class NavigationTests: PhotoXUITestCase {
+final class NavigationTests: PhotoXSessionUITestCase {
 
     func test_rightArrow_advancesByOne() throws {
         let total = waitForShootLoaded()

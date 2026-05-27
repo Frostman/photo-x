@@ -6,7 +6,7 @@ import XCTest
 ///
 /// These tests are sensitive to system load — keep them in a class
 /// the user can run on its own (`just e2e PhotoXUITests/CachingTests`).
-final class CachingTests: PhotoXUITestCase {
+final class CachingTests: PhotoXSessionUITestCase {
 
     func test_filmstripThumbs_remainPresent() throws {
         waitForShootLoaded()

@@ -11,7 +11,7 @@ import XCTest
 /// test harness, not the app — and adding a click-on-star-button
 /// test would shadow the keyboard one without exercising the same
 /// path. Revisit when the harness gets a single-fire digit helper.
-final class RatingTests: PhotoXUITestCase {
+final class RatingTests: PhotoXSessionUITestCase {
 
     func test_reject_writesNegativeOneRating() throws {
         waitForShootLoaded()

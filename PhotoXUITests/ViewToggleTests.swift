@@ -2,7 +2,7 @@ import XCTest
 
 /// View toggles: HEIF↔RAW (Z), sidebar (B), filmstrip (T). These are
 /// pure-UI assertions — no fixture mutation involved.
-final class ViewToggleTests: PhotoXUITestCase {
+final class ViewToggleTests: PhotoXSessionUITestCase {
 
     func test_previewRawToggle_updatesStatusText() throws {
         waitForShootLoaded()
@@ -16,14 +16,15 @@ final class ViewToggleTests: PhotoXUITestCase {
         XCTAssertTrue(before.contains("HEIF") || before.contains("JPEG"),
                       "fresh load starts on a preview format; got '\(before)'")
 
-        pressKey("Z")
-        // Status text changes its label string → predicate-wait until
-        // it begins with "RAW".
+        // Lowercase x is the variant toggle (uppercase X = Shift+X
+        // which cycles the decoder). The keybind moved from Z to x
+        // when Cmd+Z became undo.
+        pressKey("x")
         let pred = NSPredicate(format: "value BEGINSWITH %@", "RAW")
         let exp = XCTNSPredicateExpectation(predicate: pred, object: status)
         let res = XCTWaiter.wait(for: [exp], timeout: 5)
         XCTAssertEqual(res, .completed,
-                       "Z should switch status to RAW within 5s; current='\(status.value ?? "")'")
+                       "x should switch status to RAW within 5s; current='\(status.value ?? "")'")
     }
 
     func test_sidebarToggle_hidesAndRestores() throws {

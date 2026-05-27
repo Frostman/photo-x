@@ -1,7 +1,7 @@
 import CryptoKit
 import XCTest
 
-/// Shared base class for every PhotoXUITests test. Provides:
+/// Shared HELPERS for every PhotoXUITests test. Provides:
 ///
 /// 1. A per-test temp fixture: clones the entire repo `sample/`
 ///    folder into `NSTemporaryDirectory()/PhotoXUITests-<UUID>/` so
@@ -11,103 +11,36 @@ import XCTest
 ///    `-photoxDisableSparkle YES -photoxUITestMode YES` launch args
 ///    (auto-loads the shoot, kills Sparkle's auto-check timer, skips
 ///    the launch-time window maximize that races XCUITest queries).
-/// 3. A **no-mutation invariant** check in tearDown: every non-`.xmp`
-///    file in the fixture must be byte-identical to its source state
+/// 3. A **no-mutation invariant** check: every non-`.xmp` file in the
+///    fixture must be byte-identical to its source state
 ///    (size + mtime + sha256). XMP sidecars may be created or modified
 ///    but must remain well-formed XML. This bakes the project-wide
 ///    "no original-image mutation" rule into CI rather than relying
 ///    on code review.
 ///
-/// On any failure the temp fixture is LEFT BEHIND (path logged) so it
-/// can be inspected; otherwise it's deleted.
+/// **This base class does NOT own the app/fixture lifecycle.** Two
+/// concrete subclasses pick the launch model:
+///
+/// - `PhotoXSessionUITestCase` — launch + clone ONCE per test class,
+///   reset between tests via a Darwin notification. ~3× faster
+///   wall-clock; used by most tests.
+/// - `PhotoXFreshLaunchUITestCase` — launch + clone per test (the
+///   original behavior). Used by tests that need to observe the
+///   launch cycle itself (relaunch-restores-last-entry, app-open
+///   counter, PendingReopenStore consume, etc.).
+///
+/// On any fixture-integrity failure the temp fixture is LEFT BEHIND
+/// (path logged) so it can be inspected.
 class PhotoXUITestCase: XCTestCase {
 
     var app: XCUIApplication!
     var tempFixtureURL: URL!
 
     /// Snapshot of every non-`.xmp` file taken right after the clone.
-    /// tearDown re-walks the fixture and asserts each file still
-    /// matches; any new non-`.xmp` filename → fail; any `.xmp` that
-    /// isn't well-formed XML → fail.
-    private var manifest: [String: FileFingerprint] = [:]
-    private var teardownShouldKeepFixture = false
-
-    // MARK: setUp / tearDown
-
-    override func setUpWithError() throws {
-        continueAfterFailure = false
-
-        // Clone the repo sample/ into a fresh temp dir.
-        tempFixtureURL = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("PhotoXUITests-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: tempFixtureURL,
-                                                 withIntermediateDirectories: true)
-        try Self.cloneSampleFixture(into: tempFixtureURL)
-        manifest = try fingerprintFixture()
-
-        // Launch the app pointed at the fixture, with auto-update +
-        // the launch-maximize side effect disabled.
-        app = XCUIApplication()
-        app.launchEnvironment["PHOTOX_SAMPLE_DIR"] = tempFixtureURL.path
-        app.launchArguments = [
-            "-photoxDisableSparkle", "YES",
-            "-photoxUITestMode",     "YES",
-        ]
-        app.launch()
-
-        // Ensure the window becomes key + frontmost — SwiftUI's
-        // @FocusState + .onKeyPress only fire when the canvas is
-        // focused, which requires the window to be key. Just
-        // launching doesn't always promote the test-runner-spawned
-        // window to key, and under back-to-back test runs the OS
-        // sometimes leaves the test runner in front instead.
-        //
-        // Poll until app.state == .runningForeground (raw value 4)
-        // before relying on the window. Activate up to 3× — the
-        // first .activate() commonly no-ops while the process is
-        // still in `.inactive` (SwiftUI scenePhase not yet `.active`).
-        for _ in 0 ..< 30 {  // ~3 s @ 100 ms
-            app.activate()
-            if app.state == .runningForeground { break }
-            Thread.sleep(forTimeInterval: 0.1)
-        }
-        let window = app.windows.firstMatch
-        if window.waitForExistence(timeout: 5) {
-            // Click well inside the canvas, not at center (the stem
-            // pill / status pill sit roughly bottom-center). Top-left
-            // quadrant of the canvas is reliably plain pixels.
-            window.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.4)).click()
-        }
-    }
-
-    override func tearDownWithError() throws {
-        // Terminate the app first so it can't be holding open file
-        // handles when we re-walk the fixture for the invariant check.
-        if let app, app.state == .runningForeground || app.state == .runningBackground {
-            app.terminate()
-        }
-
-        // The mutation-invariant check is the load-bearing one. If it
-        // fails, KEEP the fixture so the failure can be inspected.
-        var integrityError: Error?
-        do {
-            try assertFixtureIntegrity()
-        } catch {
-            integrityError = error
-            teardownShouldKeepFixture = true
-        }
-
-        if let tempFixtureURL, !teardownShouldKeepFixture {
-            try? FileManager.default.removeItem(at: tempFixtureURL)
-        } else if let tempFixtureURL, teardownShouldKeepFixture {
-            // Surface the path so the failing test's log makes it
-            // obvious where to look.
-            XCTContext.runActivity(named: "fixture kept at \(tempFixtureURL.path)") { _ in }
-        }
-
-        if let integrityError { throw integrityError }
-        try super.tearDownWithError()
-    }
+    /// `assertFixtureIntegrity(against:)` re-walks the fixture and
+    /// asserts each file still matches; any new non-`.xmp` filename →
+    /// fail; any `.xmp` that isn't well-formed XML → fail.
+    var manifest: [String: FileFingerprint] = [:]
 
     // MARK: fixture cloning
 
@@ -129,12 +62,13 @@ class PhotoXUITestCase: XCTestCase {
         fatalError("PhotoXUITestCase: couldn't find sample/ above \(#file)")
     }()
 
-    private static func cloneSampleFixture(into dest: URL) throws {
+    /// Clone the repo `sample/` folder into `dest`. Only recognized
+    /// pair files (ARW/HIF/HEIF/HEIC/JPG/JPEG/xmp) are copied; skip
+    /// `.DS_Store` and any stray files. APFS `copyItem` is clone-on-
+    /// write so this stays cheap even for hundreds of MB of ARW.
+    static func cloneSampleFixture(into dest: URL) throws {
         let src = repoSampleURL
         let names = try FileManager.default.contentsOfDirectory(atPath: src.path)
-        // Filter to recognised pair files (case-insensitive) — skip
-        // .DS_Store and any stray files. APFS copyItem is clone-on-
-        // write so this stays cheap even for hundreds of MB of ARW.
         let pairExts: Set<String> = [
             "ARW",
             "HIF", "HEIF", "HEIC",
@@ -150,6 +84,12 @@ class PhotoXUITestCase: XCTestCase {
         }
     }
 
+    /// Build a freshly-numbered temp fixture URL.
+    static func makeTempFixtureURL() -> URL {
+        URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("PhotoXUITests-\(UUID().uuidString)")
+    }
+
     // MARK: integrity check
 
     struct FileFingerprint: Equatable {
@@ -158,27 +98,29 @@ class PhotoXUITestCase: XCTestCase {
         let sha256: Data
     }
 
-    private func fingerprintFixture() throws -> [String: FileFingerprint] {
+    /// Walk the fixture at `url` and capture a fingerprint per
+    /// non-`.xmp` file. Returned map is keyed by relative path.
+    static func fingerprintFixture(at url: URL) throws -> [String: FileFingerprint] {
         var out: [String: FileFingerprint] = [:]
         let fm = FileManager.default
-        guard let enumerator = fm.enumerator(at: tempFixtureURL,
+        guard let enumerator = fm.enumerator(at: url,
                                               includingPropertiesForKeys: [.isRegularFileKey,
                                                                             .fileSizeKey,
                                                                             .contentModificationDateKey],
                                               options: [.skipsHiddenFiles]) else {
             throw NSError(domain: "PhotoXUITestCase", code: 1)
         }
-        for case let url as URL in enumerator {
-            let rv = try url.resourceValues(forKeys: [.isRegularFileKey])
+        for case let fileURL as URL in enumerator {
+            let rv = try fileURL.resourceValues(forKeys: [.isRegularFileKey])
             guard rv.isRegularFile == true else { continue }
-            if url.pathExtension == "xmp" { continue }
-            let rel = url.path.replacingOccurrences(of: tempFixtureURL.path + "/", with: "")
-            out[rel] = try Self.fingerprint(of: url)
+            if fileURL.pathExtension == "xmp" { continue }
+            let rel = fileURL.path.replacingOccurrences(of: url.path + "/", with: "")
+            out[rel] = try fingerprint(of: fileURL)
         }
         return out
     }
 
-    private static func fingerprint(of url: URL) throws -> FileFingerprint {
+    static func fingerprint(of url: URL) throws -> FileFingerprint {
         let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
         let size = (attrs[.size] as? NSNumber)?.int64Value ?? 0
         let mtime = (attrs[.modificationDate] as? Date) ?? .distantPast
@@ -201,29 +143,30 @@ class PhotoXUITestCase: XCTestCase {
                                sha256: Data(digest))
     }
 
-    /// Walks the fixture and asserts:
-    /// 1. Every file recorded in `manifest` still exists and matches
-    ///    (size, mtime, sha256). Mismatch → fail with rel path.
-    /// 2. Any new non-`.xmp` file → fail.
-    /// 3. Every `.xmp` file (pre-existing or new) is parseable as XML
-    ///    and contains the XMP root namespace.
-    private func assertFixtureIntegrity() throws {
+    /// Walk the fixture at `url` and assert:
+    /// 1. Every file in `manifest` still exists and matches
+    ///    (size, mtime, sha256). Mismatch → XCTFail with rel path.
+    /// 2. Any new non-`.xmp` file → XCTFail.
+    /// 3. Every `.xmp` file is parseable as XML and contains the XMP
+    ///    root namespace.
+    static func assertFixtureIntegrity(at url: URL,
+                                       against manifest: [String: FileFingerprint]) throws {
         let fm = FileManager.default
-        guard let enumerator = fm.enumerator(at: tempFixtureURL,
+        guard let enumerator = fm.enumerator(at: url,
                                               includingPropertiesForKeys: [.isRegularFileKey],
                                               options: [.skipsHiddenFiles]) else {
-            XCTFail("could not enumerate \(tempFixtureURL.path)")
+            XCTFail("could not enumerate \(url.path)")
             return
         }
         var seenRelPaths: Set<String> = []
-        for case let url as URL in enumerator {
-            let rv = try url.resourceValues(forKeys: [.isRegularFileKey])
+        for case let fileURL as URL in enumerator {
+            let rv = try fileURL.resourceValues(forKeys: [.isRegularFileKey])
             guard rv.isRegularFile == true else { continue }
-            let rel = url.path.replacingOccurrences(of: tempFixtureURL.path + "/", with: "")
+            let rel = fileURL.path.replacingOccurrences(of: url.path + "/", with: "")
             seenRelPaths.insert(rel)
 
-            if url.pathExtension == "xmp" {
-                try assertXMPWellFormed(url)
+            if fileURL.pathExtension == "xmp" {
+                try assertXMPWellFormed(fileURL)
                 continue
             }
 
@@ -231,7 +174,7 @@ class PhotoXUITestCase: XCTestCase {
                 XCTFail("fixture leaked: new non-xmp file '\(rel)' wasn't there at setUp")
                 continue
             }
-            let now = try Self.fingerprint(of: url)
+            let now = try fingerprint(of: fileURL)
             if now != original {
                 XCTFail("""
                     fixture mutated: '\(rel)' changed
@@ -241,25 +184,44 @@ class PhotoXUITestCase: XCTestCase {
                     """)
             }
         }
-        // Any file the manifest had but we didn't see now → fail
-        // (something deleted the original).
         for rel in manifest.keys where !seenRelPaths.contains(rel) {
             XCTFail("fixture missing: original file '\(rel)' was removed")
         }
     }
 
-    private func assertXMPWellFormed(_ url: URL) throws {
+    private static func assertXMPWellFormed(_ url: URL) throws {
         let data = try Data(contentsOf: url)
         do {
             let doc = try XMLDocument(data: data, options: [])
-            // A Lightroom-compatible sidecar is rooted at <x:xmpmeta>
-            // (namespace `adobe:ns:meta/`). Anything else and the
-            // file isn't useful as an XMP sidecar.
             let xml = doc.xmlString
             XCTAssertTrue(xml.contains("adobe:ns:meta/") || xml.contains("xmpmeta"),
                           "XMP sidecar \(url.lastPathComponent) doesn't look like a Lightroom XMP")
         } catch {
             XCTFail("XMP sidecar \(url.lastPathComponent) failed to parse as XML: \(error)")
+        }
+    }
+
+    // MARK: app launch
+
+    /// Promote the test runner-spawned app window to key + frontmost.
+    /// `app.launch()` alone doesn't always do it — SwiftUI's
+    /// `@FocusState` + `.onKeyPress` only fire when the canvas is
+    /// focused, which requires the window to be key. Activates up to
+    /// 30× in a 3 s budget then settles on whatever it got; tests
+    /// using keyboard input should additionally click into the
+    /// canvas via `waitForShootLoaded()`.
+    static func promoteToKey(_ app: XCUIApplication) {
+        for _ in 0 ..< 30 {  // ~3 s @ 100 ms
+            app.activate()
+            if app.state == .runningForeground { break }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        let window = app.windows.firstMatch
+        if window.waitForExistence(timeout: 5) {
+            // Click well inside the canvas, not at center (the stem
+            // pill / status pill sit roughly bottom-center). Top-left
+            // quadrant of the canvas is reliably plain pixels.
+            window.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.4)).click()
         }
     }
 

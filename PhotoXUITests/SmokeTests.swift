@@ -3,7 +3,7 @@ import XCTest
 /// Smoke: app launches, loads the fixture, shows the first pair.
 /// If this fails, every other test in the bundle is also suspect —
 /// the base class's launch path isn't doing what we think.
-final class SmokeTests: PhotoXUITestCase {
+final class SmokeTests: PhotoXSessionUITestCase {
 
     func test_launch_loadsFixture_andShowsFirstPair() throws {
         let total = waitForShootLoaded()

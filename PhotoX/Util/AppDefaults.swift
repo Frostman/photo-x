@@ -30,10 +30,18 @@ enum AppDefaults {
         // E2E test mode: a per-process scratch suite. Cleared on each
         // launch so every test starts from defaults; isolated from
         // production so recent-folder appends, settings toggles, etc.
-        // can't leak into the user's real PhotoX install.
-        if ProcessInfo.processInfo.arguments.contains("-photoxUITestMode"),
+        // can't leak into the user's real PhotoX install. The wipe is
+        // suppressed by `-photoxUITestPreserveDefaults YES` so relaunch
+        // tests can observe state the previous launch persisted
+        // (FavoriteShoots last-entry restore, etc.). Each
+        // fresh-launch test still gets path isolation via a unique
+        // fixture tmpdir, so the preserved keys don't collide.
+        let args = ProcessInfo.processInfo.arguments
+        if args.contains("-photoxUITestMode"),
            let scratch = UserDefaults(suiteName: testScratchSuite) {
-            scratch.removePersistentDomain(forName: testScratchSuite)
+            if !args.contains("-photoxUITestPreserveDefaults") {
+                scratch.removePersistentDomain(forName: testScratchSuite)
+            }
             return scratch
         }
         #if DEBUG
