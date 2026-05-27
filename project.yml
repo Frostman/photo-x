@@ -3,7 +3,7 @@ name: PhotoX
 options:
   bundleIdPrefix: dev.frostman
   deploymentTarget:
-    macOS: "26.0"
+    macOS: "15.0"
   createIntermediateGroups: true
   generateEmptyDirectories: true
   groupSortPosition: top
@@ -11,9 +11,10 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.10"
-    MACOSX_DEPLOYMENT_TARGET: "26.0"
-    # Apple-Silicon only: macOS 26 won't run on Intel anyway, and the vendored
-    # LibRaw .a is built arm64 by scripts/bootstrap.sh.
+    MACOSX_DEPLOYMENT_TARGET: "15.0"
+    # Apple-Silicon only: ARCHS=arm64 below pins this regardless of the
+    # macOS floor — the vendored LibRaw .a is built arm64 by
+    # scripts/bootstrap.sh.
     ARCHS: arm64
     ONLY_ACTIVE_ARCH: NO
     ENABLE_USER_SCRIPT_SANDBOXING: NO

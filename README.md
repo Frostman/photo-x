@@ -3,7 +3,7 @@
 > A fast macOS culling viewer for paired RAW + HEIF photo shoots.
 
 [![Release](https://img.shields.io/github/v/release/Frostman/photo-x?label=release&color=blue)](https://github.com/Frostman/photo-x/releases/latest)
-[![macOS](https://img.shields.io/badge/macOS-26%2B-blue)](#installation)
+[![macOS](https://img.shields.io/badge/macOS-15%2B-blue)](#installation)
 [![License](https://img.shields.io/github/license/Frostman/photo-x?color=blue)](LICENSE)
 
 ![PhotoX main canvas](docs/screenshots/01-hero.png)
@@ -155,7 +155,7 @@ CFExpress).
 2. Drag PhotoX to `/Applications`.
 3. Auto-update from there.
 
-Requires **macOS 26 (Tahoe) or later, Apple Silicon**.
+Requires **macOS 15 (Sequoia) or later, Apple Silicon**.
 
 ![PhotoX starter screen](docs/screenshots/02-starter.png)
 
