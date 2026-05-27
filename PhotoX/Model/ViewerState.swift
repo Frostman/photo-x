@@ -1575,6 +1575,12 @@ final class ViewerState {
         guard shootGeneration == generation else { return }
         indexingStatus = .done
         indexingCompletedAt = Date()
+        // Drop cache rows for files that have been removed from
+        // the shoot since the last open (~10 KB / dead file
+        // otherwise). The full set of stems currently in the
+        // shoot is the source of truth.
+        let liveStems = Set(shoot?.entries.map(\.stem) ?? [])
+        cache.pruneToStems(liveStems)
         // Persist the indexer cache once indexing has fully
         // settled. cache.flush is a no-op when nothing changed
         // since the last flush; on a cold open with a fully

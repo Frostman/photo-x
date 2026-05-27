@@ -180,6 +180,22 @@ final class IndexerCache {
         Self.gcIfNeeded()
     }
 
+    /// Drop cached entries whose stem isn't in `liveStems`. Used
+    /// at indexing completion to garbage-collect rows for files
+    /// that have been removed from the shoot folder since the
+    /// last open. Without this, the per-entry cruft accumulates
+    /// forever (~10 KB / dead file).
+    ///
+    /// Pass the FULL set of stems currently present in the shoot;
+    /// anything not in the set is removed.
+    func pruneToStems(_ liveStems: Set<String>) {
+        let before = payload.entries.count
+        payload.entries = payload.entries.filter { liveStems.contains($0.key) }
+        if payload.entries.count != before {
+            dirty = true
+        }
+    }
+
     /// Final flush + clear in-memory state. Called from
     /// `closeShoot`.
     func close() async {

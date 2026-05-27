@@ -333,6 +333,49 @@ final class IndexerCacheTests: XCTestCase {
         XCTAssertEqual(hit?.afData?.settings.focusMode, "AF-C")
     }
 
+    func test_pruneToStems_dropsEntriesForRemovedFiles() async throws {
+        let sourceA = try makeSourceFile(name: "DSC00040.JPG")
+        let sourceB = try makeSourceFile(name: "DSC00041.JPG")
+        let sourceC = try makeSourceFile(name: "DSC00042.JPG")
+        let cache = IndexerCache(shootFolder: tempDir)
+        for (stem, src) in [("DSC00040", sourceA), ("DSC00041", sourceB), ("DSC00042", sourceC)] {
+            let fp = try IndexerCache.fingerprint(of: src)
+            cache.updateEntry(stem: stem, fingerprint: fp, sequenceNumber: 1)
+        }
+        XCTAssertEqual(cache.entryCount, 3)
+
+        // The shoot has had B removed. Pass the live-stem set
+        // (A + C); B's row must be evicted.
+        cache.pruneToStems(["DSC00040", "DSC00042"])
+        XCTAssertEqual(cache.entryCount, 2,
+                       "B's row should be gone")
+        let fpB = try IndexerCache.fingerprint(of: sourceB)
+        XCTAssertNil(cache.entry(for: "DSC00041", fingerprint: fpB),
+                     "B's entry must not be lookup-able after prune")
+        let fpA = try IndexerCache.fingerprint(of: sourceA)
+        XCTAssertNotNil(cache.entry(for: "DSC00040", fingerprint: fpA),
+                        "A's entry must survive prune")
+
+        // Persistence: prune marks dirty; flush + reload should
+        // produce a cache file with only the live entries.
+        await cache.flush()
+        let reread = IndexerCache(shootFolder: tempDir)
+        XCTAssertEqual(reread.entryCount, 2,
+                       "pruned state must round-trip through disk")
+    }
+
+    func test_pruneToStems_emptySet_dropsEverything() async throws {
+        let source = try makeSourceFile(name: "DSC00050.JPG")
+        let cache = IndexerCache(shootFolder: tempDir)
+        let fp = try IndexerCache.fingerprint(of: source)
+        cache.updateEntry(stem: "DSC00050", fingerprint: fp,
+                          sequenceNumber: 1)
+        XCTAssertEqual(cache.entryCount, 1)
+        cache.pruneToStems([])
+        XCTAssertEqual(cache.entryCount, 0,
+                       "empty live-set wipes every cached entry")
+    }
+
     func test_corruptCacheFile_isDiscardedOnLoad() async throws {
         let url = IndexerCache.cacheURL(for: tempDir)
         try FileManager.default.createDirectory(
