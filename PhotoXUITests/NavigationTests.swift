@@ -33,12 +33,9 @@ final class NavigationTests: PhotoXSessionUITestCase {
         waitForPillIndex(total, total: total)
         pressKey(.rightArrow)
         // Pin observed behavior: clamps at last index, doesn't wrap.
-        // No state change → predicate-wait would time out; verify
-        // directly via a fresh read after a settle.
-        Thread.sleep(forTimeInterval: 1.0)
-        let pill = app.staticTexts["canvas.stemPill.indexLabel"]
-        XCTAssertEqual(pill.value as? String, "\(total)/\(total)",
-                       "navigating past the last pair should clamp, not wrap")
+        // No state change → can't predicate-wait; sample the pill
+        // for a short stability window instead of a fixed sleep.
+        assertPillStable(value: "\(total)/\(total)")
     }
 
     func test_optionArrow_stepsByTen() throws {

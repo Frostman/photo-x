@@ -18,12 +18,10 @@ final class RatingTests: PhotoXSessionUITestCase {
         let stem = try XCTUnwrap(sortedPairStems().first)
 
         pressKey("R")
-        Thread.sleep(forTimeInterval: 0.5)
-
-        let xmp = xmpSidecar(forPairNamed: stem)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: xmp.path),
-                      "R should produce a sidecar")
-        let body = try String(contentsOf: xmp, encoding: .utf8)
+        // The XMP body matches if EITHER tag form is present —
+        // pre-condition with a `Rating` substring is enough.
+        let body = try waitForXMPSidecar(forPairNamed: stem,
+                                          containing: "xmp:Rating")
         XCTAssertTrue(body.contains("xmp:Rating=\"-1\"") || body.contains("xmp:Rating>-1</"),
                       "Reject should write xmp:Rating=-1; got:\n\(body.prefix(400))")
     }
@@ -36,12 +34,8 @@ final class RatingTests: PhotoXSessionUITestCase {
         // 4=Blue, 5=Purple). macOS converts shift+3 to "#" at the
         // OS layer, which matches .onKeyPress(keys: ["#"]).
         pressKey("3", modifiers: .shift)
-        Thread.sleep(forTimeInterval: 0.5)
-
-        let xmp = xmpSidecar(forPairNamed: stem)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: xmp.path),
-                      "label set should produce a sidecar")
-        let body = try String(contentsOf: xmp, encoding: .utf8)
+        let body = try waitForXMPSidecar(forPairNamed: stem,
+                                          containing: "xmp:Label")
         XCTAssertTrue(body.contains("xmp:Label=\"Green\"") || body.contains("xmp:Label>Green</"),
                       "⇧3 should set xmp:Label=Green; got:\n\(body.prefix(400))")
     }

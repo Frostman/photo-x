@@ -197,14 +197,18 @@ class PhotoXUITestCase: XCTestCase {
     /// `app.launch()` alone doesn't always do it — SwiftUI's
     /// `@FocusState` + `.onKeyPress` only fire when the canvas is
     /// focused, which requires the window to be key. Activates up to
-    /// 30× in a 3 s budget then settles on whatever it got; tests
+    /// 60× in a 3 s budget then settles on whatever it got; tests
     /// using keyboard input should additionally click into the
     /// canvas via `waitForShootLoaded()`.
+    ///
+    /// 50 ms cadence (60 iterations) instead of 100 ms (30) — same
+    /// total budget but finer resolution so we don't oversleep
+    /// when the OS finishes promoting mid-step.
     static func promoteToKey(_ app: XCUIApplication) {
-        for _ in 0 ..< 30 {  // ~3 s @ 100 ms
+        for _ in 0 ..< 60 {  // ~3 s @ 50 ms
             app.activate()
             if app.state == .runningForeground { break }
-            Thread.sleep(forTimeInterval: 0.1)
+            Thread.sleep(forTimeInterval: 0.05)
         }
         let window = app.windows.firstMatch
         if window.waitForExistence(timeout: 5) {
@@ -236,6 +240,37 @@ class PhotoXUITestCase: XCTestCase {
     /// fixture (may or may not exist on disk).
     func xmpSidecar(forPairNamed stem: String) -> URL {
         tempFixtureURL.appendingPathComponent("\(stem).xmp")
+    }
+
+    /// Poll until the XMP sidecar for `stem` exists AND (if
+    /// `containing` is non-nil) its body contains the substring.
+    /// Returns the body string on success; XCTFails on timeout.
+    /// Used by RatingTests in place of a `Thread.sleep(0.5)` —
+    /// XMPWriteCoordinator typically persists in ~100–200 ms; the
+    /// 2 s ceiling is a flake guard.
+    @discardableResult
+    func waitForXMPSidecar(forPairNamed stem: String,
+                            containing substring: String? = nil,
+                            timeout: TimeInterval = 2,
+                            file: StaticString = #file,
+                            line: UInt = #line) throws -> String {
+        let url = xmpSidecar(forPairNamed: stem)
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if FileManager.default.fileExists(atPath: url.path),
+               let body = try? String(contentsOf: url, encoding: .utf8) {
+                if let substring {
+                    if body.contains(substring) { return body }
+                } else {
+                    return body
+                }
+            }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        XCTFail("XMP sidecar for \(stem) didn't appear within \(timeout)s" +
+                (substring.map { " containing \($0)" } ?? ""),
+                file: file, line: line)
+        return ""
     }
 
     /// Type a single keyboard shortcut at the main window. Wraps the
@@ -327,6 +362,31 @@ class PhotoXUITestCase: XCTestCase {
         let res = XCTWaiter.wait(for: [exp], timeout: timeout)
         XCTAssertEqual(res, .completed,
                        "pill index didn't reach \(expected) within \(timeout)s (current: '\(pill.value ?? "")')")
+    }
+
+    /// Assert that the stem pill's `value` stays equal to `expected`
+    /// for `seconds` (default 0.3 s). Used by tests that pressed a
+    /// key expected to be a no-op (boundary clamp, redundant nav)
+    /// — there's no state transition to predicate-wait on, so we
+    /// sample at 50 ms intervals and fail on any divergence.
+    ///
+    /// Tighter than the old `Thread.sleep(1.0); assert(==)` pattern
+    /// because the failure mode we're guarding against (delayed
+    /// state change) has no plausible mechanism for arriving more
+    /// than ~100 ms late.
+    func assertPillStable(value expected: String,
+                          forSeconds seconds: TimeInterval = 0.3,
+                          file: StaticString = #file,
+                          line: UInt = #line) {
+        let pill = app.staticTexts["canvas.stemPill.indexLabel"]
+        let intervals = max(1, Int(seconds / 0.05))
+        for _ in 0 ..< intervals {
+            let actual = (pill.value as? String) ?? ""
+            XCTAssertEqual(actual, expected,
+                           "pill changed during stability window",
+                           file: file, line: line)
+            Thread.sleep(forTimeInterval: 0.05)
+        }
     }
 
     /// The stem of the currently-displayed pair (e.g. "DSC04207").

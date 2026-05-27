@@ -192,13 +192,16 @@ class PhotoXSessionUITestCase: PhotoXUITestCase {
             nil,
             true
         )
-        wait(for: [completed], timeout: 15)
-        // Re-promote the window in case the previous test left
-        // focus elsewhere (Stats / failed-XMP / Settings windows
-        // were closed by the reset observer, but bring the canvas
-        // back to key explicitly).
-        Self.promoteToKey(app)
-        waitForShootLoaded()
+        // 5 s is 2× the typical 2–4 s reset+reopen+index cycle —
+        // tight enough to fail fast on a hung observer, loose
+        // enough to ride out a slow indexing pass. The previous
+        // 15 s ceiling masked stuck cycles for too long.
+        wait(for: [completed], timeout: 5)
+        // No promoteToKey + waitForShootLoaded here on purpose.
+        // Every test method's first line calls waitForShootLoaded
+        // (which polls the pill AND clicks the canvas to anchor
+        // focus). Doing both before the test ran cost ~2–3 s per
+        // reset × 14 resets ≈ 30–40 s of pure dead time.
     }
 
     private class SentinelBox {

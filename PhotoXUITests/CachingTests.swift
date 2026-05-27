@@ -20,9 +20,13 @@ final class CachingTests: PhotoXSessionUITestCase {
 
         // Jump to the end and back; thumb 0 must still be there
         // (i.e. the thumb cache didn't evict it during the round-trip).
+        // Use a predicate wait on the pill returning to index 1 to
+        // know the nav settled — no fixed sleep needed.
+        let total = totalPairsFromPill()
         pressKey(.end)
+        waitForPillIndex(total, total: total)
         pressKey(.home)
-        Thread.sleep(forTimeInterval: 0.5)
+        waitForPillIndex(1, total: total)
         XCTAssertTrue(thumb0.exists,
                       "filmstrip thumb 0 should survive End→Home round-trip")
     }

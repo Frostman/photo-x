@@ -44,8 +44,10 @@ final class RelaunchTests: PhotoXFreshLaunchUITestCase {
         try postCaptureNowAndWait()
 
         app.terminate()
-        // Brief settle so the relaunch sees a quiescent prefs file.
-        Thread.sleep(forTimeInterval: 0.5)
+        // No settle needed: the captureNowCompleted sentinel
+        // already confirmed AppDefaults.synchronize() flushed
+        // before we terminated. Re-launch reads a quiescent
+        // prefs file.
         app.launch()
         Self.promoteToKey(app)
 
