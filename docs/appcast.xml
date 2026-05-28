@@ -568,6 +568,18 @@
         type="application/octet-stream"
         sparkle:edSignature="RaKqfw1ZsQwPclGN8ZYpFEGYdYAAgNuTYMWk/9f2eA9uOFDKyz8ADO9fSzCloc61H5XrmkQuoESZFCEh772UBw==" length="11512531" />
     </item>
+    <item>
+      <title>v0.296.0-03c8a1d97</title>
+      <pubDate>Wed, 27 May 2026 17:13:23 -0700</pubDate>
+      <sparkle:version>296</sparkle:version>
+      <sparkle:shortVersionString>0.296.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[<ul><li>StatusBar: show indexing duration in popover header</li><li>Re-index: actually rebuild the cache + reset hit/miss counters</li><li>Bootstrap: pin LibRaw -mmacosx-version-min to project.yml floor</li><li>IndexerCache: store thumbnail orientation alongside JPEG bytes</li><li>Tests: isolate IndexerCache root so e2e runs don't leak to user cache</li></ul>]]></description>
+      <enclosure
+        url="https://github.com/Frostman/photo-x/releases/download/v0.296.0/PhotoX-v0.296.0-03c8a1d97.dmg"
+        type="application/octet-stream"
+        sparkle:edSignature="OsLD7/7ZF86R4qvgsJPFLE0toPaUKVXTVR0PiFwDjjpp25TRKHkKMz2+lEJih+By/+gK3Na2sriTgIt7UU4XDw==" length="10828273" />
+    </item>
     <!-- scripts/release.sh splices new <item> entries here, just before </channel>. -->
   </channel>
 </rss>
