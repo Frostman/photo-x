@@ -131,6 +131,20 @@ struct PhotoXApp: App {
                 }
                 .keyboardShortcut("0", modifiers: .command)
             }
+            // Help → "Keyboard Shortcuts" — pulls up the flat
+            // reference card (the old HelpOverlay). Annotated
+            // help is a separate surface triggered by `?` /
+            // the toolbar button; this menu item exists so
+            // the comprehensive shortcut list stays
+            // discoverable from the menu bar.
+            CommandGroup(replacing: .help) {
+                Button("Keyboard Shortcuts") {
+                    NotificationCenter.default.post(
+                        name: .photoxShowKeyboardShortcuts,
+                        object: nil)
+                }
+                .keyboardShortcut("?", modifiers: .command)
+            }
         }
 
         // Standard macOS Settings scene — binds ⌘, automatically and adds
@@ -222,6 +236,12 @@ struct PhotoXApp: App {
 /// `applicationWillTerminate` instead.
 extension Notification.Name {
     static let photoxWillTerminate = Notification.Name("dev.frostman.PhotoX.willTerminate")
+    /// Posted by the Help → "Keyboard Shortcuts" menu item.
+    /// ContentView observes it and toggles the flat shortcuts
+    /// reference card. Menu items are owned by the App scope
+    /// and can't reach @State in ContentView directly, so the
+    /// notification is the bridge.
+    static let photoxShowKeyboardShortcuts = Notification.Name("dev.frostman.PhotoX.showKeyboardShortcuts")
 }
 
 /// Edit → Undo / Redo menu items, bound to ViewerState.undoManager.

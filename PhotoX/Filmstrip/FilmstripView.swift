@@ -94,6 +94,7 @@ struct FilmstripView: View {
                 Rectangle().fill(Color(nsColor: .separatorColor)).frame(height: 1)
             }
             .accessibilityIdentifier("filmstrip.container")
+            .helpAnchor(.filmstrip)
             .onAppear {
                 proxy.scrollTo(state.displayedIndex, anchor: .center)
             }

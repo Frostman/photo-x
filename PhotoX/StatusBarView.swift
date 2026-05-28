@@ -71,6 +71,7 @@ struct StatusBarView: View {
                 )
                 .padding(14)
             }
+            .helpAnchor(.indexerChip)
         }
     }
 
@@ -132,6 +133,7 @@ struct StatusBarView: View {
               ? "Collapse bursts in filmstrip (\(effective ? "on" : "off")) — the burst you're inside stays expanded"
               : "Collapse bursts disabled while indexing — burst membership is still being detected")
         .accessibilityIdentifier("statusbar.collapseBursts")
+        .helpAnchor(.collapseBursts)
         .opacity(availableForSort ? 1 : 0)
         .disabled(!available)
         .allowsHitTesting(available)
@@ -154,6 +156,7 @@ struct StatusBarView: View {
         .menuStyle(.borderlessButton)
         .fixedSize()
         .help("Sort order for the filmstrip and ←/→ navigation")
+        .helpAnchor(.sortMenu)
     }
 
     private func label(for mode: SortMode) -> String {

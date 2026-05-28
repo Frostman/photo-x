@@ -24,7 +24,16 @@ struct ContentView: View {
     /// need a SwiftUI binding into it), so no @Bindable.
     let updater: UpdaterController?
     @FocusState private var canvasFocused: Bool
+    /// Flat keyboard-shortcuts reference card (`HelpOverlay`).
+    /// Triggered from menu bar's Help → Keyboard Shortcuts
+    /// (⌘?). NOT bound to `?` anymore — that key now opens
+    /// the annotated overlay below.
     @State private var showHelp: Bool = false
+    /// Annotated-screenshot help overlay with brackets +
+    /// inline shortcut hints pointing at the live UI.
+    /// Triggered by `?` and the toolbar `?` button.
+    @State private var showAnnotationHelp: Bool = false
+    @State private var helpAnchorStore = HelpAnchorStore()
     @State private var showJumpSheet: Bool = false
     @State private var copiedFlash: Bool = false
     @AppStorage(SettingsKey.appearance, store: AppDefaults.shared) private var appearanceRaw = SettingsKey.Defaults.appearance
@@ -51,6 +60,7 @@ struct ContentView: View {
                 VStack(spacing: 0) {
                     canvas
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .helpAnchor(.canvas)
                     // Sidebar/filmstrip/statusbar are gated on having a shoot
                     // loaded — when the window is in the empty state, there's
                     // nothing for them to show, so we collapse to the full
@@ -73,6 +83,17 @@ struct ContentView: View {
                 HelpOverlay(onDismiss: { showHelp = false })
             }
 
+            if showAnnotationHelp {
+                HelpAnnotationOverlay(
+                    store: helpAnchorStore,
+                    onDismiss: {
+                        withAnimation(.easeInOut(duration: 0.12)) {
+                            showAnnotationHelp = false
+                        }
+                    }
+                )
+            }
+
             if showJumpSheet {
                 // Overlay (not .sheet) so a tap on the dimmed
                 // background dismisses, and the canvas's @FocusState
@@ -80,6 +101,20 @@ struct ContentView: View {
                 // after close. Matches HelpOverlay's pattern.
                 JumpToView(state: state,
                            onDismiss: { showJumpSheet = false })
+            }
+        }
+        // Named coordinate space so `.helpAnchor(_:)` modifiers
+        // throughout the tree can report frames in a single
+        // window-relative basis, which the annotated-help
+        // overlay reads to position its brackets + callouts.
+        .coordinateSpace(name: "help")
+        .onPreferenceChange(HelpAnchorPreferenceKey.self) { rects in
+            helpAnchorStore.rects = rects
+        }
+        .onReceive(NotificationCenter.default.publisher(
+            for: .photoxShowKeyboardShortcuts)) { _ in
+            withAnimation(.easeInOut(duration: 0.12)) {
+                showHelp.toggle()
             }
         }
         .frame(minWidth: 900, minHeight: 600)
@@ -245,12 +280,17 @@ struct ContentView: View {
                     return .handled
                 }
                 .onKeyPress(KeyEquivalent("?")) {
-                    withAnimation(.easeInOut(duration: 0.12)) { showHelp.toggle() }
+                    withAnimation(.easeInOut(duration: 0.12)) {
+                        showAnnotationHelp.toggle()
+                    }
                     return .handled
                 }
                 .onKeyPress(.escape) {
-                    guard showHelp else { return .ignored }
-                    withAnimation(.easeInOut(duration: 0.12)) { showHelp = false }
+                    guard showHelp || showAnnotationHelp else { return .ignored }
+                    withAnimation(.easeInOut(duration: 0.12)) {
+                        showHelp = false
+                        showAnnotationHelp = false
+                    }
                     return .handled
                 }
         }
@@ -387,13 +427,15 @@ struct ContentView: View {
 
             ToolbarItem(placement: .primaryAction) {
                 Button {
-                    withAnimation(.easeInOut(duration: 0.12)) { showHelp.toggle() }
+                    withAnimation(.easeInOut(duration: 0.12)) {
+                        showAnnotationHelp.toggle()
+                    }
                 } label: {
-                    Label("Shortcuts", systemImage: "questionmark.circle")
+                    Label("Help", systemImage: "questionmark.circle")
                 }
                 .controlSize(.small)
                 .padding(.horizontal, 5)
-                .help("Show keyboard shortcuts (?)")
+                .help("Show annotated help (?). Help → Keyboard Shortcuts for the full reference list (⌘?).")
             }
 
             // Pane toggles are only meaningful when a shoot is loaded. Hide

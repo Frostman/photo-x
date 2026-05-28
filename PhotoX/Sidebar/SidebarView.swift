@@ -20,20 +20,24 @@ struct SidebarView: View {
                     section(title: "Decisions") {
                         DecisionsPanelView(state: state)
                     }
+                    .helpAnchor(.decisions)
 
                     section(title: "Histogram") {
                         HistogramView(histogram: state.currentHistogram)
                             .frame(height: 140)
                     }
+                    .helpAnchor(.histogram)
 
                     if let exif = state.displayedExif {
                         section(title: "EXIF") {
                             ExifPanelView(summary: exif)
                         }
+                        .helpAnchor(.exif)
                     }
 
                     if !state.displayedAFSettings.isEmpty {
                         autofocusSection
+                            .helpAnchor(.autofocus)
                     }
                 }
                 .padding(12)
