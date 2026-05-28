@@ -59,6 +59,10 @@ they go next.
 - 1–5 star ratings, color labels (Red/Yellow/Green/Blue/Purple),
   reject flag — all via hotkeys (1–5, ⇧1–5, R) or the Decisions
   panel.
+- Burst-aware reject: `G` rejects all sibling frames of the current
+  burst in one keystroke (scope set in Settings).
+- Undo / redo (`⌘Z` / `⌘⇧Z`) across every rating, label, and
+  burst-reject — round-trips XMP on disk too.
 - Auto-advance after rating (opt-in, separate setting for keyboard
   vs sidebar inputs).
 - Filter the view by rating / reject / star level so you can re-cull
@@ -108,7 +112,13 @@ Three pipelines run in parallel when you open a shoot:
    orientation via bundled exiftool, batched 50 files at a time.
 3. **XMP sidecars** — reads any existing ratings/labels from disk.
 
-The popover behind the status pill shows live per-pipeline progress.
+Outputs are persisted to a per-shoot on-disk cache, so the
+second (and every subsequent) open of the same shoot serves
+every pipeline straight from the cache — no file reads, no
+exiftool spawn. The popover behind the status pill shows live
+per-pipeline progress, total wall time, cache hits / misses,
+cache size, and a Re-index button when you want to force a
+clean rebuild.
 
 ### Auto-updates
 
@@ -167,25 +177,30 @@ CFExpress cards with DCIM folders — one click to open a shoot.
 | Key | Action |
 | --- | --- |
 | `←` / `→` | Previous / next pair |
-| `⌥←` / `⌥→` | Jump ±10 pairs |
+| `⌥ ←` / `⌥ →` | Skip 10 pairs |
+| `⌘ ←` / `⌘ →` | Jump to previous / next burst (singletons count as 1-frame bursts) |
+| `[` / `]` | Jump to previous / next unrated image |
+| `J` | Jump to entry by index or stem name (sheet with completion) |
 | `Home` / `End` | First / last pair |
 | `1`–`5` | Set 1–5-star rating (press again to clear) |
 | `0` | Clear rating |
 | `R` | Toggle reject flag |
-| `⇧1`–`⇧5` | Set color label (Red / Yellow / Green / Blue / Purple) |
-| `Z` | Toggle HEIF ↔ RAW variant |
-| `X` | Reset zoom to fit |
-| `D` | Cycle RAW decoder (ImageIO ↔ LibRaw) |
+| `⇧ 1`–`⇧ 5` | Set color label (Red / Yellow / Green / Blue / Purple) |
+| `G` | Inside a burst: reject other burst members (scope set in Settings) |
+| `⌘ Z` / `⌘ ⇧ Z` | Undo / redo the last rating, label, or burst-reject change |
+| `X` | Toggle HEIF/JPG ↔ RAW variant |
+| `⇧ X` | Cycle RAW decoder (ImageIO ↔ LibRaw) |
 | `A` | Toggle AF overlay |
 | `C` | Toggle clipping overlay |
 | `F` | Toggle focus peaking |
 | `B` | Toggle sidebar |
 | `T` | Toggle filmstrip |
 | `?` | Show / hide help overlay |
-| `⌘O` | Open folder |
-| `⌘,` | Open Settings |
-| `⌘+scroll` | Zoom around cursor |
-| Double-click | Zoom 1:1 centred on click (again to fit) |
+| `⌘ O` | Open folder |
+| `⌘ 0` | Fit image to window |
+| `⌘ ,` | Open Settings |
+| `⌘ +scroll` / pinch | Zoom around cursor |
+| Double-click | Toggle fit ↔ 100 % centred on click |
 
 ## Roadmap
 
@@ -233,15 +248,20 @@ one person at AI-augmented pace.
   Cache hits bind synchronously; misses go through a coalesced
   async upload (at most 1 in-flight + 1 pending, so a held arrow
   key never fans out N concurrent uploads).
-- 20-entry texture LRU keyed by `DecodeKey(pairID, variant, decoder)`,
-  with single-flight upload dedup. Prefetch warms ±1 neighbours so
-  forward nav also hits the fast path.
+- Texture LRU (default 32, user-configurable in Settings) keyed by
+  `DecodeKey(pairID, variant, decoder)`, with single-flight upload
+  dedup. Prefetch warms ±1 neighbours so forward nav also hits the
+  fast path.
 - EXIF rotation runs in the shader (per-corner UV mapping picked by
   `uvCorners(for:)`). Eliminates the 200 MB CPU rotation pass that
   was the bottleneck for portrait shots.
 
 ### Indexer
-Three pipelines run in parallel inside [`ViewerState.startIndexing`](PhotoX/Model/ViewerState.swift):
+A bounded-parallel `stat()` pre-pass (8 GCD workers, off the
+cooperative pool) runs first to collect every preview file's
+size + mtime in one batched IO burst; then three pipelines run
+in parallel inside
+[`ViewerState.startIndexing`](PhotoX/Model/ViewerState.swift):
 
 - **Basic EXIF + thumbs** — one ~256 KB HEIF read per file gets us
   both the filmstrip thumbnail (embedded JPEG) AND the standard
@@ -251,6 +271,15 @@ Three pipelines run in parallel inside [`ViewerState.startIndexing`](PhotoX/Mode
   orientation via bundled exiftool, one short-lived process per
   50-file batch.
 - **XMP sidecars** — per-pair file read.
+
+[`IndexerCache`](PhotoX/Cache/IndexerCache.swift) persists each
+pipeline's output to a per-shoot plist under
+`~/Library/Caches/PhotoX/IndexerCache/`. Entries are keyed by
+file fingerprint (size + mtime); on warm reopen each pipeline
+serves directly from the cache without touching the file or
+spawning exiftool. The popover behind the status pill surfaces
+live progress, per-pipeline ETAs, hit/miss counters, cache size,
+and a "Re-index" button that forces a fresh rebuild.
 
 [`DecodePipeline`](PhotoX/Decoders/DecodePipeline.swift) has
 single-flight dedup over the actual decoders and owns the
@@ -279,8 +308,17 @@ just dev
 # Compile-only check (no relaunch).
 just build
 
-# Run tests (60 s hard timeout).
+# Unit tests (60 s hard timeout).
 just test
+
+# End-to-end XCUITest suite (clones sample/ into a temp dir
+# per test, sandboxes the indexer cache, ~3 min wall time).
+just e2e
+
+# Dump every EXIF / Sony / Composite tag PhotoX reads for one
+# photo, plus its .xmp sidecar if present. Handy when comparing
+# what PhotoX sees against what the camera wrote.
+just inspect path/to/photo.HIF
 
 # Cut a full release. See "Cutting a release" below for one-time
 # setup. Maintainers only.
@@ -335,7 +373,7 @@ so a full release is ~3 min wall time.
 
 ## Tech stack
 
-- **Swift 6 + SwiftUI + AppKit** (NSViewRepresentable bridges where
+- **Swift 5.10 + SwiftUI + AppKit** (NSViewRepresentable bridges where
   SwiftUI can't reach).
 - **Metal + MetalKit** for the GPU canvas.
 - **ImageIO** for HEIF + RAW decode. **LibRaw** (vendored, statically
