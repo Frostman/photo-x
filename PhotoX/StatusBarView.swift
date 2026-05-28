@@ -234,6 +234,7 @@ struct StatusBarView: View {
         }
         .toggleStyle(.button)
         .controlSize(.small)
+        .helpAnchor(.filters)
     }
 
     /// Binding that maps `Set<Int>` membership for a given star count to a Bool

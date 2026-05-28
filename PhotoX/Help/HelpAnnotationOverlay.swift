@@ -99,6 +99,11 @@ private let helpAnnotations: [HelpAnnotation] = [
           message: "Hide all but the first frame of each burst in the filmstrip. The burst you're currently inside stays expanded so you can still navigate within it.",
           shortcuts: [],
           labelEdge: .top),
+
+    .init(id: .filters, title: "Filters",
+          message: "Show or hide frames by rating, reject, or unrated state. Filmstrip + ←/→ navigation skip anything hidden. The count beside each chip on the left tracks the full shoot, not the filtered view.",
+          shortcuts: [],
+          labelEdge: .top),
 ]
 
 /// The annotated help layer. Sits inside `ContentView`'s

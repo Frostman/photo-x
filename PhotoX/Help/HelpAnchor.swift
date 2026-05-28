@@ -16,6 +16,7 @@ enum HelpAnchorID: String, CaseIterable, Hashable, Sendable {
     case indexerChip
     case sortMenu
     case collapseBursts
+    case filters
 }
 
 /// Shared store the annotated help overlay reads from. Frames
