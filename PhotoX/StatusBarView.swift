@@ -291,10 +291,26 @@ private struct IndexingProgressPopover: View {
                     .font(.subheadline.bold())
                 Spacer()
                 if let completedAt {
+                    // Wall time = max(per-pipeline duration) because
+                    // the three pipelines run in parallel. Computed
+                    // outside the TimelineView since duration is
+                    // fixed once indexing finishes; agoString is the
+                    // only piece that needs the per-minute tick.
+                    let totalDuration: TimeInterval? = {
+                        let ds = [timings.basicExifAndThumbs.duration,
+                                  timings.advancedExif.duration,
+                                  timings.xmpSidecars.duration]
+                            .compactMap { $0 }
+                        return ds.isEmpty ? nil : ds.max()
+                    }()
+                    let took: String? = totalDuration.map {
+                        "took \(formattedDuration($0))"
+                    }
                     // Tick the "X ago" once a minute. agoString is
                     // minute-precision so faster updates would be wasted.
                     TimelineView(.periodic(from: .now, by: 60)) { ctx in
-                        Text("Indexed \(agoString(from: completedAt, now: ctx.date))")
+                        let ago = "indexed \(agoString(from: completedAt, now: ctx.date))"
+                        Text(took.map { "\($0) · \(ago)" } ?? ago)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
