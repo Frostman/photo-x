@@ -179,6 +179,62 @@ version:
     echo "marketing: $MARKETING"
     echo "build:     $BUILD"
 
+# Dump every EXIF / Sony / Composite tag PhotoX reads for a
+# single photo, plus the .xmp sidecar if one exists alongside.
+# Mirrors what the basic-EXIF + advanced-EXIF pipelines pull
+# (TIFFEXIFParser fields + MetadataBatchLoader.tagArgs) — handy
+# when comparing what PhotoX sees against what the camera
+# actually wrote, or when a field is missing from the sidebar
+# and you want to know whether the file has it.
+#
+# Usage: just inspect /path/to/photo.HIF
+inspect file:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    EXIFTOOL=Resources/exiftool/exiftool
+    if [ ! -x "$EXIFTOOL" ]; then
+        echo "error: $EXIFTOOL not present — run scripts/bootstrap.sh first" >&2
+        exit 1
+    fi
+    if [ ! -f "{{file}}" ]; then
+        echo "error: {{file}} not found" >&2
+        exit 1
+    fi
+    "$EXIFTOOL" -G1 -a -s \
+        -EXIF:Make -EXIF:Model -EXIF:LensModel \
+        -EXIF:ExposureTime -EXIF:FNumber -EXIF:ISO \
+        -EXIF:FocalLength -EXIF:ExposureCompensation \
+        -EXIF:DateTimeOriginal -EXIF:Orientation# \
+        -EXIF:ExifImageWidth -EXIF:ExifImageHeight \
+        -Sony:SequenceNumber -Sony:CameraOrientation# \
+        -Sony:FocusMode -Sony:AFAreaMode -Sony:AFAreaModeSetting -Sony:AFTracking \
+        -Sony:FocusLocation -Sony:FocusFrameSize \
+        -Sony:FocalPlaneAFPointArea \
+        -Sony:FocalPlaneAFPointLocation1 -Sony:FocalPlaneAFPointLocation2 \
+        -Sony:FocalPlaneAFPointLocation3 -Sony:FocalPlaneAFPointLocation4 \
+        -Sony:FocalPlaneAFPointLocation5 -Sony:FocalPlaneAFPointLocation6 \
+        -Sony:FocalPlaneAFPointLocation7 -Sony:FocalPlaneAFPointLocation8 \
+        -Sony:FocalPlaneAFPointLocation9 \
+        -Sony:FocalPlaneAFPointsUsed \
+        -Sony:Face1Position -Sony:Face2Position -Sony:Face3Position \
+        -Sony:Face4Position -Sony:Face5Position -Sony:Face6Position \
+        -Sony:FacesDetected \
+        -Composite:FocusDistance -Composite:FocusDistance2 \
+        "{{file}}"
+    # Stem-matched XMP sidecar (Lightroom-compatible naming).
+    STEM_DIR="$(dirname "{{file}}")"
+    STEM="$(basename "{{file}}")"
+    STEM="${STEM%.*}"
+    XMP="$STEM_DIR/$STEM.xmp"
+    if [ -f "$XMP" ]; then
+        echo
+        echo "── XMP sidecar: $XMP ─────────────────────────"
+        cat "$XMP"
+    else
+        echo
+        echo "(no XMP sidecar at $XMP)"
+    fi
+
 # Cut a release via scripts/release.sh.
 #   just release              → full release (build, sign, DMG, publish)
 #   just release --verify-only → build + tests, no publish
