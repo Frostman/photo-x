@@ -228,6 +228,21 @@ final class IndexerCache {
         dirty = false
     }
 
+    /// Drop every entry from the in-memory payload without
+    /// writing it back to disk. Used by `ViewerState.reIndex()`
+    /// so the upcoming pipelines see misses for every entry,
+    /// repopulate via real file reads / exiftool runs, mark
+    /// the cache dirty, and the post-indexing `flush()`
+    /// produces a freshly-built plist. Without this, reIndex
+    /// would re-run the pipelines against an unchanged
+    /// in-memory cache, every entry would be a hit, no
+    /// `updateEntry` calls would land, and `flush()` would be
+    /// a no-op — defeating the user's intent to rebuild.
+    func clearInMemory() {
+        payload = .empty(for: shootFolder)
+        dirty = false
+    }
+
     /// How many entries are currently in the cache (regardless
     /// of validity). Used by the indexer popover.
     var entryCount: Int { payload.entries.count }

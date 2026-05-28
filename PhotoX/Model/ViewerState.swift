@@ -1213,6 +1213,19 @@ final class ViewerState {
         indexingCompletedAt = nil
         batchQueues = nil
         entryFingerprints.removeAll()
+        // Reset hit/miss counters too — re-index starts a
+        // fresh tally so the popover shows the new run's
+        // counts, not the previous run's stacked on top.
+        indexerCacheHitsThisOpen = 0
+        indexerCacheMissesThisOpen = 0
+        // Drop the in-memory cache payload so the upcoming
+        // pipelines see misses for every entry, re-do the file
+        // reads / exiftool runs, and produce a freshly-written
+        // plist via finishIndexing's flush. Without this every
+        // entry would be a hit, no updateEntry calls would
+        // land, dirty would stay false, and re-index would
+        // silently leave the cache unchanged.
+        cache.clearInMemory()
         // advancedExifBatches + stemToAdvancedExifBatchID will be rebuilt
         // by startIndexing.
         startIndexing()
