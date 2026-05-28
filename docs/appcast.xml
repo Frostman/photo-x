@@ -580,6 +580,18 @@
         type="application/octet-stream"
         sparkle:edSignature="OsLD7/7ZF86R4qvgsJPFLE0toPaUKVXTVR0PiFwDjjpp25TRKHkKMz2+lEJih+By/+gK3Na2sriTgIt7UU4XDw==" length="10828273" />
     </item>
+    <item>
+      <title>v0.300.0-5982f646d</title>
+      <pubDate>Wed, 27 May 2026 20:31:58 -0700</pubDate>
+      <sparkle:version>300</sparkle:version>
+      <sparkle:shortVersionString>0.300.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[<ul><li>AF: skip regions when FocusLocation is 0 0 0 0; surface in sidebar</li><li>Justfile: add `just inspect <file>` for per-photo EXIF dump</li><li>Sidebar: add ladybug toggle for AF debug details</li></ul>]]></description>
+      <enclosure
+        url="https://github.com/Frostman/photo-x/releases/download/v0.300.0/PhotoX-v0.300.0-5982f646d.dmg"
+        type="application/octet-stream"
+        sparkle:edSignature="+WdzA8pCm3/QNLo/80ZLlyER3xrVjIgBU0EYmC262DYvSD9W/SsZ25fcgVdGhgR0LLVNRTzDXm0U+RSUx8XyCw==" length="11480783" />
+    </item>
     <!-- scripts/release.sh splices new <item> entries here, just before </channel>. -->
   </channel>
 </rss>
