@@ -189,11 +189,28 @@ enum ExifToolRunner {
     // MARK: - Regions
 
     static func parseRegions(from dict: [String: Any]) -> [AFRegion] {
+        // Sony writes `FocusLocation: 0 0 0 0` when the file has no
+        // usable AF info (manual focus, MF lens, AF metadata stripped,
+        // etc.). The three downstream parsers all derive image
+        // dimensions + focus coords from this string; with all zeros
+        // every region collapses to a meaningless point at origin
+        // (and a tiny rectangle drawn on the canvas). Bail early.
+        if isFocusLocationAllZero(dict) { return [] }
         var regions: [AFRegion] = []
         regions.append(contentsOf: parsePrimaryFocus(dict))
         regions.append(contentsOf: parseFocalPlanePoints(dict))
         regions.append(contentsOf: parseFaces(dict))
         return regions
+    }
+
+    /// True when `Sony:FocusLocation` is present but reads
+    /// `0 0 0 0` — the sentinel Sony writes for "no AF info".
+    /// False when the tag is missing (the per-parser
+    /// `guard let str` checks handle that path).
+    static func isFocusLocationAllZero(_ dict: [String: Any]) -> Bool {
+        guard let str = string(dict, "Sony:FocusLocation") else { return false }
+        let parts = str.split(separator: " ").compactMap { Int($0) }
+        return parts.count == 4 && parts.allSatisfy { $0 == 0 }
     }
 
     static func parsePrimaryFocus(_ dict: [String: Any]) -> [AFRegion] {

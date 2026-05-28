@@ -65,7 +65,14 @@ final class IndexerCache {
     /// Exif item's TIFF orientation, which can differ or be
     /// absent — previously caused HEIF cache hits to render
     /// rotated thumbnails the wrong way up.
-    nonisolated static let currentSchemaVersion = 2
+    ///
+    /// v3: parseRegions now bails when `Sony:FocusLocation`
+    /// is `0 0 0 0` (the sentinel Sony writes for "no AF
+    /// info"). Existing v2 caches hold the bogus regions
+    /// parsed before the filter landed; bumping forces a
+    /// clean rebuild so cached AFData no longer surfaces the
+    /// stray focus rectangle.
+    nonisolated static let currentSchemaVersion = 3
 
     struct Payload: Codable {
         var version: Int

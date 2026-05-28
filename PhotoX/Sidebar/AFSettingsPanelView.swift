@@ -19,6 +19,13 @@ struct AFSettingsPanelView: View {
             row("Tracking", settings.afTracking)
             row("Distance", settings.focusDistance)
             row("Points Used", settings.pointsUsed.map { "\($0)" })
+            // Was the focus position actually written to the file?
+            // True when the Sony:FocusLocation tag yielded a usable
+            // primary-focus region (non-missing, non-all-zero — see
+            // ExifToolRunner.isFocusLocationAllZero). Surfaced so it's
+            // obvious which shots have AF metadata vs which were taken
+            // in MF / had it stripped.
+            row("Location", hasPrimaryFocus ? "Available" : "Missing")
             if showDebug {
                 row("Frame Size", settings.focusFrameSize)
                 if !regions.isEmpty {
@@ -32,6 +39,10 @@ struct AFSettingsPanelView: View {
                 }
             }
         }
+    }
+
+    private var hasPrimaryFocus: Bool {
+        regions.contains(where: { $0.kind == .primaryFocus })
     }
 
     @ViewBuilder

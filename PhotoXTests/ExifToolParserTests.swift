@@ -158,6 +158,33 @@ final class ExifToolParserTests: XCTestCase {
         XCTAssertTrue(ExifToolRunner.parsePrimaryFocus([:]).isEmpty)
     }
 
+    // MARK: parseRegions all-zero guard
+
+    func test_parseRegions_emptyWhenFocusLocationIsAllZero() {
+        // Sony writes "0 0 0 0" for shots with no usable AF info
+        // (manual focus, etc.) — even if the file carries face
+        // boxes or focal-plane points, the dimensions needed to
+        // place them are absent. parseRegions returns nothing so
+        // no garbage rectangles get rendered.
+        let dict: [String: Any] = [
+            "Sony:FocusLocation": "0 0 0 0",
+            "Sony:FocusFrameSize": "120x120",
+            "Sony:FocalPlaneAFPointLocation1": "320 240",
+            "Sony:Face1Position": "100 100 50 50",
+        ]
+        XCTAssertTrue(ExifToolRunner.parseRegions(from: dict).isEmpty)
+        XCTAssertTrue(ExifToolRunner.isFocusLocationAllZero(dict))
+    }
+
+    func test_isFocusLocationAllZero_falseWhenMissing() {
+        XCTAssertFalse(ExifToolRunner.isFocusLocationAllZero([:]))
+    }
+
+    func test_isFocusLocationAllZero_falseWhenAnyNonZero() {
+        let dict: [String: Any] = ["Sony:FocusLocation": "0 0 1 0"]
+        XCTAssertFalse(ExifToolRunner.isFocusLocationAllZero(dict))
+    }
+
     // MARK: parseFocalPlanePoints
 
     func test_parseFocalPlanePoints_scalesFromInternal640x480Grid() {
