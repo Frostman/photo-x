@@ -314,7 +314,7 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.red)
                 }
-                Text("Helper runs as a LaunchAgent registered via SMAppService. It's installed inside the PhotoX app bundle, registered only when this toggle is on, and shows up in System Settings → Login Items where you can also disable it. Skips the notification if PhotoX is already the frontmost app — the Open tab's Cards section already surfaces the mount there.")
+                Text("Helper runs as a LaunchAgent registered via SMAppService. It's installed inside the PhotoX app bundle, registered only when this toggle is on, and shows up in System Settings → Login Items where you can also disable it.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
