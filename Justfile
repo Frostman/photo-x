@@ -276,10 +276,12 @@ release *args:
 
 # Toggle a fake camera-card mount for testing the background
 # card watcher / Open tab's Cards section. Creates
-# /tmp/photox-fake.dmg on first run from sample/ wrapped in a
-# DCIM/100PHOTOX/ tree (the watcher only fires on volumes with
-# DCIM/ at the root), then attach / detach toggle on subsequent
-# runs. Volume mounts at /Volumes/PHOTOXFAKE.
+# /tmp/photox-fake.dmg on first run from sample/ wrapped in
+# DCIM/100PHOTOX/ + DCIM/101PHOTOX/ (the watcher only fires
+# on volumes with DCIM/ at the root; the two shoot folders
+# exercise the Cards section's multi-shoot rendering plus the
+# helper's "pick the first 100XXXXX folder" logic). Subsequent
+# runs toggle attach / detach. Volume mounts at /Volumes/PHOTOXFAKE.
 fake-card:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -288,18 +290,31 @@ fake-card:
     MOUNT="/Volumes/$VOLUME"
 
     if [ ! -f "$DMG" ]; then
-        echo "==> Creating $DMG from sample/ (wrapped in DCIM/100PHOTOX/)"
+        echo "==> Creating $DMG from sample/ split across DCIM/100PHOTOX + DCIM/101PHOTOX"
         if [ ! -d sample ]; then
             echo "error: sample/ not found — run from repo root" >&2
             exit 1
         fi
-        # Stage sample/ under a DCIM tree so the volume matches
-        # what the watcher (and PhotoX's VolumeScanner) keys on.
+        # Stage sample/ under DCIM/ so the volume matches what
+        # the watcher (and PhotoX's VolumeScanner) keys on.
         # mktemp dir is cleaned up on exit regardless of success.
         STAGE=$(mktemp -d)
         trap 'rm -rf "$STAGE"' EXIT
-        mkdir -p "$STAGE/DCIM/100PHOTOX"
-        cp -R sample/. "$STAGE/DCIM/100PHOTOX/"
+        mkdir -p "$STAGE/DCIM/100PHOTOX" "$STAGE/DCIM/101PHOTOX"
+        # Split sample by stem (DSC00060, DSC04176, …) so each
+        # subfolder keeps full ARW + JPG/HIF + xmp groups
+        # together — splitting by file would scatter
+        # raw/preview siblings across folders and confuse
+        # ShootScanner's pair detection.
+        STEMS=()
+        while IFS= read -r stem; do STEMS+=("$stem"); done < <(ls sample | sed 's/\.[^.]*$//' | sort -u)
+        HALF=$(( ${#STEMS[@]} / 2 ))
+        for stem in "${STEMS[@]:0:$HALF}"; do
+            cp sample/"$stem".* "$STAGE/DCIM/100PHOTOX/" 2>/dev/null || true
+        done
+        for stem in "${STEMS[@]:$HALF}"; do
+            cp sample/"$stem".* "$STAGE/DCIM/101PHOTOX/" 2>/dev/null || true
+        done
         # -ov overwrites if /tmp/photox-fake.dmg somehow exists
         # from a leftover state; -srcfolder builds the image
         # contents from STAGE.
