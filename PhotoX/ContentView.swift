@@ -473,13 +473,22 @@ struct ContentView: View {
             }
 
             ToolbarItem(placement: .primaryAction) {
-                Button {
-                    withAnimation(.easeInOut(duration: 0.12)) {
-                        showAnnotationHelp.toggle()
+                // Toggle (not Button) so the toolbar adopts the same
+                // on/off highlight that the Filmstrip / Sidebar
+                // toggles get — visible cue that the overlay is up.
+                // Custom Binding wraps the set in `withAnimation` so
+                // the overlay fade matches the click cadence.
+                Toggle(isOn: Binding(
+                    get: { showAnnotationHelp },
+                    set: { newValue in
+                        withAnimation(.easeInOut(duration: 0.12)) {
+                            showAnnotationHelp = newValue
+                        }
                     }
-                } label: {
+                )) {
                     Label("Help", systemImage: "questionmark.circle")
                 }
+                .toggleStyle(.button)
                 .controlSize(.small)
                 .padding(.horizontal, 5)
                 .help("Show annotated help (?). Help → Keyboard Shortcuts for the full reference list (⌘?).")
