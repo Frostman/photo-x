@@ -49,18 +49,17 @@ struct OpenStarterView: View {
             .keyboardShortcut("o", modifiers: .command)
             .helpAnchor(.openFolderButton)
 
-            if !favorites.paths.isEmpty {
-                favoritesSection
-                    .helpAnchor(.openFavorites)
-            }
-            if !volumes.cardFolders.isEmpty {
-                cardsSection
-                    .helpAnchor(.openCards)
-            }
-            if !visibleRecents.isEmpty {
-                recentsSection
-                    .helpAnchor(.openRecents)
-            }
+            // Sections render unconditionally so the user sees
+            // every category on a fresh launch (and the help
+            // overlay's section callouts always have an anchor
+            // to point at). Each section body shows a small
+            // italic placeholder when its list is empty.
+            favoritesSection
+                .helpAnchor(.openFavorites)
+            cardsSection
+                .helpAnchor(.openCards)
+            recentsSection
+                .helpAnchor(.openRecents)
             if !favorites.paths.isEmpty
                 || !volumes.cardFolders.isEmpty
                 || !visibleRecents.isEmpty {
@@ -90,57 +89,66 @@ struct OpenStarterView: View {
 
     // MARK: Sections
 
+    @ViewBuilder
     private var favoritesSection: some View {
         section(title: "Favorites") {
-            ForEach(favorites.paths, id: \.self) { path in
-                pathRow(
-                    path,
-                    leading: { favoriteDragHandle(for: path) },
-                    trailing: {
-                        pairCountPill(for: path)
-                        // Star slot placeholder so the X column aligns with
-                        // Recent rows (which have a star button in this slot).
-                        Color.clear.frame(width: 20, height: 20)
-                        rowButton(systemImage: "xmark", tint: .secondary,
-                                  help: "Remove from favorites") {
-                            favorites.remove(path)
-                        }
-                    }
-                )
-                // Insertion indicator is an OVERLAY, not a sibling above the
-                // row, so the row's bounds don't shift when the user hovers a
-                // drop target. A shifting bounds means the cursor can end up
-                // outside the drop destination at the moment of release and
-                // SwiftUI silently ignores the drop until you click again.
-                .overlay(alignment: .top) {
-                    if favoriteDropTarget == path {
-                        Capsule()
-                            .fill(Color.accentColor)
-                            .frame(height: 3)
-                            .padding(.horizontal, -2)
-                            .offset(y: -3)
-                            .transition(.opacity)
+            if favorites.paths.isEmpty {
+                emptyPlaceholder("No favorites yet — star a recent folder below to pin it.")
+            } else {
+                favoritesRows
+            }
+        }
+    }
+
+    private var favoritesRows: some View {
+        ForEach(favorites.paths, id: \.self) { path in
+            pathRow(
+                path,
+                leading: { favoriteDragHandle(for: path) },
+                trailing: {
+                    pairCountPill(for: path)
+                    // Star slot placeholder so the X column aligns with
+                    // Recent rows (which have a star button in this slot).
+                    Color.clear.frame(width: 20, height: 20)
+                    rowButton(systemImage: "xmark", tint: .secondary,
+                              help: "Remove from favorites") {
+                        favorites.remove(path)
                     }
                 }
-                .dropDestination(
-                    for: String.self,
-                    action: { dropped, _ in
-                        guard let source = dropped.first, source != path else { return false }
-                        favorites.move(source, before: path)
-                        favoriteDropTarget = nil
-                        return true
-                    },
-                    isTargeted: { isTargeted in
-                        withAnimation(.easeInOut(duration: 0.12)) {
-                            if isTargeted {
-                                favoriteDropTarget = path
-                            } else if favoriteDropTarget == path {
-                                favoriteDropTarget = nil
-                            }
+            )
+            // Insertion indicator is an OVERLAY, not a sibling above the
+            // row, so the row's bounds don't shift when the user hovers a
+            // drop target. A shifting bounds means the cursor can end up
+            // outside the drop destination at the moment of release and
+            // SwiftUI silently ignores the drop until you click again.
+            .overlay(alignment: .top) {
+                if favoriteDropTarget == path {
+                    Capsule()
+                        .fill(Color.accentColor)
+                        .frame(height: 3)
+                        .padding(.horizontal, -2)
+                        .offset(y: -3)
+                        .transition(.opacity)
+                }
+            }
+            .dropDestination(
+                for: String.self,
+                action: { dropped, _ in
+                    guard let source = dropped.first, source != path else { return false }
+                    favorites.move(source, before: path)
+                    favoriteDropTarget = nil
+                    return true
+                },
+                isTargeted: { isTargeted in
+                    withAnimation(.easeInOut(duration: 0.12)) {
+                        if isTargeted {
+                            favoriteDropTarget = path
+                        } else if favoriteDropTarget == path {
+                            favoriteDropTarget = nil
                         }
                     }
-                )
-            }
+                }
+            )
         }
     }
 
@@ -171,21 +179,26 @@ struct OpenStarterView: View {
     /// unmounts the whole card (mirrors Finder's sidebar). One clear
     /// placeholder sits where Recents has its star button so the
     /// pair-count pill + eject button align with the other sections.
+    @ViewBuilder
     private var cardsSection: some View {
         section(title: "Cards") {
-            ForEach(volumes.cardFolders, id: \.self) { path in
-                pathRow(
-                    path,
-                    leading: { Color.clear.frame(width: 18, height: 20) },
-                    trailing: {
-                        pairCountPill(for: path)
-                        Color.clear.frame(width: 20, height: 20)
-                        rowButton(systemImage: "eject", tint: .secondary,
-                                  help: "Eject card") {
-                            ejectVolume(forCardPath: path)
+            if volumes.cardFolders.isEmpty {
+                emptyPlaceholder("No SD or CFExpress cards mounted.")
+            } else {
+                ForEach(volumes.cardFolders, id: \.self) { path in
+                    pathRow(
+                        path,
+                        leading: { Color.clear.frame(width: 18, height: 20) },
+                        trailing: {
+                            pairCountPill(for: path)
+                            Color.clear.frame(width: 20, height: 20)
+                            rowButton(systemImage: "eject", tint: .secondary,
+                                      help: "Eject card") {
+                                ejectVolume(forCardPath: path)
+                            }
                         }
-                    }
-                )
+                    )
+                }
             }
         }
     }
@@ -217,26 +230,31 @@ struct OpenStarterView: View {
         }
     }
 
+    @ViewBuilder
     private var recentsSection: some View {
         section(title: "Recent") {
-            ForEach(visibleRecents, id: \.self) { path in
-                pathRow(
-                    path,
-                    // Empty leading slot the same width as the favorites'
-                    // drag handle so folder icons line up across sections.
-                    leading: { Color.clear.frame(width: 18, height: 20) },
-                    trailing: {
-                        pairCountPill(for: path)
-                        rowButton(systemImage: "star", tint: .secondary,
-                                  help: "Add to favorites") {
-                            favorites.add(path)
+            if visibleRecents.isEmpty {
+                emptyPlaceholder("No recent folders yet — opened folders land here.")
+            } else {
+                ForEach(visibleRecents, id: \.self) { path in
+                    pathRow(
+                        path,
+                        // Empty leading slot the same width as the favorites'
+                        // drag handle so folder icons line up across sections.
+                        leading: { Color.clear.frame(width: 18, height: 20) },
+                        trailing: {
+                            pairCountPill(for: path)
+                            rowButton(systemImage: "star", tint: .secondary,
+                                      help: "Add to favorites") {
+                                favorites.add(path)
+                            }
+                            rowButton(systemImage: "xmark", tint: .secondary,
+                                      help: "Remove from recent") {
+                                recents.remove(path)
+                            }
                         }
-                        rowButton(systemImage: "xmark", tint: .secondary,
-                                  help: "Remove from recent") {
-                            recents.remove(path)
-                        }
-                    }
-                )
+                    )
+                }
             }
         }
     }
@@ -255,6 +273,20 @@ struct OpenStarterView: View {
 
     private var allStarterPaths: [String] {
         favorites.paths + volumes.cardFolders + visibleRecents
+    }
+
+    /// Small italic note rendered inside an empty section so
+    /// the user knows the section exists and what'll show up
+    /// once it has content. Indented to line up with where
+    /// real rows' path text begins (leading 18pt slot + 6pt
+    /// spacing + ~16pt folder icon + 6pt spacing ≈ 46pt).
+    private func emptyPlaceholder(_ text: String) -> some View {
+        Text(text)
+            .font(.caption)
+            .italic()
+            .foregroundStyle(.secondary.opacity(0.7))
+            .padding(.leading, 46)
+            .padding(.vertical, 2)
     }
 
     private var refreshCountsButton: some View {
