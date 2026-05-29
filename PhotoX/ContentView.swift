@@ -806,14 +806,17 @@ struct ContentView: View {
                 state.navigate(by: 1)
             }
             return nil
-        case 115:  // Home
-            if mods.isEmpty {
+        case 115:  // Home (also fn+LeftArrow — keycode is Home,
+                   //       but `.function` is set in the modifier
+                   //       flags, so a plain `isEmpty` check
+                   //       misses it).
+            if mods.subtracting(.function).isEmpty {
                 state.firstPair()
                 return nil
             }
             return event
-        case 119:  // End
-            if mods.isEmpty {
+        case 119:  // End (also fn+RightArrow — see comment above).
+            if mods.subtracting(.function).isEmpty {
                 state.lastPair()
                 return nil
             }
