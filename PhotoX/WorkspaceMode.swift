@@ -53,6 +53,13 @@ struct WorkspaceTabConfig: Identifiable {
     let defaultFocus: WorkspaceFocus?
     /// `⌘<key>` menu shortcut.
     let shortcut: KeyEquivalent
+    /// `true` when the tab needs a loaded shoot to be
+    /// meaningful. On `state.shoot == nil`, ContentView
+    /// auto-reverts away from any `requiresShoot` tab back to
+    /// the first non-requiring tab (today: `.view`). Drives
+    /// the close-shoot fallback from a single place instead
+    /// of bespoke per-tab checks in `ModeWiring`.
+    let requiresShoot: Bool
 
     var id: WorkspaceMode { mode }
 }
@@ -62,7 +69,9 @@ let workspaceTabs: [WorkspaceTabConfig] = [
           title: "View",
           icon: "photo.stack",
           defaultFocus: .canvas,
-          shortcut: "1"),
+          shortcut: "1",
+          // View works on the empty starter screen too.
+          requiresShoot: false),
     .init(mode: .export,
           title: "Export",
           icon: "arrow.up.doc.fill",
@@ -71,7 +80,9 @@ let workspaceTabs: [WorkspaceTabConfig] = [
           // accidental capture of typed shortcuts (digits,
           // letters) the moment a user lands on the Export tab.
           defaultFocus: nil,
-          shortcut: "2"),
+          shortcut: "2",
+          // Nothing to export without a loaded shoot.
+          requiresShoot: true),
 ]
 
 /// Lookup helper — kept tight so call sites don't open-code

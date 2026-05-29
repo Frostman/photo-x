@@ -151,8 +151,15 @@ final class ExportRunner {
     ///
     /// No-op while an export is in flight — the caller is expected
     /// to cancel first (see `ContentView.closeShootGuarded`).
-    func resetState() {
-        guard !isRunning && !hasQueued else { return }
+    /// Pass `force: true` to clear regardless of in-flight state;
+    /// the close-shoot path uses this because cancellation is
+    /// asynchronous and the runner can still report `isRunning`
+    /// when we arrive here, leaving stale per-destination UI on
+    /// the next shoot.
+    func resetState(force: Bool = false) {
+        if !force {
+            guard !isRunning && !hasQueued else { return }
+        }
         perDestination.removeAll()
         perDestinationCompletedAt.removeAll()
         batchProgress = nil

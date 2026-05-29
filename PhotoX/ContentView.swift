@@ -30,6 +30,8 @@ private struct ModeWiring: ViewModifier {
     /// FocusStates, where dropping one doesn't auto-engage
     /// the other.
     var focus: FocusState<WorkspaceFocus?>.Binding
+    @Binding var showHelp: Bool
+    @Binding var showAnnotationHelp: Bool
     let shootMissing: Bool
 
     func body(content: Content) -> some View {
@@ -38,14 +40,26 @@ private struct ModeWiring: ViewModifier {
                 focus.wrappedValue = workspaceTab(for: newMode).defaultFocus
             }
             .onChange(of: shootMissing) { _, gone in
-                if gone, mode == .export { mode = .view }
+                guard gone else { return }
+                // Close any open help overlay — without a
+                // shoot there's no UI for it to point at.
+                if showHelp { showHelp = false }
+                if showAnnotationHelp { showAnnotationHelp = false }
+                // If the current tab requires a shoot, fall
+                // back to the first tab that doesn't (today
+                // only `.view`). Config-driven so new tabs
+                // automatically participate.
+                if workspaceTab(for: mode).requiresShoot,
+                   let fallback = workspaceTabs.first(where: { !$0.requiresShoot }) {
+                    mode = fallback.mode
+                }
             }
             .onReceive(NotificationCenter.default.publisher(
                 for: .photoxSwitchWorkspace)) { notif in
                 guard let target = notif.object as? WorkspaceMode else { return }
-                // Export needs a loaded shoot; menu shortcut
-                // becomes a no-op on the starter screen.
-                if target == .export, shootMissing { return }
+                // Tabs that require a shoot become no-ops on
+                // the starter screen.
+                if workspaceTab(for: target).requiresShoot, shootMissing { return }
                 mode = target
             }
     }
@@ -206,6 +220,8 @@ struct ContentView: View {
         }
         .modifier(ModeWiring(mode: $mode,
                              focus: $focus,
+                             showHelp: $showHelp,
+                             showAnnotationHelp: $showAnnotationHelp,
                              shootMissing: state.shoot == nil))
         // Keybindings are routed through the NSEvent local
         // monitor installed in `.onAppear` (see `installKeyMonitor`

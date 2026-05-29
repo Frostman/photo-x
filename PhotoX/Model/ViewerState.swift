@@ -993,10 +993,15 @@ final class ViewerState {
         showRejected = true
         showUnrated = true
         sortMode = .name
-        // Wipe export pill/sheet progress so the starter screen is
-        // clean — the runner itself guards against clearing while
-        // an export is still running.
-        ExportRunner.shared.resetState()
+        // Wipe export pill/tab progress so the starter screen is
+        // clean. `force: true` because closeShootGuarded has
+        // already confirmed cancellation with the user, but
+        // ExportRunner's cancellation is asynchronous — the
+        // runner can still report `isRunning` when we arrive
+        // here, which without `force` would leave the previous
+        // shoot's per-destination state stranded on the toolbar
+        // tab for the next shoot.
+        ExportRunner.shared.resetState(force: true)
     }
 
     /// Shared teardown for closeShoot + loadShoot. Cancels all trackable
