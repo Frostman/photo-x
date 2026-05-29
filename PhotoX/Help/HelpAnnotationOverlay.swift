@@ -132,7 +132,7 @@ private let helpAnnotations: [HelpAnnotation] = [
     .init(id: .openFolderButton, title: "Open Folder",
           message: "Pick a folder of ARW + HIF/JPG pairs (or standalone HIF/JPG files) to load as a shoot. You can also drag a folder onto the window from Finder.",
           shortcuts: ["⌘O"],
-          labelEdge: .trailing),
+          labelEdge: .top),
 
     .init(id: .openFavorites, title: "Favorites",
           message: "Folders you've starred. Click a row to reopen — PhotoX restores the last photo you were on. Drag the grip to reorder; the × removes from favorites.",
