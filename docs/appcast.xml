@@ -592,6 +592,18 @@
         type="application/octet-stream"
         sparkle:edSignature="+WdzA8pCm3/QNLo/80ZLlyER3xrVjIgBU0EYmC262DYvSD9W/SsZ25fcgVdGhgR0LLVNRTzDXm0U+RSUx8XyCw==" length="11480783" />
     </item>
+    <item>
+      <title>v0.333.0-138c7233e</title>
+      <pubDate>Fri, 29 May 2026 16:17:56 -0700</pubDate>
+      <sparkle:version>333</sparkle:version>
+      <sparkle:shortVersionString>0.333.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[<ul><li>release.sh: rebadge the card-watcher helper with Developer ID</li><li>Settings: show current on-disk size next to "Clear all caches"</li><li>Settings: drop stale "skips if PhotoX is frontmost" note</li><li>Help overlays: refresh shortcut chips + sample annotations</li><li>Help overlay: store per-tab lastSeen version per-bundle</li><li>ContentView: fix fn+arrow Home/End jump in the key monitor</li><li>Card watcher: skip the recovery-path kickstart that stalls 20s</li><li>Card watcher: post a notification per DCIM shoot folder</li><li>Justfile: split fake-card sample across two DCIM shoot folders</li><li>Add background card-watcher helper</li><li>Justfile: add fake-card target to toggle a sample-backed DMG mount</li><li>App: disable AppKit window tabbing (single-window today)</li><li>Help: auto-show the annotated overlay on per-tab version bumps</li><li>Open tab: always show Favorites / Cards / Recents with placeholders</li><li>Help: centre the Open Folder callout above the button</li><li>Open tab: skip reload when clicking the currently-loaded shoot</li><li>Workspace tabs: promote starter screen to an Open tab (⌘1/⌘2/⌘3)</li><li>ExportRunner: deferred re-clear catches in-flight writes after force reset</li><li>Close Folder: tighten cleanup for both View and Export tabs</li><li>Export tab: open with no field focused; Tab focuses project name</li><li>Workspace tabs: declarative registry, NSEvent-driven keybindings</li><li>Export pane: centre at 800pt and hang side callouts in the gutter</li><li>Help: clamp brackets to the overlay bounds</li><li>Help: render brackets and callouts in two passes</li><li>Help: annotate the first destination card</li><li>Help: toolbar ? button reflects overlay state as an on/off toggle</li><li>Help: annotate the Export-tab pane</li><li>Workspace tabs: replace modal Export sheet with inline View/Export switcher</li><li>Help: merge view-controls callout and note burst brackets on the filmstrip</li><li>Help: annotate the status-bar filter toggles</li><li>Help: annotated overlay with brackets + inline-shortcut callouts</li><li>README: refresh stale shortcuts, indexer story, and tech stack</li></ul>]]></description>
+      <enclosure
+        url="https://github.com/Frostman/photo-x/releases/download/v0.333.0/PhotoX-v0.333.0-138c7233e.dmg"
+        type="application/octet-stream"
+        sparkle:edSignature="ImgFpEYTvIfYUDZdqAtvxVsHJfBTVTmG99LdaBrfkCmksXgVhvBs9hXgoidMJ3czllSOEhCAtjoVaqS7XNffAQ==" length="12362020" />
+    </item>
     <!-- scripts/release.sh splices new <item> entries here, just before </channel>. -->
   </channel>
 </rss>
