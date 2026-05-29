@@ -199,6 +199,13 @@ struct ExportPaneView: View {
                                 }
                             }
                         )
+                        // Only the first card publishes the help
+                        // anchor — one callout per kind of card is
+                        // enough, and we want it absent entirely
+                        // when there are no destinations.
+                        .conditional(dest.id == settings.destinations.first?.id) { row in
+                            row.helpAnchor(.exportDestinationCard)
+                        }
                     }
                 }
             }

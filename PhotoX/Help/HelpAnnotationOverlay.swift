@@ -116,6 +116,11 @@ private let helpAnnotations: [HelpAnnotation] = [
           message: "Kicks off the export to every destination at once (Return). Aggregate progress + ETA appear in the footer while running, and on the Export tab in the toolbar so you can switch back to the viewer without losing sight of it.",
           shortcuts: ["↩ run"],
           labelEdge: .top),
+
+    .init(id: .exportDestinationCard, title: "Destination card",
+          message: "One card per destination. Per-card controls: click the path to copy it, Run / Cancel for just this destination, star + reject + unrated + file-type filters (further narrow what the global selection sends here), overwrite policy (skip / overwrite / overwrite-if-different), and 'remove orphans' (destructive — deletes files at this destination whose stem isn't in the filtered selection).",
+          shortcuts: [],
+          labelEdge: .bottom),
 ]
 
 /// The annotated help layer. Sits inside `ContentView`'s

@@ -37,6 +37,12 @@ enum HelpAnchorID: String, CaseIterable, Hashable, Sendable {
     /// running), Cancel all, and the Export all button. Only
     /// published while `mode == .export`.
     case exportRun
+    /// First destination card in the list — anchors the per-card
+    /// callout that describes the controls a single destination
+    /// exposes (filters, overwrite policy, remove orphans, etc.).
+    /// Only published when at least one destination exists; the
+    /// annotation is silently absent on an empty list.
+    case exportDestinationCard
 }
 
 /// Shared store the annotated help overlay reads from. Frames
