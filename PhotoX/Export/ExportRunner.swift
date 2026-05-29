@@ -100,6 +100,17 @@ final class ExportRunner {
     /// the start of the next batch.
     private(set) var perDestinationCompletedAt: [UUID: Date] = [:]
 
+    /// Monotonic generation counter bumped on every `resetState` and on
+    /// every `startAll` / `startOne`. The force-reset path uses it to
+    /// schedule a *deferred* second clear: after `waitForCompletion()`,
+    /// any in-flight task's late writes (cancellation outcome, final
+    /// `lastBatchOutcome`, etc.) have landed — at that point we re-clear,
+    /// but only if the epoch is still ours (no new export has started in
+    /// the meantime). Without this, cancel-and-close-shoot leaves stale
+    /// "Export: cancelled Nm ago" text on the toolbar tab for the next
+    /// shoot.
+    private var stateEpoch: Int = 0
+
     struct BatchProgress: Sendable, Hashable {
         var filesDone: Int        // copied + skipped across all dests
         var filesTotal: Int
@@ -160,6 +171,26 @@ final class ExportRunner {
         if !force {
             guard !isRunning && !hasQueued else { return }
         }
+        clearAllState()
+        if force {
+            // Bump the epoch and schedule a deferred re-clear once
+            // all currently-running tasks have wound down — they
+            // may still write back cancellation / final-outcome
+            // state after this synchronous clear. The deferred
+            // clear is abandoned if a new export starts before it
+            // fires (startAll / startOne also bump the epoch).
+            stateEpoch &+= 1
+            let myEpoch = stateEpoch
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                await self.waitForCompletion()
+                guard self.stateEpoch == myEpoch else { return }
+                self.clearAllState()
+            }
+        }
+    }
+
+    private func clearAllState() {
         perDestination.removeAll()
         perDestinationCompletedAt.removeAll()
         batchProgress = nil
@@ -239,6 +270,10 @@ final class ExportRunner {
         notifications: ExportNotificationsAdapter = .live
     ) {
         guard !destinations.isEmpty else { return }
+        // New session — bump epoch so any pending deferred reset
+        // (from a prior force-reset awaiting waitForCompletion)
+        // is abandoned and doesn't clear our fresh state.
+        stateEpoch &+= 1
         // Clear stale post-completion state for these destinations + the
         // last batch — a new run shouldn't display "5m ago" alongside its
         // own in-flight progress.
@@ -340,6 +375,9 @@ final class ExportRunner {
         destination: ExportSettings.Destination,
         notifications: ExportNotificationsAdapter = .live
     ) {
+        // See note in startAll: bump epoch so any pending
+        // deferred reset abandons.
+        stateEpoch &+= 1
         lastBatchOutcome = nil
         lastBatchCompletedAt = nil
         perDestinationCompletedAt.removeValue(forKey: destinationID)
