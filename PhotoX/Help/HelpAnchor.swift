@@ -21,6 +21,9 @@ enum HelpAnchorID: String, CaseIterable, Hashable, Sendable {
     /// stack on top of each other in a narrow vertical
     /// gutter above the status bar.
     case viewControls
+    /// Segmented View | Export picker in the toolbar.
+    /// Only present once a shoot is loaded.
+    case workspaceMode
 }
 
 /// Shared store the annotated help overlay reads from. Frames

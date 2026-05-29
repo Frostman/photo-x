@@ -130,6 +130,24 @@ struct PhotoXApp: App {
                     viewerState.setViewportToFit()
                 }
                 .keyboardShortcut("0", modifiers: .command)
+
+                Divider()
+
+                // Workspace switch — paired with the segmented picker
+                // in the toolbar. Posting the notification keeps focus
+                // intact (we don't want to wrest the project-name
+                // TextField's keystrokes while a user is typing).
+                Button("Switch to Viewer") {
+                    NotificationCenter.default.post(
+                        name: .photoxSwitchToViewer, object: nil)
+                }
+                .keyboardShortcut("1", modifiers: .command)
+
+                Button("Switch to Export") {
+                    NotificationCenter.default.post(
+                        name: .photoxSwitchToExport, object: nil)
+                }
+                .keyboardShortcut("2", modifiers: .command)
             }
             // Help → "Keyboard Shortcuts" — pulls up the flat
             // reference card (the old HelpOverlay). Annotated
@@ -242,6 +260,13 @@ extension Notification.Name {
     /// and can't reach @State in ContentView directly, so the
     /// notification is the bridge.
     static let photoxShowKeyboardShortcuts = Notification.Name("dev.frostman.PhotoX.showKeyboardShortcuts")
+    /// Posted by the View → "Switch to Viewer/Export" menu items
+    /// (⌘1 / ⌘2). ContentView observes and flips its
+    /// `WorkspaceMode`. Going through the App-level menu (instead
+    /// of an `.onKeyPress` on ContentView) means the shortcuts
+    /// still work when focus is on the export pane's TextField.
+    static let photoxSwitchToViewer = Notification.Name("dev.frostman.PhotoX.switchToViewer")
+    static let photoxSwitchToExport = Notification.Name("dev.frostman.PhotoX.switchToExport")
 }
 
 /// Edit → Undo / Redo menu items, bound to ViewerState.undoManager.

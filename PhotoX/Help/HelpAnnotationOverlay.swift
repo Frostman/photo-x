@@ -94,6 +94,11 @@ private let helpAnnotations: [HelpAnnotation] = [
           message: "Sort order (filename / rating), collapse bursts (one frame per burst in the filmstrip), and per-rating filters (show/hide stars, reject, unrated). The count chips on the left always reflect the full shoot — filters only affect what's shown.",
           shortcuts: [],
           labelEdge: .top),
+
+    .init(id: .workspaceMode, title: "Workspace",
+          message: "Switch between viewing the shoot and configuring the export. Switching is free — your export configuration and any in-progress run are preserved.",
+          shortcuts: ["⌘1 View", "⌘2 Export"],
+          labelEdge: .bottom),
 ]
 
 /// The annotated help layer. Sits inside `ContentView`'s

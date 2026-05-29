@@ -1,19 +1,23 @@
 import SwiftUI
 import AppKit
 
-/// Modal popup that configures and triggers exports. Dismissable while a
-/// run is in progress; the toolbar pill keeps reporting status.
-struct ExportSheet: View {
+/// Inline pane that configures and triggers exports. Rendered as the
+/// `.export` branch of `ContentView`'s `WorkspaceMode` switch — the
+/// segmented toolbar picker (or ⌘1 / ⌘2) flips between this and the
+/// viewer. Exits leave the underlying singletons untouched, so any
+/// running batch keeps going and the toolbar pill keeps reporting.
+struct ExportPaneView: View {
     @Bindable var state: ViewerState
-    @Binding var isPresented: Bool
     @State private var settings = ExportSettings.shared
     @State private var runner = ExportRunner.shared
     @State private var dropTarget: UUID? = nil
 
-    /// Explicit focus on the project-name field. Without this the sheet
-    /// inherits focus from the (now-unfocused) canvas and the TextField
-    /// silently doesn't receive key input — typing 't' would fall through
-    /// to ContentView's filmstrip-toggle shortcut.
+    /// Explicit focus on the project-name field. ContentView puts
+    /// `.id(mode)` on this view, so entering Export mode re-mounts the
+    /// pane and `.onAppear` fires fresh — that's when we steal focus.
+    /// Without this the field silently doesn't receive key input
+    /// (typing 't' would fall through to the filmstrip-toggle shortcut
+    /// were the canvas chain not also detached).
     @FocusState private var projectNameFocused: Bool
 
     private var projectNameBinding: Binding<String> {
@@ -35,7 +39,7 @@ struct ExportSheet: View {
             Divider()
             footer
         }
-        .frame(minWidth: 720, idealWidth: 760, minHeight: 480, idealHeight: 620)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear { projectNameFocused = true }
     }
 
@@ -58,14 +62,6 @@ struct ExportSheet: View {
                 }
             }
             Spacer()
-            Button {
-                isPresented = false
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.title3).foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-            .help("Close (export continues in background if running)")
         }
         .padding(16)
     }
@@ -96,8 +92,6 @@ struct ExportSheet: View {
             if runner.isRunning {
                 Button("Cancel all") { runner.cancelAll() }
             }
-            Button("Close") { isPresented = false }
-                .keyboardShortcut(.cancelAction)
             Button {
                 runExportAll()
             } label: {

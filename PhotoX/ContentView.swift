@@ -16,6 +16,36 @@ extension View {
     }
 }
 
+/// Bundles the four reactions that keep `WorkspaceMode` consistent
+/// — focus follow, auto-revert when the shoot closes, and the two
+/// notification observers wired to the View → Switch to … menu
+/// items. Extracted because folding them inline pushed the
+/// ContentView body chain past Swift's expression-type-check
+/// budget.
+private struct ModeWiring: ViewModifier {
+    @Binding var mode: WorkspaceMode
+    var canvasFocused: FocusState<Bool>.Binding
+    let shootMissing: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: mode) { _, newMode in
+                canvasFocused.wrappedValue = (newMode == .view)
+            }
+            .onChange(of: shootMissing) { _, gone in
+                if gone, mode == .export { mode = .view }
+            }
+            .onReceive(NotificationCenter.default.publisher(
+                for: .photoxSwitchToViewer)) { _ in
+                mode = .view
+            }
+            .onReceive(NotificationCenter.default.publisher(
+                for: .photoxSwitchToExport)) { _ in
+                if !shootMissing { mode = .export }
+            }
+    }
+}
+
 struct ContentView: View {
     @Bindable var state: ViewerState
     /// Optional — nil under `-photoxDisableSparkle` (DEBUG dev
@@ -46,7 +76,12 @@ struct ContentView: View {
     @State private var volumes = VolumeWatcher()
     @State private var folderStats = FolderStats()
     @State private var favoriteDropTarget: String? = nil
-    @State private var showExportSheet: Bool = false
+    /// Drives the segmented toolbar picker. `.view` shows the
+    /// canvas + sidebar + filmstrip + status bar; `.export` swaps
+    /// the content area for `ExportPaneView`. Singletons
+    /// (ExportSettings.shared, ExportRunner.shared) preserve
+    /// the export's state across switches, so toggling is free.
+    @State private var mode: WorkspaceMode = .view
     @State private var exportRunner = ExportRunner.shared
     @Environment(\.openSettings) private var openSettings
 
@@ -56,27 +91,39 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            HStack(spacing: 0) {
-                VStack(spacing: 0) {
-                    canvas
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .helpAnchor(.canvas)
-                    // Sidebar/filmstrip/statusbar are gated on having a shoot
-                    // loaded — when the window is in the empty state, there's
-                    // nothing for them to show, so we collapse to the full
-                    // canvas. Once a folder is loaded they follow defaults.
-                    if state.shoot != nil {
-                        StatusBarView(state: state)
+            switch mode {
+            case .view:
+                HStack(spacing: 0) {
+                    VStack(spacing: 0) {
+                        canvas
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .helpAnchor(.canvas)
+                        // Sidebar/filmstrip/statusbar are gated on having a shoot
+                        // loaded — when the window is in the empty state, there's
+                        // nothing for them to show, so we collapse to the full
+                        // canvas. Once a folder is loaded they follow defaults.
+                        if state.shoot != nil {
+                            StatusBarView(state: state)
+                        }
+                        if state.filmstripVisible && state.shoot != nil {
+                            FilmstripView(state: state)
+                                .transition(.move(edge: .bottom))
+                        }
                     }
-                    if state.filmstripVisible && state.shoot != nil {
-                        FilmstripView(state: state)
-                            .transition(.move(edge: .bottom))
+                    if state.sidebarVisible && state.shoot != nil {
+                        SidebarView(state: state)
+                            .transition(.move(edge: .trailing))
                     }
                 }
-                if state.sidebarVisible && state.shoot != nil {
-                    SidebarView(state: state)
-                        .transition(.move(edge: .trailing))
-                }
+            case .export:
+                // `.id(mode)` so re-entering the pane re-mounts it,
+                // which fires the pane's `.onAppear` and re-steals
+                // focus into the project-name TextField. The pane's
+                // own state lives in singletons (ExportSettings.shared,
+                // ExportRunner.shared) so re-instantiating the view
+                // struct loses nothing.
+                ExportPaneView(state: state)
+                    .id(mode)
             }
 
             if showHelp {
@@ -118,32 +165,29 @@ struct ContentView: View {
             }
         }
         .frame(minWidth: 900, minHeight: 600)
-        .sheet(isPresented: $showExportSheet) {
-            ExportSheet(state: state, isPresented: $showExportSheet)
-        }
-        // When the export sheet is up, make ContentView completely
+        // When the export pane is up, make ContentView completely
         // non-focusable so all key events are routed exclusively to the
-        // sheet's controls. Just toggling canvasFocused to false isn't
+        // pane's controls. Just toggling canvasFocused to false isn't
         // enough — SwiftUI still keeps a focusable ContentView in the
         // responder chain, and its .onKeyPress modifiers intercept shortcut
         // keys before the TextField sees them.
-        .focusable(!showExportSheet)
+        .focusable(mode == .view)
         .focusEffectDisabled()
         .focused($canvasFocused)
         .onAppear { canvasFocused = true }
-        .onChange(of: showExportSheet) { _, isShowing in
-            canvasFocused = !isShowing
-        }
+        .modifier(ModeWiring(mode: $mode,
+                             canvasFocused: $canvasFocused,
+                             shootMissing: state.shoot == nil))
         // Jump overlay focus handoff is fully handled inside
         // JumpToView.dismissCleanly via a synthetic mouse click on
         // the canvas — every SwiftUI @FocusState / AppKit
         // makeFirstResponder path we tried failed to restore arrow
         // nav after the overlay's TextField was destroyed. See the
         // comment block at JumpToView.simulateCanvasClick for why.
-        // Detach the whole shortcut chain while the sheet is up — otherwise
-        // .onKeyPress modifiers intercept everything before sheet controls
+        // Detach the whole shortcut chain while in export mode — otherwise
+        // .onKeyPress modifiers intercept everything before pane controls
         // (TextField, etc.) get a chance.
-        .conditional(!showExportSheet && !showJumpSheet) { view in
+        .conditional(mode == .view && !showJumpSheet) { view in
             // Canvas-action shortcuts only fire when a shoot is loaded.
             // Returning .ignored on the starter screen lets the OS
             // process the keystroke normally (beep, no side effects)
@@ -366,14 +410,17 @@ struct ContentView: View {
             }
 
             // Pill cluster: failed-writes (red, only when non-empty)
-            // sits LEFT of the export pill so its red colour catches
-            // the eye first. Grouped into one ToolbarItemGroup
+            // sits LEFT of the workspace tab picker so its red colour
+            // catches the eye first. Grouped into one ToolbarItemGroup
             // because the @ToolbarContentBuilder body caps at ~10
-            // top-level items and we're at the limit.
+            // top-level items and we're at the limit. The tab picker
+            // is both the View/Export switch AND the live export-
+            // progress display, so a separate standalone export pill
+            // is no longer needed.
             ToolbarItemGroup(placement: .primaryAction) {
                 FailedWritesToolbarPill(state: state)
                 if state.shoot != nil || exportRunner.isRunning {
-                    ExportToolbarPill(state: state, showSheet: $showExportSheet)
+                    WorkspaceTabPicker(state: state, mode: $mode)
                 }
             }
 
