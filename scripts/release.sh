@@ -181,9 +181,22 @@ while IFS= read -r BUNDLE; do
     --options runtime \
     --timestamp \
     "$BUNDLE"
-done < <(find "$APP/Contents/Frameworks" \
-  \( -name '*.xpc' -o -name '*.app' -o -name '*.framework' \) \
-  -type d -depth 2>/dev/null)
+done < <(
+  # Sparkle.framework + its XPC services + Updater.app live under
+  # Frameworks. The background card-watcher helper
+  # (PhotoXCardWatcher.app) lives under Contents/Library/LoginItems —
+  # also a nested .app whose ad-hoc build-time signature has to be
+  # rebadged with our Developer ID before the outer-app seal pass,
+  # otherwise the outer codesign step fails with
+  # "code has no resources but signature indicates they must be
+  # present" pointing at the helper subcomponent.
+  SIGN_ROOTS=("$APP/Contents/Frameworks")
+  [ -d "$APP/Contents/Library/LoginItems" ] \
+    && SIGN_ROOTS+=("$APP/Contents/Library/LoginItems")
+  find "${SIGN_ROOTS[@]}" \
+    \( -name '*.xpc' -o -name '*.app' -o -name '*.framework' \) \
+    -type d -depth 2>/dev/null
+)
 
 # Seal the outer app last, with the (now-empty Release) entitlements
 # applied.
