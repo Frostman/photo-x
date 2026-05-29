@@ -16,32 +16,37 @@ extension View {
     }
 }
 
-/// Bundles the four reactions that keep `WorkspaceMode` consistent
-/// — focus follow, auto-revert when the shoot closes, and the two
-/// notification observers wired to the View → Switch to … menu
-/// items. Extracted because folding them inline pushed the
-/// ContentView body chain past Swift's expression-type-check
-/// budget.
+/// Bundles the reactions that keep `WorkspaceMode` consistent:
+/// atomic focus transition on tab change, auto-revert when the
+/// shoot closes, and the single parameterised notification
+/// observer wired to the View menu's tab shortcuts. Extracted
+/// because folding the modifiers inline pushed ContentView's
+/// body chain past Swift's expression-type-check budget.
 private struct ModeWiring: ViewModifier {
     @Binding var mode: WorkspaceMode
-    var canvasFocused: FocusState<Bool>.Binding
+    /// Workspace-wide shared focus. Setting it to a new value
+    /// is a single atomic transition that SwiftUI propagates
+    /// to AppKit's responder chain — unlike two independent
+    /// FocusStates, where dropping one doesn't auto-engage
+    /// the other.
+    var focus: FocusState<WorkspaceFocus?>.Binding
     let shootMissing: Bool
 
     func body(content: Content) -> some View {
         content
             .onChange(of: mode) { _, newMode in
-                canvasFocused.wrappedValue = (newMode == .view)
+                focus.wrappedValue = workspaceTab(for: newMode).defaultFocus
             }
             .onChange(of: shootMissing) { _, gone in
                 if gone, mode == .export { mode = .view }
             }
             .onReceive(NotificationCenter.default.publisher(
-                for: .photoxSwitchToViewer)) { _ in
-                mode = .view
-            }
-            .onReceive(NotificationCenter.default.publisher(
-                for: .photoxSwitchToExport)) { _ in
-                if !shootMissing { mode = .export }
+                for: .photoxSwitchWorkspace)) { notif in
+                guard let target = notif.object as? WorkspaceMode else { return }
+                // Export needs a loaded shoot; menu shortcut
+                // becomes a no-op on the starter screen.
+                if target == .export, shootMissing { return }
+                mode = target
             }
     }
 }
@@ -53,7 +58,24 @@ struct ContentView: View {
     /// regardless of any update state. Read-only here (we never
     /// need a SwiftUI binding into it), so no @Bindable.
     let updater: UpdaterController?
-    @FocusState private var canvasFocused: Bool
+    /// Single shared focus state for every focusable target
+    /// across the workspace. Each tab's focusable element
+    /// (canvas container, export TextField, future tabs') binds
+    /// via `.focused($focus, equals: .someCase)`. Setting
+    /// `focus = .other` is the atomic transition SwiftUI needs
+    /// to keep AppKit's responder chain in sync across tab
+    /// switches. See `WorkspaceFocus` for the case list.
+    @FocusState private var focus: WorkspaceFocus?
+    /// AppKit-level keyboard monitor (installed in `.onAppear`).
+    /// All app-defined keybindings flow through `handleKeyDown`
+    /// regardless of SwiftUI focus state — `.onKeyPress` was
+    /// unreliable across workspace mode switches (focusable
+    /// container loses its AppKit responder claim after the
+    /// export pane's TextField releases SwiftUI focus, leaving
+    /// arrow nav dead until the user clicks). NSEvent monitors
+    /// sit *above* the responder chain so they fire even when
+    /// nothing's focused.
+    @State private var keyMonitor: Any?
     /// Flat keyboard-shortcuts reference card (`HelpOverlay`).
     /// Triggered from menu bar's Help → Keyboard Shortcuts
     /// (⌘?). NOT bound to `?` anymore — that key now opens
@@ -116,14 +138,14 @@ struct ContentView: View {
                     }
                 }
             case .export:
-                // `.id(mode)` so re-entering the pane re-mounts it,
-                // which fires the pane's `.onAppear` and re-steals
-                // focus into the project-name TextField. The pane's
-                // own state lives in singletons (ExportSettings.shared,
-                // ExportRunner.shared) so re-instantiating the view
-                // struct loses nothing.
-                ExportPaneView(state: state)
-                    .id(mode)
+                // The pane's own state lives in singletons
+                // (ExportSettings.shared, ExportRunner.shared)
+                // so re-mount loses nothing. Focus is driven
+                // by the shared `$focus` binding via
+                // ModeWiring's mode-change handler, not via
+                // an `onAppear` trick — that's why the .id(mode)
+                // remount workaround is no longer needed.
+                ExportPaneView(state: state, focus: $focus)
             }
 
             if showHelp {
@@ -165,179 +187,33 @@ struct ContentView: View {
             }
         }
         .frame(minWidth: 900, minHeight: 600)
-        // When the export pane is up, make ContentView completely
-        // non-focusable so all key events are routed exclusively to the
-        // pane's controls. Just toggling canvasFocused to false isn't
-        // enough — SwiftUI still keeps a focusable ContentView in the
-        // responder chain, and its .onKeyPress modifiers intercept shortcut
-        // keys before the TextField sees them.
-        .focusable(mode == .view)
+        // Always focusable — the focusable container stays in
+        // the SwiftUI focus chain across mode transitions, so
+        // AppKit's responder chain isn't disrupted on Export →
+        // View. The `.conditional(mode == .view && …)` gating
+        // below is what actually prevents the onKeyPress chain
+        // from intercepting keys destined for the export
+        // TextField (gated by mode, not by focusability).
+        .focusable(true)
         .focusEffectDisabled()
-        .focused($canvasFocused)
-        .onAppear { canvasFocused = true }
-        .modifier(ModeWiring(mode: $mode,
-                             canvasFocused: $canvasFocused,
-                             shootMissing: state.shoot == nil))
-        // Jump overlay focus handoff is fully handled inside
-        // JumpToView.dismissCleanly via a synthetic mouse click on
-        // the canvas — every SwiftUI @FocusState / AppKit
-        // makeFirstResponder path we tried failed to restore arrow
-        // nav after the overlay's TextField was destroyed. See the
-        // comment block at JumpToView.simulateCanvasClick for why.
-        // Detach the whole shortcut chain while in export mode — otherwise
-        // .onKeyPress modifiers intercept everything before pane controls
-        // (TextField, etc.) get a chance.
-        .conditional(mode == .view && !showJumpSheet) { view in
-            // Canvas-action shortcuts only fire when a shoot is loaded.
-            // Returning .ignored on the starter screen lets the OS
-            // process the keystroke normally (beep, no side effects)
-            // instead of toggling features against nil state OR
-            // surfacing modals like the jump dialog out of context.
-            // `?` (help) and Esc (dismiss help) stay always-available.
-            let hasShoot = state.shoot != nil
-            return view
-                // Z is intentionally NOT bound — it would intercept Cmd+Z
-                // (SwiftUI's .onKeyPress matches the typed character
-                // regardless of modifiers) and break the system Undo
-                // menu item. HIF/JPG ↔ RAW moved to X; decoder cycle
-                // moved to Shift+X. Fit-to-window is still on ⌘0.
-                .onKeyPress(keys: ["x"]) { _ in
-                    guard hasShoot else { return .ignored }
-                    state.toggleRequestedVariant()
-                    return .handled
-                }
-                .onKeyPress(keys: ["X"]) { _ in
-                    guard hasShoot else { return .ignored }
-                    state.cycleDecoder()
-                    return .handled
-                }
-                .onKeyPress(keys: ["c", "C"]) { _ in
-                    guard hasShoot else { return .ignored }
-                    state.toggleClipping()
-                    return .handled
-                }
-                .onKeyPress(keys: ["f", "F"]) { _ in
-                    guard hasShoot else { return .ignored }
-                    state.togglePeaking()
-                    return .handled
-                }
-                .onKeyPress(keys: ["a", "A"]) { _ in
-                    guard hasShoot else { return .ignored }
-                    state.toggleAFOverlay()
-                    return .handled
-                }
-                .onKeyPress(keys: ["b", "B"]) { _ in
-                    guard hasShoot else { return .ignored }
-                    withAnimation(.easeInOut(duration: 0.15)) {
-                        state.toggleSidebar()
-                    }
-                    return .handled
-                }
-                .onKeyPress(keys: ["t", "T"]) { _ in
-                    guard hasShoot else { return .ignored }
-                    withAnimation(.easeInOut(duration: 0.15)) {
-                        state.toggleFilmstrip()
-                    }
-                    return .handled
-                }
-                // Scoring. SwiftUI's onKeyPress matches against the TYPED character on
-                // macOS, so Shift+1 arrives as "!" (not "1") — we register both forms.
-                .onKeyPress(keys: ["1"]) { _ in guard hasShoot else { return .ignored }; state.toggleRating(1); return .handled }
-                .onKeyPress(keys: ["2"]) { _ in guard hasShoot else { return .ignored }; state.toggleRating(2); return .handled }
-                .onKeyPress(keys: ["3"]) { _ in guard hasShoot else { return .ignored }; state.toggleRating(3); return .handled }
-                .onKeyPress(keys: ["4"]) { _ in guard hasShoot else { return .ignored }; state.toggleRating(4); return .handled }
-                .onKeyPress(keys: ["5"]) { _ in guard hasShoot else { return .ignored }; state.toggleRating(5); return .handled }
-                .onKeyPress(keys: ["!"]) { _ in guard hasShoot else { return .ignored }; state.toggleLabel("Red"); return .handled }
-                .onKeyPress(keys: ["@"]) { _ in guard hasShoot else { return .ignored }; state.toggleLabel("Yellow"); return .handled }
-                .onKeyPress(keys: ["#"]) { _ in guard hasShoot else { return .ignored }; state.toggleLabel("Green"); return .handled }
-                .onKeyPress(keys: ["$"]) { _ in guard hasShoot else { return .ignored }; state.toggleLabel("Blue"); return .handled }
-                .onKeyPress(keys: ["%"]) { _ in guard hasShoot else { return .ignored }; state.toggleLabel("Purple"); return .handled }
-                .onKeyPress(keys: ["0"]) { _ in guard hasShoot else { return .ignored }; state.setRating(nil); return .handled }
-                .onKeyPress(keys: ["r", "R"]) { _ in guard hasShoot else { return .ignored }; state.toggleReject(); return .handled }
-                .onKeyPress(.leftArrow, phases: [.down, .repeat]) { press in
-                    guard hasShoot else { return .ignored }
-                    PerfTracker.begin("← key")
-                    if press.modifiers.contains(.command) {
-                        state.navigateByBurst(direction: -1)
-                    } else if press.modifiers.contains(.option) {
-                        // When collapse-bursts is on, ⌥arrow steps by
-                        // 10 collapsed entries (one burst = one
-                        // entry) so the filmstrip jumps a uniform
-                        // 10 thumbs regardless of internal burst size.
-                        if state.collapseBurstsActive {
-                            state.navigate(byEntries: -10)
-                        } else {
-                            state.navigate(by: -10)
-                        }
-                    } else {
-                        state.navigate(by: -1)
-                    }
-                    return .handled
-                }
-                .onKeyPress(.rightArrow, phases: [.down, .repeat]) { press in
-                    guard hasShoot else { return .ignored }
-                    PerfTracker.begin("→ key")
-                    if press.modifiers.contains(.command) {
-                        state.navigateByBurst(direction: 1)
-                    } else if press.modifiers.contains(.option) {
-                        if state.collapseBurstsActive {
-                            state.navigate(byEntries: 10)
-                        } else {
-                            state.navigate(by: 10)
-                        }
-                    } else {
-                        state.navigate(by: 1)
-                    }
-                    return .handled
-                }
-                .onKeyPress(.home) {
-                    guard hasShoot else { return .ignored }
-                    state.firstPair()
-                    return .handled
-                }
-                .onKeyPress(.end) {
-                    guard hasShoot else { return .ignored }
-                    state.lastPair()
-                    return .handled
-                }
-                .onKeyPress(KeyEquivalent("[")) {
-                    guard hasShoot else { return .ignored }
-                    state.previousUnrated()
-                    return .handled
-                }
-                .onKeyPress(KeyEquivalent("]")) {
-                    guard hasShoot else { return .ignored }
-                    state.nextUnrated()
-                    return .handled
-                }
-                .onKeyPress(keys: ["g", "G"]) { _ in
-                    guard hasShoot else { return .ignored }
-                    let raw = AppDefaults.shared.string(forKey: SettingsKey.gRejectScope)
-                        ?? SettingsKey.Defaults.gRejectScope
-                    let scope = GRejectScope(rawValue: raw) ?? .unrated
-                    state.rejectBurstSiblings(scope: scope)
-                    return .handled
-                }
-                .onKeyPress(keys: ["j", "J"]) { _ in
-                    guard hasShoot else { return .ignored }
-                    showJumpSheet = true
-                    return .handled
-                }
-                .onKeyPress(KeyEquivalent("?")) {
-                    withAnimation(.easeInOut(duration: 0.12)) {
-                        showAnnotationHelp.toggle()
-                    }
-                    return .handled
-                }
-                .onKeyPress(.escape) {
-                    guard showHelp || showAnnotationHelp else { return .ignored }
-                    withAnimation(.easeInOut(duration: 0.12)) {
-                        showHelp = false
-                        showAnnotationHelp = false
-                    }
-                    return .handled
-                }
+        .focused($focus, equals: .canvas)
+        .onAppear {
+            focus = .canvas
+            installKeyMonitor()
         }
+        .onDisappear {
+            removeKeyMonitor()
+        }
+        .modifier(ModeWiring(mode: $mode,
+                             focus: $focus,
+                             shootMissing: state.shoot == nil))
+        // Keybindings are routed through the NSEvent local
+        // monitor installed in `.onAppear` (see `installKeyMonitor`
+        // + `handleKeyDown` below). SwiftUI's `.onKeyPress`
+        // chain was too fragile across workspace mode switches —
+        // the focusable container reliably failed to re-engage
+        // AppKit's responder chain after the export pane's
+        // TextField released SwiftUI focus.
         .dropDestination(for: URL.self) { urls, _ in
             handleDrop(urls)
         }
@@ -1121,6 +997,188 @@ struct ContentView: View {
         Task {
             try? await Task.sleep(for: .milliseconds(800))
             await MainActor.run { copiedFlash = false }
+        }
+    }
+
+    // MARK: Keyboard monitor
+
+    /// Installs an `NSEvent` local monitor that handles every
+    /// app-defined keybinding regardless of SwiftUI focus state.
+    /// This bypasses the cross-mode focus restoration bug —
+    /// `.onKeyPress` only fires when SwiftUI's focusable
+    /// container is the active responder, which it intermittently
+    /// fails to be after the export pane's TextField releases
+    /// focus.
+    ///
+    /// Returns `nil` from the closure to consume the event,
+    /// `event` to let AppKit continue its normal dispatch
+    /// (menu shortcuts, TextField input, etc.).
+    private func installKeyMonitor() {
+        guard keyMonitor == nil else { return }
+        // `@MainActor` on the closure puts the NSEvent in
+        // MainActor scope from the moment AppKit delivers it,
+        // so handleKeyDown's MainActor-isolated state access
+        // doesn't need a `MainActor.assumeIsolated` bridge
+        // (which would warn under Swift 6 strict concurrency
+        // because NSEvent isn't Sendable).
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { @MainActor event in
+            handleKeyDown(event)
+        }
+    }
+
+    private func removeKeyMonitor() {
+        if let m = keyMonitor {
+            NSEvent.removeMonitor(m)
+            keyMonitor = nil
+        }
+    }
+
+    /// Single-point dispatch for every app keybinding. Decides
+    /// based on `event` + current `mode` + modal flags + focus
+    /// (TextField input must pass through). Mirrors what the
+    /// previous `.onKeyPress` chain did 1:1.
+    @MainActor
+    private func handleKeyDown(_ event: NSEvent) -> NSEvent? {
+        // 1. TextField / TextEditor input must pass through —
+        //    typing into the project-name field or JumpToView's
+        //    search field would otherwise eat the key.
+        if NSApp.keyWindow?.firstResponder is NSText { return event }
+
+        let chars = event.characters ?? ""
+        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+
+        // 2. Esc dismisses help / annotated-help overlays.
+        if event.keyCode == 53 {  // kVK_Escape
+            if showHelp || showAnnotationHelp {
+                withAnimation(.easeInOut(duration: 0.12)) {
+                    showHelp = false
+                    showAnnotationHelp = false
+                }
+                return nil
+            }
+            return event
+        }
+
+        // 3. `?` toggles the annotated help overlay (no
+        //    modifiers — ⌘? goes to the menu's Keyboard
+        //    Shortcuts item via the standard menu path).
+        if chars == "?" && !mods.contains(.command) {
+            withAnimation(.easeInOut(duration: 0.12)) {
+                showAnnotationHelp.toggle()
+            }
+            return nil
+        }
+
+        // 4. Beyond this, only the View tab gets keybindings,
+        //    and only with a shoot loaded + no modal overlay
+        //    up. JumpToView eats its own keys via its TextField.
+        guard mode == .view,
+              !showJumpSheet,
+              state.shoot != nil else { return event }
+
+        // 5. Cmd-modified arrows are ours (burst nav). Other
+        //    Cmd combos belong to menus — don't intercept.
+        let isArrow = (event.keyCode == 123 || event.keyCode == 124)
+        if mods.contains(.command) && !isArrow { return event }
+
+        // 6. Special keys by keyCode (arrows, home, end).
+        switch event.keyCode {
+        case 123:  // LeftArrow
+            PerfTracker.begin("← key")
+            if mods.contains(.command) {
+                state.navigateByBurst(direction: -1)
+            } else if mods.contains(.option) {
+                if state.collapseBurstsActive {
+                    state.navigate(byEntries: -10)
+                } else {
+                    state.navigate(by: -10)
+                }
+            } else {
+                state.navigate(by: -1)
+            }
+            return nil
+        case 124:  // RightArrow
+            PerfTracker.begin("→ key")
+            if mods.contains(.command) {
+                state.navigateByBurst(direction: 1)
+            } else if mods.contains(.option) {
+                if state.collapseBurstsActive {
+                    state.navigate(byEntries: 10)
+                } else {
+                    state.navigate(by: 10)
+                }
+            } else {
+                state.navigate(by: 1)
+            }
+            return nil
+        case 115:  // Home
+            if mods.isEmpty {
+                state.firstPair()
+                return nil
+            }
+            return event
+        case 119:  // End
+            if mods.isEmpty {
+                state.lastPair()
+                return nil
+            }
+            return event
+        default:
+            break
+        }
+
+        // 7. Character keys. `event.characters` is the typed
+        //    character (Shift+1 → "!", etc.) so we match both
+        //    base and shifted forms for each binding.
+        switch chars {
+        case "x":
+            state.toggleRequestedVariant(); return nil
+        case "X":
+            state.cycleDecoder(); return nil
+        case "c", "C":
+            state.toggleClipping(); return nil
+        case "f", "F":
+            state.togglePeaking(); return nil
+        case "a", "A":
+            state.toggleAFOverlay(); return nil
+        case "b", "B":
+            withAnimation(.easeInOut(duration: 0.15)) {
+                state.toggleSidebar()
+            }
+            return nil
+        case "t", "T":
+            withAnimation(.easeInOut(duration: 0.15)) {
+                state.toggleFilmstrip()
+            }
+            return nil
+        case "r", "R":
+            state.toggleReject(); return nil
+        case "g", "G":
+            let raw = AppDefaults.shared.string(forKey: SettingsKey.gRejectScope)
+                ?? SettingsKey.Defaults.gRejectScope
+            let scope = GRejectScope(rawValue: raw) ?? .unrated
+            state.rejectBurstSiblings(scope: scope)
+            return nil
+        case "j", "J":
+            showJumpSheet = true; return nil
+        case "[":
+            state.previousUnrated(); return nil
+        case "]":
+            state.nextUnrated(); return nil
+        case "1": state.toggleRating(1); return nil
+        case "2": state.toggleRating(2); return nil
+        case "3": state.toggleRating(3); return nil
+        case "4": state.toggleRating(4); return nil
+        case "5": state.toggleRating(5); return nil
+        case "0": state.setRating(nil); return nil
+        // Shift+digit → typed character is "!@#$%" — colour labels.
+        case "!": state.toggleLabel("Red"); return nil
+        case "@": state.toggleLabel("Yellow"); return nil
+        case "#": state.toggleLabel("Green"); return nil
+        case "$": state.toggleLabel("Blue"); return nil
+        case "%": state.toggleLabel("Purple"); return nil
+        default:
+            return event
         }
     }
 

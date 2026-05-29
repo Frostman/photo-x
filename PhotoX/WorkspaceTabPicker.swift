@@ -1,16 +1,16 @@
 import SwiftUI
 
 /// Toolbar segmented control that doubles as the workspace-mode
-/// switch (View ↔ Export) and the export-progress display. Sits
-/// in the right-side `.primaryAction` cluster next to the
-/// failed-writes pill.
+/// switch and the export-progress display. Sits in the right-
+/// side `.primaryAction` cluster next to the failed-writes pill.
 ///
-/// The Export tab's label is dynamic across three states:
-/// - Idle: doc icon + "Export".
-/// - Running: spinner + "Export N% · ETA".
-/// - Finished (briefly): doc icon + "Export: <outcome> Nm ago".
+/// One tab per entry in `workspaceTabs` — adding a new tab means
+/// appending to that list, no changes here. Most tabs render
+/// just icon + title; the Export tab is the only one with a
+/// dynamic label, swapping in the running-batch state when
+/// available.
 ///
-/// Tab switching is also bound to ⌘1 / ⌘2 via the View menu.
+/// Tab switching also bound to ⌘<n> via the View menu.
 struct WorkspaceTabPicker: View {
     @Bindable var state: ViewerState
     @Binding var mode: WorkspaceMode
@@ -21,19 +21,12 @@ struct WorkspaceTabPicker: View {
         // ticking even when nothing else triggers a re-render.
         TimelineView(.periodic(from: .now, by: 60)) { context in
             HStack(spacing: 0) {
-                tab(.view,
-                    icon: "photo.stack",
-                    label: { Text("View").font(.caption.bold()) },
-                    help: "Show the viewer (canvas, sidebar, filmstrip) — ⌘1")
-
-                Divider().frame(height: 14)
-
-                tab(.export,
-                    icon: nil,
-                    label: { exportLabel(now: context.date) },
-                    help: runner.isRunning
-                        ? "Export running — click to open the Export tab (⌘2)"
-                        : "Configure and export to destinations (⌘2)")
+                ForEach(Array(workspaceTabs.enumerated()), id: \.element.id) { idx, config in
+                    if idx > 0 {
+                        Divider().frame(height: 14)
+                    }
+                    tab(config: config, contextDate: context.date)
+                }
             }
             .background(Color.primary.opacity(0.06),
                         in: RoundedRectangle(cornerRadius: 6, style: .continuous))
@@ -48,22 +41,23 @@ struct WorkspaceTabPicker: View {
     }
 
     @ViewBuilder
-    private func tab<Label: View>(
-        _ target: WorkspaceMode,
-        icon: String?,
-        @ViewBuilder label: () -> Label,
-        help: String
-    ) -> some View {
-        let isActive = mode == target
+    private func tab(config: WorkspaceTabConfig, contextDate: Date) -> some View {
+        let isActive = mode == config.mode
         Button {
-            mode = target
+            mode = config.mode
         } label: {
             HStack(spacing: 4) {
-                if let icon {
-                    Image(systemName: icon)
+                // Export gets the dynamic running / finished /
+                // idle label; other tabs render a static icon +
+                // title from the config.
+                if config.mode == .export {
+                    exportLabel(now: contextDate)
+                } else {
+                    Image(systemName: config.icon)
+                        .font(.caption.bold())
+                    Text(config.title)
                         .font(.caption.bold())
                 }
-                label()
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 4)
@@ -73,12 +67,25 @@ struct WorkspaceTabPicker: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(help)
+        .help(helpText(for: config))
+    }
+
+    private func helpText(for config: WorkspaceTabConfig) -> String {
+        let shortcutSuffix = " — ⌘\(config.shortcut.character)"
+        if config.mode == .export, runner.isRunning {
+            return "Export running — click to open the Export tab\(shortcutSuffix)"
+        }
+        switch config.mode {
+        case .view:
+            return "Show the viewer (canvas, sidebar, filmstrip)\(shortcutSuffix)"
+        case .export:
+            return "Configure and export to destinations\(shortcutSuffix)"
+        }
     }
 
     /// Three-state label for the Export tab:
-    /// - Running: doc icon + "Export N% · ETA" (matches the old pill).
-    /// - Finished recently: doc icon + "Export: <outcome> <ago>".
+    /// - Running: spinner + "Export N% · ETA".
+    /// - Finished recently: doc icon + "Export: <outcome> Nm ago".
     /// - Idle: doc icon + "Export".
     @ViewBuilder
     private func exportLabel(now: Date) -> some View {

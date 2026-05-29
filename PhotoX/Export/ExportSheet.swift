@@ -8,17 +8,16 @@ import AppKit
 /// running batch keeps going and the toolbar pill keeps reporting.
 struct ExportPaneView: View {
     @Bindable var state: ViewerState
+    /// Workspace-wide focus binding owned by `ContentView`.
+    /// Binding the TextField via this shared state (instead of
+    /// a private @FocusState) is what makes the Export → View
+    /// transition reliably re-engage canvas key handling —
+    /// SwiftUI sees the focus change as one atomic transition
+    /// and propagates it into AppKit's responder chain.
+    var focus: FocusState<WorkspaceFocus?>.Binding
     @State private var settings = ExportSettings.shared
     @State private var runner = ExportRunner.shared
     @State private var dropTarget: UUID? = nil
-
-    /// Explicit focus on the project-name field. ContentView puts
-    /// `.id(mode)` on this view, so entering Export mode re-mounts the
-    /// pane and `.onAppear` fires fresh — that's when we steal focus.
-    /// Without this the field silently doesn't receive key input
-    /// (typing 't' would fall through to the filmstrip-toggle shortcut
-    /// were the canvas chain not also detached).
-    @FocusState private var projectNameFocused: Bool
 
     private var projectNameBinding: Binding<String> {
         Binding(
@@ -46,7 +45,9 @@ struct ExportPaneView: View {
         // make TextField + destination rows stretch awkwardly.
         .frame(maxWidth: 800)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onAppear { projectNameFocused = true }
+        // Focus is driven by ContentView's mode-change handler
+        // (sets `focus = .exportProjectName`) — no `onAppear`
+        // trick needed here.
     }
 
     // MARK: header / footer
@@ -130,7 +131,7 @@ struct ExportPaneView: View {
                 .font(.caption.smallCaps()).foregroundStyle(.secondary)
             TextField("Required to export", text: projectNameBinding)
                 .textFieldStyle(.roundedBorder)
-                .focused($projectNameFocused)
+                .focused(focus, equals: .exportProjectName)
                 .disabled(runner.isRunning)
             Toggle(isOn: $settings.readOnceWriteMany) {
                 Label("Read each file once, write to all destinations",
