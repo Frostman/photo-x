@@ -101,38 +101,41 @@ private func isCameraCard(_ volume: URL) -> Bool {
         && isDir.boolValue
 }
 
-/// Returns the first DCIM-convention shoot subfolder
-/// (`100MSDCF`, `100PHOTOX`, etc.) inside the volume's
-/// `DCIM/` directory, or nil if none exists. The notification's
-/// `cardPath` needs to point at one of these subfolders rather
-/// than DCIM itself — PhotoX's `ShootScanner` looks for
-/// ARW+HIF/JPG pairs in the *immediate* directory, not
-/// recursively, so a DCIM-root path would land with an empty
-/// shoot error.
+/// Returns every DCIM-convention shoot subfolder
+/// (`100MSDCF`, `100PHOTOX`, …) inside the volume's `DCIM/`
+/// directory, sorted by name. Empty when none qualify. The
+/// notification's `cardPath` needs to point at one of these
+/// subfolders rather than DCIM itself — PhotoX's
+/// `ShootScanner` looks for ARW + HIF/JPG pairs in the
+/// *immediate* directory, not recursively, so a DCIM-root
+/// path would land with an empty shoot error.
 ///
 /// Keep the convention check in sync with
 /// `VolumeScanner.isDCIMConventionName` (≥ 3 chars and the
 /// first 3 are digits).
-private func firstShootFolder(in volume: URL) -> URL? {
+private func shootFolders(in volume: URL) -> [URL] {
     let dcim = volume.appendingPathComponent("DCIM")
     guard let subs = try? FileManager.default.contentsOfDirectory(
         at: dcim,
         includingPropertiesForKeys: nil,
         options: [.skipsHiddenFiles, .skipsSubdirectoryDescendants]
-    ) else { return nil }
+    ) else { return [] }
     return subs
-        .sorted { $0.lastPathComponent < $1.lastPathComponent }
-        .first { url in
+        .filter { url in
             let name = url.lastPathComponent
             guard name.count >= 3 else { return false }
             return name.prefix(3).allSatisfy { $0.isNumber }
         }
+        .sorted { $0.lastPathComponent < $1.lastPathComponent }
 }
 
-private func notify(cardPath: String, volumeName: String) {
+private func notify(cardPath: String, volumeName: String, shootName: String) {
     let content = UNMutableNotificationContent()
     content.title = "PhotoX — card detected"
-    content.body = volumeName
+    // `<volume> / <shoot>` disambiguates stacked banners
+    // when a card has more than one shoot folder, which
+    // macOS groups under PhotoX automatically.
+    content.body = "\(volumeName) / \(shootName)"
     content.userInfo = [userInfoPathKey: cardPath]
     content.categoryIdentifier = notificationCategoryID
     content.sound = .default
@@ -146,7 +149,7 @@ private func notify(cardPath: String, volumeName: String) {
         if let error {
             log.error("notification add failed: \(error.localizedDescription, privacy: .public) — domain=\((error as NSError).domain, privacy: .public) code=\((error as NSError).code, privacy: .public)")
         } else {
-            log.info("notification add ok for \(volumeName, privacy: .public)")
+            log.info("notification add ok for \(volumeName, privacy: .public) / \(shootName, privacy: .public)")
         }
     }
 }
@@ -254,23 +257,23 @@ final class HelperAppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + recentlyNotifiedCooldown) { [weak self] in
             self?.recentlyNotified.remove(volume)
         }
-        // PhotoX's ShootScanner looks for image pairs in the
-        // immediate folder, not recursively. The card's
+        // PhotoX's ShootScanner looks for image pairs in
+        // the immediate folder, not recursively. The card's
         // actual shoots live one level below DCIM/ in
-        // 100XXXXX-style subfolders — pick the first such
-        // folder, same as VolumeWatcher in the main app
-        // shows in the Open tab's Cards section. Falls back
-        // to DCIM/ if no subfolder qualifies (better to
-        // surface the load error than to silently drop the
-        // notification for a card we already decided is
-        // valid).
-        let shootFolder = firstShootFolder(in: volume)
-        let shootPath = (shootFolder ?? volume.appendingPathComponent("DCIM")).path
-        if shootFolder == nil {
-            log.warning("DCIM exists but no 100XXXXX subfolder — falling back to DCIM root")
+        // 100XXXXX-style subfolders — one notification per
+        // shoot folder mirrors what the in-app Open tab's
+        // Cards section lists, so a multi-shoot card gives
+        // the user a direct entry point to each one.
+        let folders = shootFolders(in: volume)
+        guard !folders.isEmpty else {
+            log.warning("DCIM exists but no 100XXXXX subfolders — no notifications posted")
+            return
         }
-        log.info("delivering notification for \(shootPath, privacy: .public)")
-        notify(cardPath: shootPath, volumeName: volume.lastPathComponent)
+        let volumeName = volume.lastPathComponent
+        for folder in folders {
+            log.info("delivering notification for \(folder.path, privacy: .public)")
+            notify(cardPath: folder.path, volumeName: volumeName, shootName: folder.lastPathComponent)
+        }
     }
 
     private func handleUnmount(_ notif: Notification) {
