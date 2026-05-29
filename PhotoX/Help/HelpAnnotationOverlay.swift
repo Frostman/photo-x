@@ -144,68 +144,76 @@ struct HelpAnnotationOverlay: View {
     @State private var calloutSizes: [HelpAnchorID: CGSize] = [:]
 
     var body: some View {
-        ZStack(alignment: .topLeading) {
-            // Tap-to-dismiss dimmer. Material so the live UI
-            // shows through softly instead of being completely
-            // blacked out — a new user can see WHAT we're
-            // pointing at while reading the callouts.
-            Color.black.opacity(0.45)
-                .ignoresSafeArea()
-                .contentShape(Rectangle())
-                .onTapGesture { onDismiss() }
+        // GeometryReader gives us the overlay's full bounds,
+        // which BracketView uses to clamp the bracket stroke so
+        // it doesn't run past the window edge for anchors that
+        // sit flush against the sidebar / status bar / filmstrip
+        // perimeter.
+        GeometryReader { geo in
+            let overlayBounds = CGRect(origin: .zero, size: geo.size)
+            ZStack(alignment: .topLeading) {
+                // Tap-to-dismiss dimmer. Material so the live UI
+                // shows through softly instead of being completely
+                // blacked out — a new user can see WHAT we're
+                // pointing at while reading the callouts.
+                Color.black.opacity(0.45)
+                    .ignoresSafeArea()
+                    .contentShape(Rectangle())
+                    .onTapGesture { onDismiss() }
 
-            // Cut-outs would be nice (punch holes in the dimmer
-            // around each anchor) but require a mask layer.
-            // v1 skips that — the brackets read clearly enough
-            // on top of a uniform dim.
+                // Cut-outs would be nice (punch holes in the dimmer
+                // around each anchor) but require a mask layer.
+                // v1 skips that — the brackets read clearly enough
+                // on top of a uniform dim.
 
-            let centers = resolvedCalloutCenters(
-                brackets: store.rects, sizes: calloutSizes)
+                let centers = resolvedCalloutCenters(
+                    brackets: store.rects, sizes: calloutSizes)
 
-            // Two-pass rendering: every bracket first (bottom
-            // layer), every callout card + arrow second (top
-            // layer). Splitting the passes guarantees no
-            // annotation's bracket ever lands above another
-            // annotation's card — bracket-on-card bleed used to
-            // happen when a later iteration's bracket composited
-            // over an earlier iteration's callout in a single-
-            // ForEach setup.
-            ForEach(helpAnnotations) { annotation in
-                if let rect = store.rects[annotation.id] {
-                    BracketView(rect: rect)
+                // Two-pass rendering: every bracket first (bottom
+                // layer), every callout card + arrow second (top
+                // layer). Splitting the passes guarantees no
+                // annotation's bracket ever lands above another
+                // annotation's card — bracket-on-card bleed used to
+                // happen when a later iteration's bracket composited
+                // over an earlier iteration's callout in a single-
+                // ForEach setup.
+                ForEach(helpAnnotations) { annotation in
+                    if let rect = store.rects[annotation.id] {
+                        BracketView(rect: rect, bounds: overlayBounds)
+                    }
                 }
-            }
 
-            ForEach(helpAnnotations) { annotation in
-                if let rect = store.rects[annotation.id] {
-                    CalloutCardView(
-                        rect: rect,
-                        annotation: annotation,
-                        calloutCenter: centers[annotation.id],
-                        reportSize: { size in
-                            if calloutSizes[annotation.id] != size {
-                                calloutSizes[annotation.id] = size
+                ForEach(helpAnnotations) { annotation in
+                    if let rect = store.rects[annotation.id] {
+                        CalloutCardView(
+                            rect: rect,
+                            annotation: annotation,
+                            calloutCenter: centers[annotation.id],
+                            reportSize: { size in
+                                if calloutSizes[annotation.id] != size {
+                                    calloutSizes[annotation.id] = size
+                                }
                             }
-                        }
-                    )
+                        )
+                    }
                 }
-            }
 
-            // Footer hint — bottom-center, easy to spot.
-            VStack {
-                Spacer()
-                Text("Press ? again or Esc to dismiss · Help → Keyboard Shortcuts for the full list")
-                    .font(.caption)
-                    .foregroundStyle(.white.opacity(0.85))
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(.ultraThinMaterial, in: Capsule())
-                    .padding(.bottom, 14)
+                // Footer hint — bottom-center, easy to spot.
+                VStack {
+                    Spacer()
+                    Text("Press ? again or Esc to dismiss · Help → Keyboard Shortcuts for the full list")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.85))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .padding(.bottom, 14)
+                }
+                .frame(maxWidth: .infinity)
+                .allowsHitTesting(false)
             }
-            .frame(maxWidth: .infinity)
-            .allowsHitTesting(false)
+            .accessibilityIdentifier("help.annotationOverlay")
         }
-        .accessibilityIdentifier("help.annotationOverlay")
     }
 
     /// Compute the final centre point for every callout,
@@ -389,18 +397,25 @@ private enum HelpLayout {
 
 /// Pass 1 of the overlay's two-pass rendering: the bracket
 /// stroke around a single anchor. Rendered before any callout
-/// so brackets always sit beneath cards.
+/// so brackets always sit beneath cards. The bracket is
+/// clamped to `bounds` so it never runs past the overlay's
+/// edge for anchors flush against the sidebar / status-bar /
+/// filmstrip perimeter.
 private struct BracketView: View {
     let rect: CGRect
+    let bounds: CGRect
 
     var body: some View {
-        let bracket = rect.insetBy(dx: HelpLayout.bracketInset,
-                                    dy: HelpLayout.bracketInset)
-        RoundedRectangle(cornerRadius: 6, style: .continuous)
-            .strokeBorder(Color.accentColor, lineWidth: 2)
-            .frame(width: bracket.width, height: bracket.height)
-            .position(x: bracket.midX, y: bracket.midY)
-            .allowsHitTesting(false)
+        let expanded = rect.insetBy(dx: HelpLayout.bracketInset,
+                                     dy: HelpLayout.bracketInset)
+        let bracket = expanded.intersection(bounds)
+        if !bracket.isNull, bracket.width > 0, bracket.height > 0 {
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .strokeBorder(Color.accentColor, lineWidth: 2)
+                .frame(width: bracket.width, height: bracket.height)
+                .position(x: bracket.midX, y: bracket.midY)
+                .allowsHitTesting(false)
+        }
     }
 }
 
