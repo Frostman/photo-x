@@ -10,6 +10,7 @@ import SwiftUI
 /// to `.view` on every launch; landing in `.export` with no
 /// loaded shoot would be a dead end.
 enum WorkspaceMode: String, CaseIterable, Hashable, Sendable {
+    case open
     case view
     case export
 }
@@ -65,13 +66,22 @@ struct WorkspaceTabConfig: Identifiable {
 }
 
 let workspaceTabs: [WorkspaceTabConfig] = [
+    .init(mode: .open,
+          title: "Open",
+          icon: "folder",
+          defaultFocus: nil,
+          shortcut: "1",
+          // Open tab is always available — it's where the
+          // user picks a folder to load.
+          requiresShoot: false),
     .init(mode: .view,
           title: "View",
           icon: "photo.stack",
           defaultFocus: .canvas,
-          shortcut: "1",
-          // View works on the empty starter screen too.
-          requiresShoot: false),
+          shortcut: "2",
+          // The starter screen has moved to the Open tab,
+          // so View only makes sense with a loaded shoot.
+          requiresShoot: true),
     .init(mode: .export,
           title: "Export",
           icon: "arrow.up.doc.fill",
@@ -80,7 +90,7 @@ let workspaceTabs: [WorkspaceTabConfig] = [
           // accidental capture of typed shortcuts (digits,
           // letters) the moment a user lands on the Export tab.
           defaultFocus: nil,
-          shortcut: "2",
+          shortcut: "3",
           // Nothing to export without a loaded shoot.
           requiresShoot: true),
 ]

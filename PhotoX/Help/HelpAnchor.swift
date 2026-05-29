@@ -43,6 +43,23 @@ enum HelpAnchorID: String, CaseIterable, Hashable, Sendable {
     /// Only published when at least one destination exists; the
     /// annotation is silently absent on an empty list.
     case exportDestinationCard
+
+    // MARK: Open (starter) tab
+
+    /// "Open Folder…" button — the primary action on the Open
+    /// tab. Only published while `mode == .open` (the
+    /// `OpenStarterView` only mounts in that mode).
+    case openFolderButton
+    /// Favorites section on the Open tab. Only published when
+    /// the user has at least one favorite.
+    case openFavorites
+    /// Cards section on the Open tab — auto-detected SD /
+    /// CFExpress shoots. Only published when at least one card
+    /// folder is detected.
+    case openCards
+    /// Recents section on the Open tab. Only published when at
+    /// least one recent folder is visible.
+    case openRecents
 }
 
 /// Shared store the annotated help overlay reads from. Frames

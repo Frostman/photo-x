@@ -125,6 +125,29 @@ private let helpAnnotations: [HelpAnnotation] = [
           message: "One card per destination. Per-card controls: click the path to copy it, Run / Cancel for just this destination, star + reject + unrated + file-type filters (further narrow what the global selection sends here), overwrite policy (skip / overwrite / overwrite-if-different), and 'remove orphans' (destructive — deletes files at this destination whose stem isn't in the filtered selection).",
           shortcuts: [],
           labelEdge: .bottom),
+
+    // Open-tab callouts. Only published while the Open tab is
+    // active (the OpenStarterView itself only mounts in that
+    // mode, so the anchors are naturally bounded).
+    .init(id: .openFolderButton, title: "Open Folder",
+          message: "Pick a folder of ARW + HIF/JPG pairs (or standalone HIF/JPG files) to load as a shoot. You can also drag a folder onto the window from Finder.",
+          shortcuts: ["⌘O"],
+          labelEdge: .trailing),
+
+    .init(id: .openFavorites, title: "Favorites",
+          message: "Folders you've starred. Click a row to reopen — PhotoX restores the last photo you were on. Drag the grip to reorder; the × removes from favorites.",
+          shortcuts: [],
+          labelEdge: .trailing),
+
+    .init(id: .openCards, title: "Cards",
+          message: "Auto-detected SD / CFExpress cards with DCIM shoots. Click a row to open the shoot; the eject button unmounts the whole card.",
+          shortcuts: [],
+          labelEdge: .trailing),
+
+    .init(id: .openRecents, title: "Recent",
+          message: "Recently-opened folders. Star a row to pin it to Favorites; × removes it from the recents list. Reopening restores the last photo viewed.",
+          shortcuts: [],
+          labelEdge: .trailing),
 ]
 
 /// The annotated help layer. Sits inside `ContentView`'s

@@ -43,6 +43,7 @@ struct WorkspaceTabPicker: View {
     @ViewBuilder
     private func tab(config: WorkspaceTabConfig, contextDate: Date) -> some View {
         let isActive = mode == config.mode
+        let isDisabled = config.requiresShoot && state.shoot == nil
         Button {
             mode = config.mode
         } label: {
@@ -64,18 +65,25 @@ struct WorkspaceTabPicker: View {
             .frame(maxHeight: .infinity)
             .background(isActive ? Color.accentColor : Color.clear)
             .foregroundStyle(isActive ? Color.white : Color.primary)
+            .opacity(isDisabled ? 0.4 : 1)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(helpText(for: config))
+        .disabled(isDisabled)
+        .help(helpText(for: config, disabled: isDisabled))
     }
 
-    private func helpText(for config: WorkspaceTabConfig) -> String {
+    private func helpText(for config: WorkspaceTabConfig, disabled: Bool) -> String {
         let shortcutSuffix = " — ⌘\(config.shortcut.character)"
+        if disabled {
+            return "Open a folder first\(shortcutSuffix)"
+        }
         if config.mode == .export, runner.isRunning {
             return "Export running — click to open the Export tab\(shortcutSuffix)"
         }
         switch config.mode {
+        case .open:
+            return "Open a folder of ARW + HIF/JPG pairs\(shortcutSuffix)"
         case .view:
             return "Show the viewer (canvas, sidebar, filmstrip)\(shortcutSuffix)"
         case .export:
