@@ -73,6 +73,12 @@ enum SettingsKey {
     /// `helpVersion` exceeds this stored value. Defaults to
     /// `0` for any tab the user has never visited (so the
     /// first ship of any tab — `helpVersion: 1` — auto-shows).
+    ///
+    /// **Stored in `LocalAppDefaults.shared`, not
+    /// `AppDefaults.shared`** — dev and prod should track
+    /// their own "seen" history so bumping `helpVersion` in
+    /// one build doesn't silently mark the same tab
+    /// already-seen in the other.
     static func helpLastSeen(for mode: WorkspaceMode) -> String {
         "help.lastSeenVersion.\(mode.rawValue)"
     }

@@ -48,12 +48,16 @@ private struct ModeWiring: ViewModifier {
                 // dismiss — and they can still re-open with
                 // `?` at any time.
                 let key = SettingsKey.helpLastSeen(for: newMode)
-                let lastSeen = AppDefaults.shared.integer(forKey: key)
+                // Per-bundle so dev and prod track their own
+                // "seen" history — bumping `helpVersion` in
+                // a dev build doesn't silently mark the
+                // same tab "already seen" in prod.
+                let lastSeen = LocalAppDefaults.shared.integer(forKey: key)
                 if tab.helpVersion > lastSeen, !showAnnotationHelp {
                     withAnimation(.easeInOut(duration: 0.12)) {
                         showAnnotationHelp = true
                     }
-                    AppDefaults.shared.set(tab.helpVersion, forKey: key)
+                    LocalAppDefaults.shared.set(tab.helpVersion, forKey: key)
                 }
             }
             .onChange(of: shootMissing) { _, gone in
