@@ -39,6 +39,12 @@ struct ExportPaneView: View {
             Divider()
             footer
         }
+        // Cap the pane width and let the outer frame centre it
+        // horizontally — same spirit as the starter screen's
+        // intrinsically-narrow VStack sitting centred in the
+        // canvas's full-width container. Wide windows otherwise
+        // make TextField + destination rows stretch awkwardly.
+        .frame(maxWidth: 800)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear { projectNameFocused = true }
     }

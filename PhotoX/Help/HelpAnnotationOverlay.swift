@@ -101,16 +101,20 @@ private let helpAnnotations: [HelpAnnotation] = [
           labelEdge: .bottom),
 
     // Export-pane callouts. Only published while `mode == .export`,
-    // so the View-mode overlay is unaffected.
+    // so the View-mode overlay is unaffected. Project + destinations
+    // callouts hang in the right-side gutter that the 800pt-capped
+    // centred pane opens up on wide windows — keeps them off the
+    // pane content where the destination-card / export-all callouts
+    // already live.
     .init(id: .exportProject, title: "Project name",
           message: "The subfolder name PhotoX creates under each destination — files land at <destination>/<project name>/. The toggle below makes 'Export all' read each source file once and write it to every destination in parallel, saving I/O on slow source media (SD cards).",
           shortcuts: [],
-          labelEdge: .bottom),
+          labelEdge: .trailing),
 
     .init(id: .exportDestinations, title: "Destinations",
           message: "Add one or more folders to export to. Each row gets its own run/cancel/remove controls and a 'remove orphans' toggle that deletes files at the destination whose stem isn't in the filtered selection. Drag rows to reorder.",
           shortcuts: [],
-          labelEdge: .leading),
+          labelEdge: .trailing),
 
     .init(id: .exportRun, title: "Export all",
           message: "Kicks off the export to every destination at once (Return). Aggregate progress + ETA appear in the footer while running, and on the Export tab in the toolbar so you can switch back to the viewer without losing sight of it.",
