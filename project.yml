@@ -31,6 +31,30 @@ targets:
   PhotoX:
     type: application
     platform: macOS
+    postCompileScripts:
+      # Stage the card-watcher LaunchAgent plist inside the
+      # built .app bundle at Contents/Library/LaunchAgents/
+      # so SMAppService.register() can find it. Substitutes
+      # the per-config vars ($(PHOTOX_HELPER_LABEL),
+      # $(PHOTOX_PARENT_BUNDLE_ID)) so debug and release each
+      # register a distinct launchd job that can coexist on
+      # the same machine.
+      - name: Stage CardWatcher LaunchAgent plist
+        script: |
+          set -e
+          DEST_DIR="$TARGET_BUILD_DIR/$WRAPPER_NAME/Contents/Library/LaunchAgents"
+          mkdir -p "$DEST_DIR"
+          PARENT_ID="$PRODUCT_BUNDLE_IDENTIFIER"
+          HELPER_LABEL="$PARENT_ID.CardWatcher"
+          sed \
+            -e "s|\$(PHOTOX_HELPER_LABEL)|$HELPER_LABEL|g" \
+            -e "s|\$(PHOTOX_PARENT_BUNDLE_ID)|$PARENT_ID|g" \
+            "$PROJECT_DIR/PhotoXCardWatcher/CardWatcher.plist" \
+            > "$DEST_DIR/CardWatcher.plist"
+        inputFiles:
+          - $(PROJECT_DIR)/PhotoXCardWatcher/CardWatcher.plist
+        outputFiles:
+          - $(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Library/LaunchAgents/CardWatcher.plist
     sources:
       - path: PhotoX
         excludes:
@@ -50,6 +74,20 @@ targets:
         buildPhase: resources
     dependencies:
       - package: Sparkle
+      # Embed the background card-watcher helper inside the
+      # parent app bundle at
+      #   PhotoX.app/Contents/Library/LoginItems/PhotoXCardWatcher.app
+      # — the canonical location SMAppService.agent /
+      # SMAppService.loginItem expect to find nested
+      # helper bundles. The LaunchAgent plist's
+      # BundleProgram below points at the helper's
+      # executable inside this nested .app.
+      - target: PhotoXCardWatcher
+        embed: true
+        codeSign: true
+        copy:
+          destination: wrapper
+          subpath: Contents/Library/LoginItems
     info:
       # xcodegen generates Info.plist from this. Necessary because Xcode's
       # GENERATE_INFOPLIST_FILE only honors an allowlist of Apple-known keys
@@ -89,6 +127,15 @@ targets:
         # Release builds can inject a real key via xcodebuild
         # POSTHOG_API_KEY=phc_… (wired in scripts/release.sh).
         POSTHOG_API_KEY: $(POSTHOG_API_KEY)
+        # URL scheme registered for the background card watcher's
+        # "Open in PhotoX" notification action. Per-config so the
+        # debug app handles `photox-dev://` and the release app
+        # handles `photox://`, keeping the two installations'
+        # routing isolated when both are present.
+        CFBundleURLTypes:
+          - CFBundleURLName: dev.frostman.PhotoX.URLScheme
+            CFBundleURLSchemes:
+              - $(PHOTOX_URL_SCHEME)
     settings:
       base:
         # MARKETING_VERSION and CURRENT_PROJECT_VERSION are PLACEHOLDERS.
@@ -140,8 +187,109 @@ targets:
           # Release uses PhotoX.entitlements (no exception) since we
           # Developer-ID re-sign Sparkle in scripts/release.sh.
           CODE_SIGN_ENTITLEMENTS: PhotoX/PhotoX-Debug.entitlements
+          # Card-watcher LaunchAgent identity (per-config so debug and
+          # release helpers register as separate launchd jobs).
+          PHOTOX_URL_SCHEME: photox-dev
         Release:
           PRODUCT_BUNDLE_IDENTIFIER: dev.frostman.PhotoX
+          PHOTOX_URL_SCHEME: photox
+
+  PhotoXCardWatcher:
+    # Must be `application`, not `tool` — `UNUserNotificationCenter`
+    # rejects auth requests from a bare CLI binary with
+    # "Notifications are not allowed for this application".
+    # macOS tracks notification permission per `.app` bundle
+    # registered with LaunchServices; a tool target produces
+    # a Mach-O at `Contents/MacOS/...` that LaunchServices
+    # never indexes, so the helper has no slot in the
+    # notifications database and authorization fails.
+    # `LSUIElement: true` (in the Info.plist below) keeps
+    # the helper out of the Dock + Cmd-Tab list while still
+    # allowing notifications, NSWorkspace observers, etc.
+    type: application
+    platform: macOS
+    sources:
+      - path: PhotoXCardWatcher
+        excludes:
+          - "**/.DS_Store"
+          - "*.plist"
+          - "*.entitlements"
+      # Share the parent app's asset catalog so notifications
+      # posted by the helper get the PhotoX icon (the amber
+      # "DEV" pill variant for Debug). Without this the
+      # banner falls back to the system's generic blank icon.
+      # Xcode is happy to compile the same catalog into both
+      # target wrappers — single source of truth, no
+      # duplication needed.
+      - path: PhotoX/Assets.xcassets
+    info:
+      path: PhotoXCardWatcher/Info.plist
+      properties:
+        CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
+        CFBundleName: $(PRODUCT_NAME)
+        CFBundleExecutable: $(EXECUTABLE_NAME)
+        CFBundlePackageType: $(PRODUCT_BUNDLE_PACKAGE_TYPE)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleInfoDictionaryVersion: "6.0"
+        LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
+        # LSUIElement replaces LSBackgroundOnly so the helper
+        # can post notifications. LSBackgroundOnly bars apps
+        # from any user-facing UI — including the
+        # notification system — whereas LSUIElement just
+        # hides the Dock icon and Cmd-Tab entry while
+        # preserving every UI capability the helper needs.
+        LSUIElement: true
+        # Read at runtime by the helper to (a) check
+        # frontmostApplication?.bundleIdentifier against this
+        # build's parent app, and (b) build the URL it opens
+        # in response to the notification action.
+        PhotoXParentBundleID: $(PHOTOX_PARENT_BUNDLE_ID)
+        PhotoXURLScheme: $(PHOTOX_URL_SCHEME)
+        # Git-derived version string identical to the parent
+        # app's About panel — `v<marketing>-<sha9>[-dirty]`
+        # for release builds, `v0.0.0-dev-<sha9>[-dirty]`
+        # for dev. Logged on helper startup so it's
+        # immediately obvious in Console which build of the
+        # helper is actually running, which matters whenever
+        # the supervisor reports "running" but you suspect
+        # an orphan from a previous rebuild is the live one.
+        GitDescribe: $(GIT_DESCRIBE)
+    settings:
+      base:
+        PRODUCT_NAME: PhotoXCardWatcher
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_STYLE: Automatic
+        MARKETING_VERSION: "0.0.0"
+        CURRENT_PROJECT_VERSION: "0"
+        # Mirror the parent app's icon selection — Release
+        # uses the regular PhotoX icon, Debug overrides
+        # below with the amber "DEV" pill variant. Reads
+        # from the shared `PhotoX/Assets.xcassets` added in
+        # `sources` above.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # `.app` bundles already get their Info.plist
+        # written into `Contents/Info.plist` and bound to
+        # the code signature by Xcode automatically — no
+        # need for CREATE_INFOPLIST_SECTION_IN_BINARY (which
+        # is the workaround only when shipping a bare
+        # CLI/`tool` target).
+      configs:
+        Debug:
+          PRODUCT_BUNDLE_IDENTIFIER: dev.frostman.PhotoX.debug.CardWatcher
+          PHOTOX_PARENT_BUNDLE_ID: dev.frostman.PhotoX.debug
+          PHOTOX_HELPER_LABEL: dev.frostman.PhotoX.debug.CardWatcher
+          PHOTOX_URL_SCHEME: photox-dev
+          CODE_SIGN_ENTITLEMENTS: PhotoXCardWatcher/PhotoXCardWatcher-Debug.entitlements
+          # Helper's notification icon matches the dev app's
+          # amber "DEV" pill variant.
+          ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon-Debug
+        Release:
+          PRODUCT_BUNDLE_IDENTIFIER: dev.frostman.PhotoX.CardWatcher
+          PHOTOX_PARENT_BUNDLE_ID: dev.frostman.PhotoX
+          PHOTOX_HELPER_LABEL: dev.frostman.PhotoX.CardWatcher
+          PHOTOX_URL_SCHEME: photox
+          CODE_SIGN_ENTITLEMENTS: PhotoXCardWatcher/PhotoXCardWatcher.entitlements
 
   PhotoXTests:
     type: bundle.unit-test

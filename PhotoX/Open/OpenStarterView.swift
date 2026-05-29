@@ -401,47 +401,29 @@ struct OpenStarterView: View {
     private func openWithPanel() {
         Task {
             guard let (shoot, focus) = OpenPanelCoordinator.runShootPicker() else { return }
-            // Picked the shoot that's already loaded? Skip
-            // the costly teardown + rescan; just hop to View.
+            // Hop to View immediately after the picker
+            // returns so the tab change confirms the
+            // selection (important on slow source media).
+            // System file dialog has already dismissed by
+            // this point so we're not interrupting it.
+            mode = .view
             if state.shoot?.folderURL.path == shoot.folderURL.path {
-                mode = .view
-                return
+                return  // same shoot; skip teardown + rescan
             }
             await state.loadShoot(shoot, focus: focus)
         }
     }
 
     private func openPath(_ path: String) {
-        // Clicking the row for the already-loaded shoot
-        // should just jump back to the photo, not wipe and
-        // reload it.
-        if state.shoot?.folderURL.path == path {
-            mode = .view
-            return
-        }
+        // Switch to View immediately — both for the same-
+        // shoot short-circuit and for the fresh-load path —
+        // so the tab change confirms the click. On slow
+        // source media (SMB / remote) the canvas may stay
+        // empty for a beat while the scan + load finishes;
+        // the visible tab change is the feedback.
+        mode = .view
         Task {
-            let url = URL(fileURLWithPath: path)
-            var isDir: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir),
-                  isDir.boolValue else {
-                state.errorMessage = "Folder no longer exists: \(path)"
-                return
-            }
-            let shoot = ShootScanner.scan(folder: url)
-            guard let firstEntry = shoot.entries.first else {
-                state.errorMessage = "No ARW + HIF/JPG pairs (or standalone HIF/JPG files) found in \(url.lastPathComponent)"
-                return
-            }
-            // Restore the last-viewed entry if this path is a known
-            // favorite or recent. Favorites take precedence (more
-            // deliberate); both stores fall back to the first entry
-            // silently if the saved stem no longer exists.
-            let savedStem = FavoriteShoots.shared.lastEntry(for: path)
-                         ?? RecentShoots.shared.lastEntry(for: path)
-            let focus = savedStem
-                .flatMap { stem in shoot.entries.first { $0.stem == stem } }
-                ?? firstEntry
-            await state.loadShoot(shoot, focus: focus)
+            await OpenShootRouter.load(path: path, state: state)
         }
     }
 

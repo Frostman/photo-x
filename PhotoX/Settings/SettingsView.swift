@@ -1,5 +1,7 @@
 import AppKit
+import ServiceManagement
 import SwiftUI
+import UserNotifications
 
 /// UserDefaults keys for persisted settings. Centralised so the @AppStorage
 /// in SettingsView and the lookup-at-init in ViewerState / SamplePathProvider
@@ -75,6 +77,13 @@ enum SettingsKey {
         "help.lastSeenVersion.\(mode.rawValue)"
     }
 
+    /// User's toggle for the background card watcher
+    /// (`PhotoXCardWatcher` LaunchAgent). **Stored in
+    /// `LocalAppDefaults.shared`, not `AppDefaults.shared`** —
+    /// prod and dev register independent helpers, so the
+    /// toggle must be per-bundle. Default off.
+    static let cardWatcherEnabled = "settings.cardWatcherEnabled"
+
     enum Defaults {
         static let appearance = AppearanceMode.system.rawValue
         static let sidebarVisible = true
@@ -96,6 +105,7 @@ enum SettingsKey {
         static let cacheSequence        = true
         static let cacheThumbnail       = true
         static let indexerCacheMaxSizeGB = 2
+        static let cardWatcherEnabled    = false
     }
 }
 
@@ -175,6 +185,25 @@ struct SettingsView: View {
     @AppStorage(SettingsKey.cacheSequence,        store: AppDefaults.shared) private var cacheSequence        = SettingsKey.Defaults.cacheSequence
     @AppStorage(SettingsKey.cacheThumbnail,       store: AppDefaults.shared) private var cacheThumbnail       = SettingsKey.Defaults.cacheThumbnail
     @AppStorage(SettingsKey.indexerCacheMaxSizeGB, store: AppDefaults.shared) private var indexerCacheMaxSizeGB = SettingsKey.Defaults.indexerCacheMaxSizeGB
+
+    // Card-watcher toggle is per-bundle (LocalAppDefaults.shared,
+    // not the cross-bundle AppDefaults). Prod and dev each register
+    // their own LaunchAgent, so the toggle that drives
+    // register/unregister must NOT be shared between builds.
+    @AppStorage(SettingsKey.cardWatcherEnabled, store: LocalAppDefaults.shared) private var cardWatcherEnabled = SettingsKey.Defaults.cardWatcherEnabled
+
+    /// Last error from a card-watcher register/unregister attempt
+    /// — surfaces inline under the toggle so the user knows when
+    /// macOS rejected the action (typically: Login Items
+    /// permission not granted yet).
+    @State private var cardWatcherError: String? = nil
+
+    /// Cached live status for the card watcher.
+    /// `SMAppService.status` isn't `@Observable` and doesn't
+    /// update synchronously on register / unregister, so we
+    /// poll it (alongside the cache stats) every second and
+    /// also refresh immediately after toggle actions.
+    @State private var cardWatcherStatus: CardWatcherSupervisor.LiveStatus = .notRegistered
 
     /// Injected by `PhotoXApp` so Settings → Advanced can read live
     /// cache stats from the currently-loaded shoot. nil means no
@@ -267,6 +296,23 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("Card watcher") {
+                Toggle("Watch for camera cards in the background", isOn: $cardWatcherEnabled)
+                    .help("When enabled, a tiny background helper monitors for SD / CFExpress card mounts even while PhotoX is closed and posts a notification to open the card in PhotoX with a single click.")
+                    .onChange(of: cardWatcherEnabled) { _, enabled in
+                        Task { await applyCardWatcherToggle(enabled: enabled) }
+                    }
+                cardWatcherStatusLine
+                if let err = cardWatcherError {
+                    Text(err)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+                Text("Helper runs as a LaunchAgent registered via SMAppService. It's installed inside the PhotoX app bundle, registered only when this toggle is on, and shows up in System Settings → Login Items where you can also disable it. Skips the notification if PhotoX is already the frontmost app — the Open tab's Cards section already surfaces the mount there.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Privacy") {
                 Toggle("Send anonymous usage stats to PostHog Cloud", isOn: $telemetryEnabled)
                     .help("Off by default. When on, PhotoX uploads the same integer counters shown in Window → Usage Stats… every \(TelemetryConfig.uploadIntervalDescription) and on quit. Toggle off any time.")
@@ -277,10 +323,13 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .task {
-            // Poll the (non-Observable) caches once per second while
-            // Settings is open. .task auto-cancels on view disappear.
+            // Poll the (non-Observable) caches + the card-watcher
+            // SMAppService status once per second while Settings
+            // is open. .task auto-cancels on view disappear.
+            refreshCardWatcherStatus()
             while !Task.isCancelled {
                 await refreshAdvancedStats()
+                refreshCardWatcherStatus()
                 try? await Task.sleep(for: .seconds(1))
             }
         }
@@ -355,6 +404,145 @@ struct SettingsView: View {
 
     /// Fixed per-histogram footprint: 256 bins × 3 channels × Int.
     private static let histogramBytes = 256 * 3 * MemoryLayout<Int>.size
+
+    // MARK: - Card watcher helpers
+
+    /// Same filename in every config — the LaunchAgent plist
+    /// is copied into Contents/Library/LaunchAgents/CardWatcher.plist
+    /// by the main app's post-compile script (with per-config
+    /// build-setting substitution applied to the contents).
+    private static let cardWatcherPlistName = "CardWatcher.plist"
+
+    /// Status line under the card-watcher toggle. Reflects the
+    /// LaunchAgent's current state per SMAppService so the user
+    /// can see when macOS is waiting for approval. Reads the
+    /// cached `cardWatcherStatus` (refreshed by `.task` + after
+    /// every toggle action) rather than calling SMAppService
+    /// directly, so the line re-renders as the OS catches up.
+    @ViewBuilder
+    private var cardWatcherStatusLine: some View {
+        switch cardWatcherStatus {
+        case .running(let pid):
+            Text("Status: running (pid \(pid))")
+                .font(.caption)
+                .foregroundStyle(.green)
+        case .registeredNotRunning:
+            HStack(spacing: 6) {
+                Text("Status: registered but not running")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                Button("Restart") {
+                    Task {
+                        await CardWatcherSupervisor.manualRestart()
+                        await MainActor.run { refreshCardWatcherStatus() }
+                    }
+                }
+                .buttonStyle(.link)
+                .font(.caption)
+            }
+        case .spawnFailed(let code):
+            // macOS refuses to spawn the helper — usually a
+            // stale BTM/LWCR record after the helper binary's
+            // code-signing identity changed across rebuilds.
+            // SMAppService can't clear this cache; only the
+            // user toggling the helper off+on in System
+            // Settings → Login Items can.
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Status: blocked by macOS (exit \(code))")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                Text("Open Login Items, toggle PhotoX off then back on, then click Restart here.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 8) {
+                    Button("Open Login Items") {
+                        if let url = URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }
+                    .buttonStyle(.link)
+                    .font(.caption)
+                    Button("Restart") {
+                        Task {
+                            await CardWatcherSupervisor.manualRestart()
+                            await MainActor.run { refreshCardWatcherStatus() }
+                        }
+                    }
+                    .buttonStyle(.link)
+                    .font(.caption)
+                }
+            }
+        case .requiresApproval:
+            HStack(spacing: 6) {
+                Text("Status: needs approval in System Settings → Login Items")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                Button("Open") {
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+                .buttonStyle(.link)
+                .font(.caption)
+            }
+        case .notRegistered:
+            Text("Status: stopped")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        case .unknown:
+            Text("Status: unknown")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    /// Toggle → register/unregister the LaunchAgent via SMAppService
+    /// and (on enable) request notification permission. Surfaces
+    /// any error inline via `cardWatcherError`. Failures roll the
+    /// toggle back so the persisted state matches reality.
+    @MainActor
+    private func applyCardWatcherToggle(enabled: Bool) async {
+        cardWatcherError = nil
+        let service = SMAppService.agent(plistName: Self.cardWatcherPlistName)
+        if enabled {
+            do {
+                try service.register()
+            } catch {
+                cardWatcherError = "Couldn't register helper: \(error.localizedDescription)"
+                cardWatcherEnabled = false
+                refreshCardWatcherStatus()
+                return
+            }
+        } else {
+            do {
+                try await service.unregister()
+            } catch {
+                cardWatcherError = "Couldn't unregister helper: \(error.localizedDescription)"
+                cardWatcherEnabled = true
+            }
+        }
+        // The OS takes a beat to flip status after
+        // register/unregister; refresh now, then again after a
+        // short delay so the status line shows the correct
+        // value even if the first read is still stale.
+        refreshCardWatcherStatus()
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(400))
+            refreshCardWatcherStatus()
+        }
+    }
+
+    @MainActor
+    private func refreshCardWatcherStatus() {
+        // liveStatus runs `launchctl print` off the main
+        // thread; we just hop back to MainActor to assign
+        // the @State once it's ready.
+        Task {
+            let status = await CardWatcherSupervisor.liveStatus()
+            await MainActor.run { cardWatcherStatus = status }
+        }
+    }
 
     private func refreshAdvancedStats() async {
         let tex = MTLTextureCache.shared.stats

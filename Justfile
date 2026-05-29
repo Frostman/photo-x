@@ -51,7 +51,19 @@ dev:
     fi
 
     echo "==> Quit any running dev build (Release app untouched)"
-    pkill -f "$EXE_PATH" 2>/dev/null || true
+    # IMPORTANT: kill ONLY the main app binary, not the
+    # PhotoXCardWatcher helper that lives next to it. `pkill -f
+    # "$EXE_PATH"` would substring-match both (the helper's path
+    # has $EXE_PATH as a prefix), which kills the launchd-managed
+    # helper while the bundle is being torn down for rebuild and
+    # leaves it un-respawned. Match the first command word
+    # ($2 in `ps -o command`) exactly against $EXE_PATH instead.
+    PIDS=$(ps -ax -o pid,command 2>/dev/null \
+            | awk -v target="$EXE_PATH" '$2 == target { print $1 }') || true
+    [ -n "$PIDS" ] && kill $PIDS 2>/dev/null || true
+    # The card-watcher helper itself is bounced by
+    # PhotoXApp.bootstrap on every launch, so it picks up any
+    # fresh binary even though `just dev` no longer kills it.
 
     echo "==> Clean previous Debug products"
     xcodebuild -scheme "$SCHEME" -configuration "$CONFIG" -destination "$DEST" -quiet clean
@@ -74,6 +86,26 @@ dev:
         exit 1
     fi
     echo "    fresh binary (mtime $NEW_MTIME, was ${OLD_MTIME:-<none>})"
+
+    # Xcode produces an intermediate copy of the helper at
+    # $BUILT_PRODUCTS_DIR/PhotoXCardWatcher.app alongside
+    # PhotoX.app, then embeds the same bundle inside
+    # PhotoX.app/Contents/Library/LoginItems/. Both .apps
+    # have the same CFBundleIdentifier
+    # (`dev.frostman.PhotoX.debug.CardWatcher`) but the
+    # sibling is the one LaunchServices indexes first
+    # (since it's directly inside BUILT_PRODUCTS_DIR that
+    # LS auto-scans), which routes notification-click
+    # activations + icon lookups to the WRONG path. Remove
+    # the sibling and unregister it from LS so the nested
+    # copy becomes the canonical bundle.
+    SIBLING_HELPER="$BUILD_DIR/PhotoXCardWatcher.app"
+    LSREG=/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister
+    if [ -d "$SIBLING_HELPER" ]; then
+        echo "==> Remove sibling $SIBLING_HELPER (LS-confusion preventer)"
+        "$LSREG" -u "$SIBLING_HELPER" 2>/dev/null || true
+        rm -rf "$SIBLING_HELPER"
+    fi
 
     echo "==> Launch dev build"
     open -a "$APP_PATH"

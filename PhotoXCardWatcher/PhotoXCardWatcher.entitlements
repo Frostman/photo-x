@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Helper is unsandboxed (needs NSWorkspace mount notifications
+       and ad-hoc stat access to /Volumes/). Hardened runtime stays
+       on (set via ENABLE_HARDENED_RUNTIME in project.yml). No
+       library-validation exception in release builds because both
+       the helper and Sparkle in the main app are Developer-ID
+       re-signed by scripts/release.sh; dev builds use a separate
+       entitlements file that grants the exception (see
+       PhotoXCardWatcher-Debug.entitlements). -->
+</dict>
+</plist>

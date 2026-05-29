@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  LaunchAgent plist for the PhotoX background card watcher,
+  installed via SMAppService.register() from the main app's
+  Settings. Lives inside the parent app bundle at
+  PhotoX.app/Contents/Library/LaunchAgents/.
+
+  Per-configuration substitution via xcodegen build settings:
+  - Label / AssociatedBundleIdentifiers use $(PHOTOX_HELPER_LABEL)
+    so the dev helper gets a distinct launchd job from prod's,
+    letting both coexist side by side on the same machine.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$(PHOTOX_HELPER_LABEL)</string>
+  <!-- BundleProgram is resolved relative to the parent app
+       bundle's Contents/. The helper is a nested .app at
+       Contents/Library/LoginItems/PhotoXCardWatcher.app — an
+       .app (not a bare CLI tool) is required so macOS's
+       notification system tracks permission for it. -->
+  <key>BundleProgram</key>
+  <string>Contents/Library/LoginItems/PhotoXCardWatcher.app/Contents/MacOS/PhotoXCardWatcher</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <!-- Lets macOS group this agent under PhotoX in System
+       Settings → Login Items so the user can see (and disable)
+       it without hunting through Console / launchctl. -->
+  <key>AssociatedBundleIdentifiers</key>
+  <array>
+    <string>$(PHOTOX_PARENT_BUNDLE_ID)</string>
+  </array>
+</dict>
+</plist>

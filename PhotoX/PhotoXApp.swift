@@ -73,6 +73,16 @@ struct PhotoXApp: App {
                     for: .photoxWillTerminate)) { _ in
                     viewerState.captureLastEntryToStores()
                 }
+                // URL routing for `photox(-dev)://card?path=…`
+                // (posted by the background card watcher's
+                // notification) is handled by
+                // `AppDelegate.handleURLAppleEvent`. SwiftUI's
+                // `.onOpenURL` was tried first but kept
+                // spawning a fresh WindowGroup scene with a
+                // mirror `ViewerState`; an `NSAppleEventManager`
+                // hijack registered in
+                // `applicationWillFinishLaunching` cleanly
+                // intercepts the URL before SwiftUI sees it.
         }
         .windowResizability(.contentMinSize)
         .windowToolbarStyle(.unifiedCompact(showsTitle: false))
@@ -185,6 +195,24 @@ struct PhotoXApp: App {
     }
 
     private func bootstrap() async {
+        // Pick up any new card-watcher binary inside this app
+        // bundle and recover if launchd lost track of the
+        // helper. See `CardWatcherSupervisor.bootstrapAtLaunch`
+        // for the full state machine — running → bounce,
+        // registered-but-stopped → start, SM/launchd-desync →
+        // re-register + start. Detached so the shoot-load /
+        // updater work below isn't gated on launchctl I/O.
+        // After the bootstrap finishes we surface unhealthy
+        // outcomes via an alert so the user actually notices
+        // the watcher is broken (rather than only seeing it
+        // in Settings the next time they open the pane).
+        Task.detached(priority: .background) {
+            let status = await CardWatcherSupervisor.bootstrapAtLaunch()
+            await MainActor.run {
+                presentCardWatcherAlertIfNeeded(status: status)
+            }
+        }
+
         // Sparkle-driven restart: if the previous run set a pending
         // reopen path (in the last 10 min), prefer it over the
         // configured default folder. `consume()` always clears the
@@ -251,6 +279,50 @@ struct PhotoXApp: App {
         }
         NSApplication.shared.orderFrontStandardAboutPanel(options: options)
         NSApplication.shared.activate(ignoringOtherApps: true)
+    }
+}
+
+/// Surfaces an actionable alert when the card-watcher
+/// supervisor finishes its launch-time bootstrap in an
+/// unhealthy state — typically a stale BTM/LWCR cache that
+/// only a manual System Settings → Login Items toggle can
+/// reset. Silent on healthy states (`.running`,
+/// `.notRegistered` when the user has opted out, etc.).
+@MainActor
+private func presentCardWatcherAlertIfNeeded(status: CardWatcherSupervisor.LiveStatus) {
+    let body: String
+    switch status {
+    case .running, .notRegistered, .requiresApproval, .unknown:
+        // Healthy / opted-out / awaiting first-run approval —
+        // either nothing's wrong or the existing Settings UI
+        // already surfaces the next step in-context.
+        return
+    case .spawnFailed(let code):
+        body = """
+        macOS refused to start the background card-watcher helper (exit \(code)). This usually happens after the helper is rebuilt: macOS caches a code-signing requirement that no longer matches the new binary, and only a manual toggle resets the cache.
+
+        To fix:
+        1. Open System Settings → General → Login Items & Extensions.
+        2. Under "Allow in the Background", toggle PhotoX off, then back on.
+        3. In PhotoX Settings → Card watcher, click Restart.
+        """
+    case .registeredNotRunning:
+        body = """
+        The background card-watcher helper is registered but not running. macOS may be throttling respawn, or its launch-constraint cache is out of date.
+
+        Try toggling PhotoX off and back on under System Settings → Login Items & Extensions → Allow in the Background, then click Restart in PhotoX Settings → Card watcher.
+        """
+    }
+
+    let alert = NSAlert()
+    alert.messageText = "Card watcher needs attention"
+    alert.informativeText = body
+    alert.alertStyle = .warning
+    alert.addButton(withTitle: "Open Login Items")  // alertFirstButtonReturn
+    alert.addButton(withTitle: "Later")             // alertSecondButtonReturn
+    if alert.runModal() == .alertFirstButtonReturn,
+       let url = URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension") {
+        NSWorkspace.shared.open(url)
     }
 }
 
@@ -371,6 +443,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
     /// Must run before any window is created → applicationWillFinishLaunching.
     func applicationWillFinishLaunching(_ notification: Notification) {
         UserDefaults.standard.set("None", forKey: "AppleActionOnDoubleClick")
+
+        // Install our `kAEGetURL` Apple Event handler BEFORE
+        // SwiftUI has a chance to register its own. SwiftUI's
+        // own handler kept spawning a fresh WindowGroup scene
+        // for incoming `photox-dev://card?…` events (the new
+        // scene's `.task { await bootstrap() }` would re-fire
+        // bootstrap, an easy fingerprint in the watcher log).
+        // Winning the setEventHandler race here lets us route
+        // the URL through the existing `viewerState`.
+        NSAppleEventManager.shared().setEventHandler(
+            self,
+            andSelector: #selector(self.handleURLAppleEvent(_:withReplyEvent:)),
+            forEventClass: AEEventClass(kInternetEventClass),
+            andEventID: AEEventID(kAEGetURL)
+        )
         // PhotoX is single-window today (ViewerState + ExportRunner +
         // this AppDelegate's weak ref all assume one viewer at a time).
         // Opting out of AppKit's automatic window tabbing hides the
@@ -422,6 +509,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
             // export is running. SwiftUI's WindowGroup doesn't set its own
             // delegate, so this slot is free for us.
             window.delegate = self
+        }
+    }
+
+    // MARK: URL scheme (Apple Event hijack)
+
+    /// Receives `kAEGetURL` events from LaunchServices when
+    /// the helper's notification action calls
+    /// `NSWorkspace.shared.open(photox-dev://card?path=…)`.
+    /// Registered in `applicationDidFinishLaunching` AFTER
+    /// SwiftUI's own URL routing so we override it — see the
+    /// comment there for why bypassing SwiftUI is necessary.
+    @objc func handleURLAppleEvent(_ event: NSAppleEventDescriptor,
+                                   withReplyEvent reply: NSAppleEventDescriptor) {
+        guard let urlStr = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))?.stringValue,
+              let url = URL(string: urlStr) else { return }
+        NSApp.activate(ignoringOtherApps: true)
+        guard url.host == "card",
+              let path = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+                  .queryItems?
+                  .first(where: { $0.name == "path" })?
+                  .value,
+              let state = viewerState else { return }
+        Task { @MainActor in
+            await openCardURL(path: path, state: state)
         }
     }
 
@@ -534,16 +645,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
         return alert.runModal() == .alertSecondButtonReturn
     }
 
-    /// Shared alert for "an export is running, are you sure you want to
-    /// <verb>?" Used by both windowShouldClose and applicationShouldTerminate.
-    private func makeExportRunningAlert(verb: String) -> NSAlert {
-        let alert = NSAlert()
-        alert.messageText = "Export in progress"
-        alert.informativeText = "An export to one or more destinations is still running. \(verb.capitalized(with: nil))ing now will cancel it and leave partially-copied files at the destinations."
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "Stay")                          // default = ⏎
-        let cancelBtn = alert.addButton(withTitle: "Cancel exports and \(verb)")
-        cancelBtn.hasDestructiveAction = true
-        return alert
+}
+
+/// Shared alert for "an export is running, are you sure you
+/// want to <verb>?" Used by `AppDelegate.windowShouldClose`,
+/// `AppDelegate.applicationShouldTerminate`, AND the
+/// top-level `openCardURL` URL handler. File-scope so all
+/// three call sites stay on the same wording.
+@MainActor
+fileprivate func makeExportRunningAlert(verb: String) -> NSAlert {
+    let alert = NSAlert()
+    alert.messageText = "Export in progress"
+    alert.informativeText = "An export to one or more destinations is still running. \(verb.capitalized(with: nil))ing now will cancel it and leave partially-copied files at the destinations."
+    alert.alertStyle = .warning
+    alert.addButton(withTitle: "Stay")                          // default = ⏎
+    let cancelBtn = alert.addButton(withTitle: "Cancel exports and \(verb)")
+    cancelBtn.hasDestructiveAction = true
+    return alert
+}
+
+/// URL-scheme entry point used by `WindowGroup`'s
+/// `.onOpenURL` when the background card watcher's
+/// notification action fires. Same close-shoot +
+/// export-confirmation flow that
+/// `ContentView.closeShootGuarded()` uses:
+/// - Same path already loaded → just hop to View tab.
+/// - Different shoot + export in flight → show the shared
+///   "Export in progress" alert and only proceed if the
+///   user picks the destructive action.
+/// - Otherwise → load and hop to View.
+@MainActor
+fileprivate func openCardURL(path: String, state: ViewerState) async {
+    if state.shoot?.folderURL.path == path {
+        NotificationCenter.default.post(
+            name: .photoxSwitchWorkspace, object: WorkspaceMode.view)
+        return
     }
+    if state.shoot != nil, ExportRunner.shared.isRunning {
+        let alert = makeExportRunningAlert(verb: "switch to the card")
+        if alert.runModal() != .alertSecondButtonReturn {
+            return
+        }
+        ExportRunner.shared.cancelAll()
+    }
+    await OpenShootRouter.load(path: path, state: state)
+    NotificationCenter.default.post(
+        name: .photoxSwitchWorkspace, object: WorkspaceMode.view)
 }
