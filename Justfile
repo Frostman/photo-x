@@ -241,3 +241,50 @@ inspect file:
 #   just release --dry-run    → full build + DMG, no commit/push
 release *args:
     ./scripts/release.sh {{args}}
+
+# Toggle a fake camera-card mount for testing the background
+# card watcher / Open tab's Cards section. Creates
+# /tmp/photox-fake.dmg on first run from sample/ wrapped in a
+# DCIM/100PHOTOX/ tree (the watcher only fires on volumes with
+# DCIM/ at the root), then attach / detach toggle on subsequent
+# runs. Volume mounts at /Volumes/PHOTOXFAKE.
+fake-card:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    DMG=/tmp/photox-fake.dmg
+    VOLUME=PHOTOXFAKE
+    MOUNT="/Volumes/$VOLUME"
+
+    if [ ! -f "$DMG" ]; then
+        echo "==> Creating $DMG from sample/ (wrapped in DCIM/100PHOTOX/)"
+        if [ ! -d sample ]; then
+            echo "error: sample/ not found — run from repo root" >&2
+            exit 1
+        fi
+        # Stage sample/ under a DCIM tree so the volume matches
+        # what the watcher (and PhotoX's VolumeScanner) keys on.
+        # mktemp dir is cleaned up on exit regardless of success.
+        STAGE=$(mktemp -d)
+        trap 'rm -rf "$STAGE"' EXIT
+        mkdir -p "$STAGE/DCIM/100PHOTOX"
+        cp -R sample/. "$STAGE/DCIM/100PHOTOX/"
+        # -ov overwrites if /tmp/photox-fake.dmg somehow exists
+        # from a leftover state; -srcfolder builds the image
+        # contents from STAGE.
+        # -format UDRW is uncompressed read/write — orders of
+        # magnitude faster to create than the default UDZO
+        # (which compresses the entire ~3.7 GB sample), at the
+        # cost of a fatter DMG on disk. We never ship this
+        # image, so disk usage doesn't matter.
+        hdiutil create -srcfolder "$STAGE" -volname "$VOLUME" -format UDRW -ov "$DMG" >/dev/null
+        echo "    $DMG ready"
+    fi
+
+    if [ -d "$MOUNT" ]; then
+        echo "==> Detaching $MOUNT"
+        hdiutil detach "$MOUNT"
+    else
+        echo "==> Attaching $DMG → $MOUNT"
+        hdiutil attach "$DMG" >/dev/null
+        echo "    mounted at $MOUNT (DCIM/100PHOTOX inside)"
+    fi
