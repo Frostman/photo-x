@@ -162,9 +162,23 @@ struct HelpAnnotationOverlay: View {
             let centers = resolvedCalloutCenters(
                 brackets: store.rects, sizes: calloutSizes)
 
+            // Two-pass rendering: every bracket first (bottom
+            // layer), every callout card + arrow second (top
+            // layer). Splitting the passes guarantees no
+            // annotation's bracket ever lands above another
+            // annotation's card — bracket-on-card bleed used to
+            // happen when a later iteration's bracket composited
+            // over an earlier iteration's callout in a single-
+            // ForEach setup.
             ForEach(helpAnnotations) { annotation in
                 if let rect = store.rects[annotation.id] {
-                    AnnotationView(
+                    BracketView(rect: rect)
+                }
+            }
+
+            ForEach(helpAnnotations) { annotation in
+                if let rect = store.rects[annotation.id] {
+                    CalloutCardView(
                         rect: rect,
                         annotation: annotation,
                         calloutCenter: centers[annotation.id],
@@ -373,33 +387,48 @@ private enum HelpLayout {
     static let calloutMaxWidth: CGFloat = 260
 }
 
-/// One annotation: bracket around the anchor + arrow + label
-/// callout. The bracket is drawn from `rect`; the callout is
-/// placed at `calloutCenter` (computed and overlap-resolved
-/// by the parent overlay); the arrow connects them, picking
-/// endpoints that snap to the nearest edges of each.
+/// Pass 1 of the overlay's two-pass rendering: the bracket
+/// stroke around a single anchor. Rendered before any callout
+/// so brackets always sit beneath cards.
+private struct BracketView: View {
+    let rect: CGRect
+
+    var body: some View {
+        let bracket = rect.insetBy(dx: HelpLayout.bracketInset,
+                                    dy: HelpLayout.bracketInset)
+        RoundedRectangle(cornerRadius: 6, style: .continuous)
+            .strokeBorder(Color.accentColor, lineWidth: 2)
+            .frame(width: bracket.width, height: bracket.height)
+            .position(x: bracket.midX, y: bracket.midY)
+            .allowsHitTesting(false)
+    }
+}
+
+/// Pass 2 of the overlay's two-pass rendering: arrow + label
+/// callout for a single anchor. Drawn on top of every bracket
+/// so a callout can never be obscured by a neighbour's bracket.
+/// The callout is placed at `calloutCenter` (computed and
+/// overlap-resolved by the parent overlay); the arrow connects
+/// callout to bracket, picking endpoints that snap to the
+/// nearest edges of each.
 ///
-/// Callout size is measured via a GeometryReader background
-/// and reported up through `reportSize` so the overlay can
-/// run a second pass with collision-resolved positions.
-/// First frame: callout is hidden (opacity 0) until a
-/// resolved centre arrives.
-private struct AnnotationView: View {
+/// Callout size is measured via a GeometryReader background and
+/// reported up through `reportSize` so the overlay can run a
+/// second pass with collision-resolved positions. First frame:
+/// callout is hidden (opacity 0) until a resolved centre
+/// arrives.
+private struct CalloutCardView: View {
     let rect: CGRect
     let annotation: HelpAnnotation
     let calloutCenter: CGPoint?
     let reportSize: (CGSize) -> Void
 
+    @State private var currentSize: CGSize? = nil
+
     var body: some View {
         let bracket = rect.insetBy(dx: HelpLayout.bracketInset,
                                     dy: HelpLayout.bracketInset)
         ZStack(alignment: .topLeading) {
-            // Bracket — fixed-size shape, easy to place.
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .strokeBorder(Color.accentColor, lineWidth: 2)
-                .frame(width: bracket.width, height: bracket.height)
-                .position(x: bracket.midX, y: bracket.midY)
-
             // Arrow — endpoints picked from the actual callout
             // rect (which the overlay may have shifted to avoid
             // overlap), not from the anchor's edge. Falls back
@@ -435,8 +464,6 @@ private struct AnnotationView: View {
         }
         .allowsHitTesting(false)
     }
-
-    @State private var currentSize: CGSize? = nil
 
     private var calloutBody: some View {
         VStack(alignment: .leading, spacing: 6) {
