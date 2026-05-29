@@ -132,7 +132,7 @@ struct ContentView: View {
         ZStack {
             switch mode {
             case .open:
-                OpenStarterView(state: state)
+                OpenStarterView(state: state, mode: $mode)
             case .view:
                 HStack(spacing: 0) {
                     VStack(spacing: 0) {

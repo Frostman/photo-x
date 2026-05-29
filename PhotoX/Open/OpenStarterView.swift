@@ -15,6 +15,10 @@ import AppKit
 @MainActor
 struct OpenStarterView: View {
     @Bindable var state: ViewerState
+    /// Workspace-mode binding so clicking a row for the
+    /// already-loaded shoot can short-circuit the reload and
+    /// just hop the tab to View.
+    @Binding var mode: WorkspaceMode
     @State private var recents = RecentShoots.shared
     @State private var favorites = FavoriteShoots.shared
     /// Auto-detects mounted SD / CFExpress cards with DCIM shoots.
@@ -365,11 +369,24 @@ struct OpenStarterView: View {
     private func openWithPanel() {
         Task {
             guard let (shoot, focus) = OpenPanelCoordinator.runShootPicker() else { return }
+            // Picked the shoot that's already loaded? Skip
+            // the costly teardown + rescan; just hop to View.
+            if state.shoot?.folderURL.path == shoot.folderURL.path {
+                mode = .view
+                return
+            }
             await state.loadShoot(shoot, focus: focus)
         }
     }
 
     private func openPath(_ path: String) {
+        // Clicking the row for the already-loaded shoot
+        // should just jump back to the photo, not wipe and
+        // reload it.
+        if state.shoot?.folderURL.path == path {
+            mode = .view
+            return
+        }
         Task {
             let url = URL(fileURLWithPath: path)
             var isDir: ObjCBool = false
