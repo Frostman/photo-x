@@ -101,6 +101,12 @@ struct ExportPaneView: View {
             .disabled(!canRun || runner.isRunning)
         }
         .padding(16)
+        // Anchored on the whole footer (rather than the Export-all
+        // button) so the .top callout centres above the window
+        // instead of above the right-edge button — the latter
+        // overflows the window because Export mode has no canvas
+        // anchor for the overlay's clamp logic to fall back on.
+        .helpAnchor(.exportRun)
     }
 
     // MARK: content
@@ -129,6 +135,7 @@ struct ExportPaneView: View {
             .help("Saves I/O on slow source media (SD cards) when running 'Export all'. Has no effect when running destinations individually.")
             .disabled(runner.isRunning)
         }
+        .helpAnchor(.exportProject)
     }
 
     private var destinationsSection: some View {
@@ -145,6 +152,7 @@ struct ExportPaneView: View {
                 .buttonStyle(.bordered)
                 .controlSize(.small)
                 .disabled(runner.isRunning)
+                .helpAnchor(.exportDestinations)
             }
 
             if settings.destinations.isEmpty {

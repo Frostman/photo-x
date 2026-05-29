@@ -24,6 +24,19 @@ enum HelpAnchorID: String, CaseIterable, Hashable, Sendable {
     /// Segmented View | Export picker in the toolbar.
     /// Only present once a shoot is loaded.
     case workspaceMode
+
+    // MARK: Export pane
+
+    /// Project name field + read-once-write-many toggle in the
+    /// export pane. Only published while `mode == .export`.
+    case exportProject
+    /// Destinations section header (Add destination button + the
+    /// destinations list). Only published while `mode == .export`.
+    case exportDestinations
+    /// Footer cluster in the export pane: aggregate progress (when
+    /// running), Cancel all, and the Export all button. Only
+    /// published while `mode == .export`.
+    case exportRun
 }
 
 /// Shared store the annotated help overlay reads from. Frames

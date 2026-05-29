@@ -99,6 +99,23 @@ private let helpAnnotations: [HelpAnnotation] = [
           message: "Switch between viewing the shoot and configuring the export. Switching is free — your export configuration and any in-progress run are preserved.",
           shortcuts: ["⌘1 View", "⌘2 Export"],
           labelEdge: .bottom),
+
+    // Export-pane callouts. Only published while `mode == .export`,
+    // so the View-mode overlay is unaffected.
+    .init(id: .exportProject, title: "Project name",
+          message: "The subfolder name PhotoX creates under each destination — files land at <destination>/<project name>/. The toggle below makes 'Export all' read each source file once and write it to every destination in parallel, saving I/O on slow source media (SD cards).",
+          shortcuts: [],
+          labelEdge: .bottom),
+
+    .init(id: .exportDestinations, title: "Destinations",
+          message: "Add one or more folders to export to. Each row gets its own run/cancel/remove controls and a 'remove orphans' toggle that deletes files at the destination whose stem isn't in the filtered selection. Drag rows to reorder.",
+          shortcuts: [],
+          labelEdge: .leading),
+
+    .init(id: .exportRun, title: "Export all",
+          message: "Kicks off the export to every destination at once (Return). Aggregate progress + ETA appear in the footer while running, and on the Export tab in the toolbar so you can switch back to the viewer without losing sight of it.",
+          shortcuts: ["↩ run"],
+          labelEdge: .top),
 ]
 
 /// The annotated help layer. Sits inside `ContentView`'s
