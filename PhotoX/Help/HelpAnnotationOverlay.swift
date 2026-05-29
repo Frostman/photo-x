@@ -44,8 +44,8 @@ private let helpAnnotations: [HelpAnnotation] = [
     // above would push the long shortcut list under the
     // toolbar / off the top of the window.
     .init(id: .canvas, title: "Image canvas",
-          message: "The displayed frame. Pinch / ⌘+scroll to zoom; drag to pan. Toggle overlays for the AF box, clipping zebra, and focus peaking.",
-          shortcuts: ["⌘0 fit", "double-click 1:1",
+          message: "The displayed frame. Pinch / ⌘+scroll to zoom; drag to pan. Toggle overlays for the AF box, clipping zebra (magenta = blown highlights, blue = crushed shadows), and focus peaking (orange tint over in-focus edges).",
+          shortcuts: ["⌘0 fit", "double-click 100% (native)",
                       "X swap to RAW", "⇧X cycle decoder",
                       "A AF overlay", "C clipping", "F focus peaking"],
           // Centred INSIDE the canvas — keeps the callout off
@@ -57,17 +57,19 @@ private let helpAnnotations: [HelpAnnotation] = [
     .init(id: .filmstrip, title: "Filmstrip",
           message: "All frames in the shoot. Click a thumb to jump. A thin colored bracket drawn on top of consecutive thumbnails marks a burst (frames the camera shot back-to-back in continuous mode). The corner badge on each thumb shows its rating + color label.",
           shortcuts: ["← / →", "⌥ ← / → skip 10", "⌘ ← / → jump burst",
-                      "[ / ] previous / next unrated", "J jump to entry"],
+                      "[ / ] previous / next unrated", "J jump to entry",
+                      "Home / End (or fn+← / fn+→) first / last"],
           labelEdge: .top),
 
     // No umbrella `.sidebar` annotation — the four sub-panels
     // below cover everything visible inside the sidebar.
     .init(id: .decisions, title: "Decisions",
-          message: "Rate, label, and reject the displayed frame. All changes write to a Lightroom-compatible XMP sidecar next to the original.",
+          message: "Rate, label, and reject the displayed frame. All changes write to a Lightroom- and Photomator-compatible XMP sidecar next to the original.",
           shortcuts: ["1–5 stars", "0 clear", "R reject",
                       "⇧1–5 color label",
                       "G burst-reject siblings",
-                      "⌘Z / ⌘⇧Z undo / redo"],
+                      "⌘Z undo",
+                      "⌘⇧Z redo"],
           labelEdge: .leading),
 
     .init(id: .histogram, title: "Histogram",
@@ -96,8 +98,8 @@ private let helpAnnotations: [HelpAnnotation] = [
           labelEdge: .top),
 
     .init(id: .workspaceMode, title: "Workspace",
-          message: "Switch between viewing the shoot and configuring the export. Switching is free — your export configuration and any in-progress run are preserved.",
-          shortcuts: ["⌘1 View", "⌘2 Export"],
+          message: "Switch between picking a folder (Open), viewing the shoot (View), and configuring the export (Export). Switching is free — your export configuration and any in-progress run are preserved.",
+          shortcuts: ["⌘1 Open", "⌘2 View", "⌘3 Export"],
           labelEdge: .bottom),
 
     // Export-pane callouts. Only published while `mode == .export`,

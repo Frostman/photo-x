@@ -37,7 +37,7 @@ struct HelpOverlay: View {
             .init(keys: "⌘ ← / →", label: "Jump to previous / next burst (singletons count as 1-frame bursts)"),
             .init(keys: "[ / ]", label: "Jump to previous / next unrated image"),
             .init(keys: "J", label: "Jump to entry by index or stem name (sheet with completion)"),
-            .init(keys: "Home / End", label: "Jump to first / last pair"),
+            .init(keys: "Home / End (or fn+← / fn+→)", label: "Jump to first / last pair"),
         ]),
         ("View", [
             .init(keys: "⌘0", label: "Fit to window"),
@@ -55,6 +55,11 @@ struct HelpOverlay: View {
         ("Files", [
             .init(keys: "⌘O", label: "Open folder (ARW + HIF/JPG pairs or standalone HIF/JPG files)"),
             .init(keys: "Drag & drop", label: "Open files or folder"),
+        ]),
+        ("Workspace", [
+            .init(keys: "⌘1", label: "Switch to Open (pick a folder, manage favorites + recents)"),
+            .init(keys: "⌘2", label: "Switch to View (current shoot)"),
+            .init(keys: "⌘3", label: "Switch to Export (project + destinations)"),
         ]),
         ("Help", [
             .init(keys: "?", label: "Show / hide this help"),

@@ -81,7 +81,7 @@ let workspaceTabs: [WorkspaceTabConfig] = [
           // Open tab is always available — it's where the
           // user picks a folder to load.
           requiresShoot: false,
-          helpVersion: 1),
+          helpVersion: 2),
     .init(mode: .view,
           title: "View",
           icon: "photo.stack",
@@ -90,7 +90,7 @@ let workspaceTabs: [WorkspaceTabConfig] = [
           // The starter screen has moved to the Open tab,
           // so View only makes sense with a loaded shoot.
           requiresShoot: true,
-          helpVersion: 1),
+          helpVersion: 2),
     .init(mode: .export,
           title: "Export",
           icon: "arrow.up.doc.fill",
@@ -102,7 +102,7 @@ let workspaceTabs: [WorkspaceTabConfig] = [
           shortcut: "3",
           // Nothing to export without a loaded shoot.
           requiresShoot: true,
-          helpVersion: 1),
+          helpVersion: 2),
 ]
 
 /// Lookup helper — kept tight so call sites don't open-code
