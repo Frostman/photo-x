@@ -36,8 +36,25 @@ private struct ModeWiring: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .onChange(of: mode) { _, newMode in
-                focus.wrappedValue = workspaceTab(for: newMode).defaultFocus
+            .onChange(of: mode, initial: true) { _, newMode in
+                let tab = workspaceTab(for: newMode)
+                focus.wrappedValue = tab.defaultFocus
+                // Auto-show the annotated help overlay if
+                // this tab has been updated since the user
+                // last visited it. Recording lastSeen at
+                // show-time (rather than dismiss-time) means
+                // the user only sees the auto-show once per
+                // bump per tab even if they immediately
+                // dismiss — and they can still re-open with
+                // `?` at any time.
+                let key = SettingsKey.helpLastSeen(for: newMode)
+                let lastSeen = AppDefaults.shared.integer(forKey: key)
+                if tab.helpVersion > lastSeen, !showAnnotationHelp {
+                    withAnimation(.easeInOut(duration: 0.12)) {
+                        showAnnotationHelp = true
+                    }
+                    AppDefaults.shared.set(tab.helpVersion, forKey: key)
+                }
             }
             .onChange(of: shootMissing) { _, gone in
                 if gone {
@@ -217,7 +234,9 @@ struct ContentView: View {
         .focusEffectDisabled()
         .focused($focus, equals: .canvas)
         .onAppear {
-            focus = .canvas
+            // ModeWiring's `onChange(of: mode, initial: true)`
+            // sets focus to the launch tab's defaultFocus on
+            // mount — no separate canvas focus init needed.
             installKeyMonitor()
         }
         .onDisappear {

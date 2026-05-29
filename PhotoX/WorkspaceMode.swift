@@ -61,6 +61,13 @@ struct WorkspaceTabConfig: Identifiable {
     /// the close-shoot fallback from a single place instead
     /// of bespoke per-tab checks in `ModeWiring`.
     let requiresShoot: Bool
+    /// Help-overlay revision number. Bump when the tab's
+    /// annotation set materially changes (new callouts,
+    /// rewrites, etc.) so users see the updated overlay
+    /// automatically the next time they visit this tab.
+    /// Capped at once per bump per tab via a last-seen value
+    /// in AppDefaults (`SettingsKey.helpLastSeen(for:)`).
+    let helpVersion: Int
 
     var id: WorkspaceMode { mode }
 }
@@ -73,7 +80,8 @@ let workspaceTabs: [WorkspaceTabConfig] = [
           shortcut: "1",
           // Open tab is always available — it's where the
           // user picks a folder to load.
-          requiresShoot: false),
+          requiresShoot: false,
+          helpVersion: 1),
     .init(mode: .view,
           title: "View",
           icon: "photo.stack",
@@ -81,7 +89,8 @@ let workspaceTabs: [WorkspaceTabConfig] = [
           shortcut: "2",
           // The starter screen has moved to the Open tab,
           // so View only makes sense with a loaded shoot.
-          requiresShoot: true),
+          requiresShoot: true,
+          helpVersion: 1),
     .init(mode: .export,
           title: "Export",
           icon: "arrow.up.doc.fill",
@@ -92,7 +101,8 @@ let workspaceTabs: [WorkspaceTabConfig] = [
           defaultFocus: nil,
           shortcut: "3",
           // Nothing to export without a loaded shoot.
-          requiresShoot: true),
+          requiresShoot: true,
+          helpVersion: 1),
 ]
 
 /// Lookup helper — kept tight so call sites don't open-code

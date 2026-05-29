@@ -66,6 +66,15 @@ enum SettingsKey {
     /// (or an uninstall).
     static let telemetryAnonymousID = "settings.telemetryAnonymousID"
 
+    /// Per-tab last-seen help-overlay version. The auto-show
+    /// logic in `ModeWiring` triggers when a tab's declared
+    /// `helpVersion` exceeds this stored value. Defaults to
+    /// `0` for any tab the user has never visited (so the
+    /// first ship of any tab — `helpVersion: 1` — auto-shows).
+    static func helpLastSeen(for mode: WorkspaceMode) -> String {
+        "help.lastSeenVersion.\(mode.rawValue)"
+    }
+
     enum Defaults {
         static let appearance = AppearanceMode.system.rawValue
         static let sidebarVisible = true
