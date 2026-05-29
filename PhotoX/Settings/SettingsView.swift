@@ -90,6 +90,17 @@ enum SettingsKey {
     /// toggle must be per-bundle. Default off.
     static let cardWatcherEnabled = "settings.cardWatcherEnabled"
 
+    /// One-shot flag — true once the card-watcher
+    /// onboarding alert has been shown (independent of the
+    /// user's choice). **Stored in `LocalAppDefaults.shared`**
+    /// so dev and prod each prompt their first eligible
+    /// launch; setting the flag in either build doesn't
+    /// suppress the prompt in the other.
+    static let onboardingCardWatcherPromoShown = "onboarding.cardWatcher.shown"
+
+    /// Same shape for the usage-stats opt-in promo.
+    static let onboardingTelemetryPromoShown = "onboarding.telemetry.shown"
+
     enum Defaults {
         static let appearance = AppearanceMode.system.rawValue
         static let sidebarVisible = true

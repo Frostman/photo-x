@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import ServiceManagement
 import UserNotifications
 
 /// Launch-arg helpers. XCUITest passes argv via
@@ -209,7 +210,13 @@ struct PhotoXApp: App {
         Task.detached(priority: .background) {
             let status = await CardWatcherSupervisor.bootstrapAtLaunch()
             await MainActor.run {
+                // Order matters: a broken watcher's "needs
+                // attention" alert outranks any promo. Only
+                // one promo per launch, so the user never
+                // sees two stacked modal alerts on a cold
+                // start.
                 presentCardWatcherAlertIfNeeded(status: status)
+                presentOnboardingPromosIfNeeded()
             }
         }
 
@@ -324,6 +331,93 @@ private func presentCardWatcherAlertIfNeeded(status: CardWatcherSupervisor.LiveS
        let url = URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension") {
         NSWorkspace.shared.open(url)
     }
+}
+
+/// One-shot onboarding alerts that surface PhotoX's two
+/// opt-in features (card watcher and usage stats). Each
+/// promo shows at most once per bundle (per-bundle "shown"
+/// flags in `LocalAppDefaults` so dev and prod prompt
+/// independently). At most one promo per launch — stacking
+/// two modal alerts on a cold start is rude.
+@MainActor
+private func presentOnboardingPromosIfNeeded() {
+    // E2E test runs skip every first-launch UX so the
+    // suite doesn't have to dismiss prompts.
+    guard !LaunchFlags.uiTestMode else { return }
+
+    if !LocalAppDefaults.shared.bool(forKey: SettingsKey.onboardingCardWatcherPromoShown) {
+        // Skip the prompt (but still mark it shown) if the
+        // user already enabled it some other way — Settings
+        // toggle, defaults write, etc.
+        if !LocalAppDefaults.shared.bool(forKey: SettingsKey.cardWatcherEnabled) {
+            runCardWatcherPromo()
+        }
+        LocalAppDefaults.shared.set(true, forKey: SettingsKey.onboardingCardWatcherPromoShown)
+        return
+    }
+
+    if !LocalAppDefaults.shared.bool(forKey: SettingsKey.onboardingTelemetryPromoShown) {
+        if !AppDefaults.shared.bool(forKey: SettingsKey.telemetryEnabled) {
+            runTelemetryPromo()
+        }
+        LocalAppDefaults.shared.set(true, forKey: SettingsKey.onboardingTelemetryPromoShown)
+    }
+}
+
+/// Card-watcher opt-in alert. Advertises the
+/// notification-on-card-mount UX and the helper's
+/// ultra-light footprint. On Enable: flip the per-bundle
+/// `cardWatcherEnabled` flag AND call
+/// `SMAppService.agent(...).register()` directly so the
+/// helper starts immediately without the user having to
+/// open Settings.
+@MainActor
+private func runCardWatcherPromo() {
+    let alert = NSAlert()
+    alert.messageText = "Watch for camera cards in the background?"
+    alert.informativeText = """
+    PhotoX can post a notification the moment you insert an SD or CFExpress card with PhotoX shoots on it — click the banner and the shoot opens straight in the current window.
+
+    The helper is ultra-light: it observes the macOS mount event only — no polling, no directory scans — so it idles at 0% CPU and a few MB RAM. You can disable it any time in Settings → Card watcher, or under System Settings → Login Items.
+    """
+    alert.alertStyle = .informational
+    alert.addButton(withTitle: "Enable")        // alertFirstButtonReturn
+    alert.addButton(withTitle: "Maybe later")   // alertSecondButtonReturn
+
+    guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+    LocalAppDefaults.shared.set(true, forKey: SettingsKey.cardWatcherEnabled)
+    do {
+        try SMAppService.agent(plistName: CardWatcherSupervisor.plistName).register()
+    } catch {
+        // Best-effort — the user can still flip the toggle
+        // from Settings, which surfaces a more detailed
+        // error path. No second alert here.
+    }
+}
+
+/// Usage-stats opt-in alert. Explicit about being optional
+/// and that the stats are always collected locally
+/// (visible via Window → Usage Stats…) regardless of this
+/// toggle — only the upload is gated. Telemetry is a
+/// cross-bundle setting, so the flag goes into
+/// `AppDefaults.shared` (not LocalAppDefaults — only the
+/// promo-shown flag is per-bundle).
+@MainActor
+private func runTelemetryPromo() {
+    let alert = NSAlert()
+    alert.messageText = "Send anonymous usage stats?"
+    alert.informativeText = """
+    Totally optional, and totally fine to leave off — PhotoX always tracks the same counters locally and you can review them any time via Window → Usage Stats…
+
+    If you opt in, PhotoX uploads just those integer counters (app opens, photos seen, ratings/labels set, shoots opened, exports run) plus a random anonymous ID to a hosted PostHog instance. No filenames, photos, paths, ratings values, or EXIF ever leave your device. You can flip this off again in Settings → Privacy at any time.
+    """
+    alert.alertStyle = .informational
+    alert.addButton(withTitle: "Enable")    // alertFirstButtonReturn
+    alert.addButton(withTitle: "No thanks") // alertSecondButtonReturn
+
+    guard alert.runModal() == .alertFirstButtonReturn else { return }
+    AppDefaults.shared.set(true, forKey: SettingsKey.telemetryEnabled)
 }
 
 /// Broadcast right before the app quits. ViewerState listens (via
