@@ -19,6 +19,14 @@ enum LaunchFlags {
 @main
 struct PhotoXApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    /// Single instance across the whole app. PhotoX is a single-window
+    /// application today — see the comment in
+    /// `AppDelegate.applicationWillFinishLaunching` about why AppKit's
+    /// automatic window tabbing is disabled. Lifting this requires
+    /// moving `viewerState` *inside* the `WindowGroup` body closure
+    /// (so SwiftUI gives each new window its own instance) and
+    /// retrofitting `ExportRunner` + `AppDelegate` + Sparkle's
+    /// shoot-URL provider for multi-instance coordination.
     @State private var viewerState = ViewerState()
     @State private var recents = RecentShoots.shared
     /// Build the Sparkle updater unless E2E tests disabled it via
@@ -363,6 +371,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
     /// Must run before any window is created → applicationWillFinishLaunching.
     func applicationWillFinishLaunching(_ notification: Notification) {
         UserDefaults.standard.set("None", forKey: "AppleActionOnDoubleClick")
+        // PhotoX is single-window today (ViewerState + ExportRunner +
+        // this AppDelegate's weak ref all assume one viewer at a time).
+        // Opting out of AppKit's automatic window tabbing hides the
+        // "Show Tab Bar" / "Merge All Windows" / "Move Tab to New
+        // Window" Window-menu items that would otherwise expose a tab
+        // bar that has no useful second tab to populate. Re-evaluate
+        // when multi-window support lands; see the note on
+        // `PhotoXApp.viewerState`.
+        NSWindow.allowsAutomaticWindowTabbing = false
     }
 
     /// Maximize the main window to the screen's visible frame on first launch.
