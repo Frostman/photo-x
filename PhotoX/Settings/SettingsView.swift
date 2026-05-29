@@ -292,6 +292,9 @@ struct SettingsView: View {
                     Text("Max cache size: \(indexerCacheMaxSizeGB) GB")
                 }
                 HStack {
+                    Text("Current size: \(Self.formatBytes(Int(advancedStats.indexerCacheBytes)))")
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
                     Spacer()
                     Button("Clear all caches") {
                         IndexerCache.deleteAllCaches()
@@ -406,6 +409,11 @@ struct SettingsView: View {
         var thumbnailCount: Int = 0
         var thumbnailMeanBytes: Int = 0
         var histogramCount: Int = 0
+        /// Sum of every `.plist` under the on-disk indexer
+        /// cache root. Populated off-main by
+        /// `refreshAdvancedStats` so the directory walk
+        /// never stalls the Settings UI.
+        var indexerCacheBytes: Int64 = 0
     }
 
     /// Fixed per-histogram footprint: 256 bins × 3 channels × Int.
@@ -567,6 +575,12 @@ struct SettingsView: View {
             return total / thumbCount
         }()
         let histCount = state.entryHistograms.count
+        // Cheap (a few-KB plist per shoot, low hundreds of
+        // entries even on power users) so staying on
+        // MainActor here is fine — `totalSize()` itself is
+        // MainActor-isolated because `rootDirectory` reads
+        // a static override slot.
+        let indexerBytes = IndexerCache.totalSize()
         advancedStats = AdvancedCacheStats(
             textureCount: tex.count,
             textureMeanBytes: tex.meanTextureBytes,
@@ -575,7 +589,8 @@ struct SettingsView: View {
             previewBytesUsed: prevBytes,
             thumbnailCount: thumbCount,
             thumbnailMeanBytes: thumbMean,
-            histogramCount: histCount
+            histogramCount: histCount,
+            indexerCacheBytes: indexerBytes
         )
     }
 
