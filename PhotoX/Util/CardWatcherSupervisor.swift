@@ -272,10 +272,28 @@ enum CardWatcherSupervisor {
         } catch {
             log.error("recovery: register failed: \(error.localizedDescription, privacy: .public)")
         }
-        // Small settling delay so launchd processes the new
-        // registration before we try to start the job.
-        try? await Task.sleep(for: .milliseconds(300))
-        await kickstartAndVerify(allowRecovery: false)
+        // The freshly-registered LaunchAgent has
+        // RunAtLoad=true in its plist, so launchd
+        // auto-attempts a spawn without us asking. We
+        // deliberately do NOT issue another `kickstart -k`
+        // here — when BTM/LWCR is the actual root cause, the
+        // second kickstart blocks for ~20 s before returning
+        // exit 0 (the user-visible "why does it take 20 s to
+        // figure out a Login-Items flip is needed" lag).
+        // Just wait briefly and read the result via
+        // launchctl print.
+        try? await Task.sleep(for: .milliseconds(500))
+        let state = await launchdLiveStatus()
+        switch state {
+        case .running(let pid):
+            log.info("post-recovery helper pid=\(pid, privacy: .public)")
+        case .spawnFailed(let code):
+            log.error("post-recovery: spawn failed with exit \(code, privacy: .public) — BTM/LWCR mismatch; user must reset via Login Items")
+        case .registeredNotRunning:
+            log.error("post-recovery: helper STILL not running, giving up")
+        case .notRegistered, .requiresApproval, .unknown:
+            log.warning("post-recovery: unexpected status \(state.description, privacy: .public)")
+        }
     }
 
     // MARK: - launchd state parsing
