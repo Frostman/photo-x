@@ -47,9 +47,10 @@ struct WorkspaceTabConfig: Identifiable {
     /// SF Symbol shown on the tab segment.
     let icon: String
     /// Where to send keyboard focus when this tab becomes
-    /// active. The shared FocusState transition is what
-    /// keeps keybindings alive across tab switches.
-    let defaultFocus: WorkspaceFocus
+    /// active. `nil` means "no focus on entry" — user input
+    /// fields stay un-focused until the user explicitly
+    /// engages them (e.g., presses Tab on the Export tab).
+    let defaultFocus: WorkspaceFocus?
     /// `⌘<key>` menu shortcut.
     let shortcut: KeyEquivalent
 
@@ -65,7 +66,11 @@ let workspaceTabs: [WorkspaceTabConfig] = [
     .init(mode: .export,
           title: "Export",
           icon: "arrow.up.doc.fill",
-          defaultFocus: .exportProjectName,
+          // Export pane opens with no field focused — pressing
+          // Tab focuses the project-name TextField. Avoids the
+          // accidental capture of typed shortcuts (digits,
+          // letters) the moment a user lands on the Export tab.
+          defaultFocus: nil,
           shortcut: "2"),
 ]
 

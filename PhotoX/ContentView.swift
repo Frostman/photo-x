@@ -1069,19 +1069,28 @@ struct ContentView: View {
             return nil
         }
 
-        // 4. Beyond this, only the View tab gets keybindings,
+        // 4. Tab on the Export tab focuses the project-name
+        //    field. Export's default focus is `nil` so the
+        //    user can browse the pane without keys being
+        //    captured by the field; Tab is the explicit opt-in.
+        if event.keyCode == 48, mods.isEmpty, mode == .export {  // kVK_Tab
+            focus = .exportProjectName
+            return nil
+        }
+
+        // 5. Beyond this, only the View tab gets keybindings,
         //    and only with a shoot loaded + no modal overlay
         //    up. JumpToView eats its own keys via its TextField.
         guard mode == .view,
               !showJumpSheet,
               state.shoot != nil else { return event }
 
-        // 5. Cmd-modified arrows are ours (burst nav). Other
+        // 6. Cmd-modified arrows are ours (burst nav). Other
         //    Cmd combos belong to menus — don't intercept.
         let isArrow = (event.keyCode == 123 || event.keyCode == 124)
         if mods.contains(.command) && !isArrow { return event }
 
-        // 6. Special keys by keyCode (arrows, home, end).
+        // 7. Special keys by keyCode (arrows, home, end).
         switch event.keyCode {
         case 123:  // LeftArrow
             PerfTracker.begin("← key")
@@ -1127,7 +1136,7 @@ struct ContentView: View {
             break
         }
 
-        // 7. Character keys. `event.characters` is the typed
+        // 8. Character keys. `event.characters` is the typed
         //    character (Shift+1 → "!", etc.) so we match both
         //    base and shifted forms for each binding.
         switch chars {
