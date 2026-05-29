@@ -55,7 +55,7 @@ private let helpAnnotations: [HelpAnnotation] = [
           labelEdge: .insideCenter),
 
     .init(id: .filmstrip, title: "Filmstrip",
-          message: "All frames in the shoot. Click a thumb to jump. Colored brackets group bursts; the corner badge shows the rating + color label.",
+          message: "All frames in the shoot. Click a thumb to jump. A thin colored bracket drawn on top of consecutive thumbnails marks a burst (frames the camera shot back-to-back in continuous mode). The corner badge on each thumb shows its rating + color label.",
           shortcuts: ["← / →", "⌥ ← / → skip 10", "⌘ ← / → jump burst",
                       "[ / ] previous / next unrated", "J jump to entry"],
           labelEdge: .top),
@@ -90,18 +90,8 @@ private let helpAnnotations: [HelpAnnotation] = [
           shortcuts: [],
           labelEdge: .top),
 
-    .init(id: .sortMenu, title: "Sort order",
-          message: "Sort the shoot by filename (default) or rating. Filmstrip order follows.",
-          shortcuts: [],
-          labelEdge: .top),
-
-    .init(id: .collapseBursts, title: "Collapse bursts",
-          message: "Hide all but the first frame of each burst in the filmstrip. The burst you're currently inside stays expanded so you can still navigate within it.",
-          shortcuts: [],
-          labelEdge: .top),
-
-    .init(id: .filters, title: "Filters",
-          message: "Show or hide frames by rating, reject, or unrated state. Filmstrip + ←/→ navigation skip anything hidden. The count beside each chip on the left tracks the full shoot, not the filtered view.",
+    .init(id: .viewControls, title: "View controls",
+          message: "Sort order (filename / rating), collapse bursts (one frame per burst in the filmstrip), and per-rating filters (show/hide stars, reject, unrated). The count chips on the left always reflect the full shoot — filters only affect what's shown.",
           shortcuts: [],
           labelEdge: .top),
 ]

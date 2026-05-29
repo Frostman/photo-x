@@ -14,9 +14,13 @@ enum HelpAnchorID: String, CaseIterable, Hashable, Sendable {
     case exif
     case autofocus
     case indexerChip
-    case sortMenu
-    case collapseBursts
-    case filters
+    /// Cluster of the three view-control widgets in the
+    /// status bar — sort menu, collapse-bursts toggle, and
+    /// the star/reject/unrated filter toggles. Annotated as
+    /// one block instead of three so the callouts don't
+    /// stack on top of each other in a narrow vertical
+    /// gutter above the status bar.
+    case viewControls
 }
 
 /// Shared store the annotated help overlay reads from. Frames

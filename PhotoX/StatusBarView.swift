@@ -16,10 +16,18 @@ struct StatusBarView: View {
             stats
             Spacer()
             indexingChip
-            sortMenu
-            collapseBurstsButton
-            Divider().frame(height: 18)
-            toggles
+            // sortMenu + collapse-bursts + filter toggles get a
+            // single bracket in the annotated help overlay (see
+            // `.viewControls` HelpAnchorID) — they're all
+            // controlling what the filmstrip shows, and one
+            // wider callout reads better than three stacked.
+            HStack(spacing: 4) {
+                sortMenu
+                collapseBurstsButton
+                Divider().frame(height: 18)
+                toggles
+            }
+            .helpAnchor(.viewControls)
         }
         .padding(.horizontal, 12)
         .frame(height: Self.height)
@@ -133,7 +141,6 @@ struct StatusBarView: View {
               ? "Collapse bursts in filmstrip (\(effective ? "on" : "off")) — the burst you're inside stays expanded"
               : "Collapse bursts disabled while indexing — burst membership is still being detected")
         .accessibilityIdentifier("statusbar.collapseBursts")
-        .helpAnchor(.collapseBursts)
         .opacity(availableForSort ? 1 : 0)
         .disabled(!available)
         .allowsHitTesting(available)
@@ -156,7 +163,6 @@ struct StatusBarView: View {
         .menuStyle(.borderlessButton)
         .fixedSize()
         .help("Sort order for the filmstrip and ←/→ navigation")
-        .helpAnchor(.sortMenu)
     }
 
     private func label(for mode: SortMode) -> String {
@@ -234,7 +240,6 @@ struct StatusBarView: View {
         }
         .toggleStyle(.button)
         .controlSize(.small)
-        .helpAnchor(.filters)
     }
 
     /// Binding that maps `Set<Int>` membership for a given star count to a Bool
