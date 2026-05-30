@@ -31,6 +31,13 @@ enum SettingsKey {
     /// "all" (every other member of the burst).
     static let gRejectScope = "settings.gRejectScope"
 
+    /// Bool — default false. When true, skip the
+    /// "destination already contains files" confirmation
+    /// that otherwise fires on Export all / per-row Run for
+    /// any destination whose `<dest>/<projectName>/`
+    /// subfolder is non-empty.
+    static let skipDestinationNotEmptyConfirm = "settings.skipDestinationNotEmptyConfirm"
+
     // Advanced — caches & prefetch. All three are read at startup
     // by the cache singletons + the prefetch path, AND live-applied
     // from SettingsView via setCapacity / setByteCapacity.
@@ -113,6 +120,7 @@ enum SettingsKey {
         static let showCanvasLoadingIndicator = false
         static let collapseBursts = false
         static let gRejectScope = "unrated"
+        static let skipDestinationNotEmptyConfirm = false
         static let textureCacheCapacity = 32
         static let previewBytesCacheMB  = 2048    // 2 GB
         static let prefetchRadius       = 1
@@ -193,6 +201,7 @@ struct SettingsView: View {
     @AppStorage(SettingsKey.defaultFolderPath,  store: AppDefaults.shared) private var defaultFolderPath   = SettingsKey.Defaults.defaultFolderPath
     @AppStorage(SettingsKey.showCanvasLoadingIndicator, store: AppDefaults.shared) private var showCanvasLoadingIndicator = SettingsKey.Defaults.showCanvasLoadingIndicator
     @AppStorage(SettingsKey.gRejectScope,       store: AppDefaults.shared) private var gRejectScopeRaw     = SettingsKey.Defaults.gRejectScope
+    @AppStorage(SettingsKey.skipDestinationNotEmptyConfirm, store: AppDefaults.shared) private var skipDestinationNotEmptyConfirm = SettingsKey.Defaults.skipDestinationNotEmptyConfirm
     @AppStorage(SettingsKey.textureCacheCapacity, store: AppDefaults.shared) private var textureCacheCapacity = SettingsKey.Defaults.textureCacheCapacity
     @AppStorage(SettingsKey.previewBytesCacheMB,  store: AppDefaults.shared) private var previewBytesCacheMB  = SettingsKey.Defaults.previewBytesCacheMB
     @AppStorage(SettingsKey.prefetchRadius,       store: AppDefaults.shared) private var prefetchRadius       = SettingsKey.Defaults.prefetchRadius
@@ -272,6 +281,8 @@ struct SettingsView: View {
                 }
                 .pickerStyle(.menu)
                 .help("Behaviour of the G shortcut when you're inside a burst. \"Only unrated\" keeps your earlier ratings; \"All other\" rejects every member except the one you're on.")
+                Toggle("Skip \"destination already contains files\" confirmation", isOn: $skipDestinationNotEmptyConfirm)
+                    .help("When enabled, Export all / Run will start immediately even if the project subfolder at any destination already has files from a prior export. Off by default so accidental re-exports surface as a confirmable warning.")
             }
 
             Section("Default folder") {
