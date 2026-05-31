@@ -652,6 +652,18 @@
         type="application/octet-stream"
         sparkle:edSignature="MHKZ/lJeX552SXdTasD1qR60RXMfsR7a/Nu2HNbff6PLDlTCQL8cVRbCdxD/+21o3oktPIfFnoHcvU0NV/IiBA==" length="12352157" />
     </item>
+    <item>
+      <title>v0.343.0-afc30421e</title>
+      <pubDate>Sat, 30 May 2026 19:32:35 -0700</pubDate>
+      <sparkle:version>343</sparkle:version>
+      <sparkle:shortVersionString>0.343.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[<ul><li>Labels: never auto-advance, regardless of the setting</li><li>Shortcuts: layout-independent key resolution via UCKeyTranslate</li></ul>]]></description>
+      <enclosure
+        url="https://github.com/Frostman/photo-x/releases/download/v0.343.0/PhotoX-v0.343.0-afc30421e.dmg"
+        type="application/octet-stream"
+        sparkle:edSignature="CbomeJSPPOolJaC4awhLLkE/OpJHzRX7azFXWY+TB0fj/64BhhkLWshO/NM7RURVhEKQxARbDcVo548GpHZpAw==" length="12354638" />
+    </item>
     <!-- scripts/release.sh splices new <item> entries here, just before </channel>. -->
   </channel>
 </rss>
