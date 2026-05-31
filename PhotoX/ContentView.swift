@@ -734,7 +734,10 @@ struct ContentView: View {
         //    search field would otherwise eat the key.
         if NSApp.keyWindow?.firstResponder is NSText { return event }
 
-        let chars = event.characters ?? ""
+        // Resolve via the ASCII-capable layout so shortcuts fire regardless of the
+        // active input source (e.g. pressing physical R while Russian is selected
+        // still triggers "r"-bound shortcuts instead of producing "К").
+        let chars = ASCIIKeyboardLayout.characters(for: event)
         let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
 
         // 2. Esc dismisses help / annotated-help overlays.
