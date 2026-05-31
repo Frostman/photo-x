@@ -122,6 +122,147 @@ final class XMPSidecarTests: XCTestCase {
         XCTAssertEqual(XMPSidecarReader.read(for: pair)?.label, "Yellow")
     }
 
+    // MARK: applyIntent
+
+    func test_applyIntent_writesBothFieldsInOneCall() throws {
+        let pair = makePair("A")
+        let result = try XMPSidecarWriter.applyIntent(
+            .setBoth(rating: 4, label: "Blue"),
+            existingData: nil,
+            cachedMTime: nil,
+            for: pair
+        )
+        let xmp = XMPSidecarReader.read(for: pair)
+        XCTAssertEqual(xmp?.rating, 4)
+        XCTAssertEqual(xmp?.label, "Blue")
+        XCTAssertFalse(result.newData.isEmpty,
+                       "returned bytes must be the serialized XMP for the cache")
+    }
+
+    func test_applyIntent_skipsFieldsTheIntentDidNotTouch() throws {
+        let pair = makePair("A")
+        // Seed with rating + label.
+        _ = try XMPSidecarWriter.applyIntent(
+            .setBoth(rating: 3, label: "Green"),
+            existingData: nil, cachedMTime: nil, for: pair
+        )
+        // Apply an intent that only sets the rating — label must
+        // remain "Green" untouched.
+        _ = try XMPSidecarWriter.applyIntent(
+            .setRating(5),
+            existingData: nil, cachedMTime: nil, for: pair
+        )
+        let xmp = XMPSidecarReader.read(for: pair)
+        XCTAssertEqual(xmp?.rating, 5)
+        XCTAssertEqual(xmp?.label, "Green",
+                       "label untouched by the rating-only intent must survive")
+    }
+
+    func test_applyIntent_preservesForeignTags() throws {
+        // The cache-hit path must NOT drop foreign tags. Seed an XMP
+        // with a Lightroom-style keyword + CreatorTool, then apply
+        // a rating-only intent passing the seeded bytes as cache.
+        let pair = makePair("A")
+        let existing = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <x:xmpmeta xmlns:x="adobe:ns:meta/">
+          <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+            <rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/">
+              <xmp:Label>Yellow</xmp:Label>
+              <xmp:keyword>portrait</xmp:keyword>
+            </rdf:Description>
+          </rdf:RDF>
+        </x:xmpmeta>
+        """
+        try existing.write(to: xmpURL(for: pair), atomically: true, encoding: .utf8)
+
+        let seededData = try Data(contentsOf: xmpURL(for: pair))
+        let mtime = try xmpURL(for: pair)
+            .resourceValues(forKeys: [.contentModificationDateKey])
+            .contentModificationDate
+        _ = try XMPSidecarWriter.applyIntent(
+            .setRating(2),
+            existingData: seededData,
+            cachedMTime: mtime,
+            for: pair
+        )
+
+        let raw = try String(contentsOf: xmpURL(for: pair), encoding: .utf8)
+        XCTAssertTrue(raw.contains("<xmp:keyword>portrait</xmp:keyword>"),
+                      "Custom keyword must survive a rating-only applyIntent")
+        XCTAssertTrue(raw.contains("Yellow"),
+                      "Pre-existing label must survive")
+        XCTAssertEqual(XMPSidecarReader.read(for: pair)?.rating, 2)
+        XCTAssertEqual(XMPSidecarReader.read(for: pair)?.label, "Yellow")
+    }
+
+    func test_applyIntent_driftDetection_reReadsFromDisk() throws {
+        // The cache is keyed by mtime. If the file changed on disk
+        // since the cache was populated (another tool wrote it), the
+        // next applyIntent call must drop the cache and re-read so
+        // foreign mutations aren't silently lost.
+        let pair = makePair("A")
+        // First write — get a cache snapshot.
+        let first = try XMPSidecarWriter.applyIntent(
+            .setRating(3),
+            existingData: nil, cachedMTime: nil, for: pair
+        )
+        // Externally rewrite the file with a foreign tag the cache
+        // doesn't know about, bumping the mtime.
+        Thread.sleep(forTimeInterval: 0.05)
+        let external = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <x:xmpmeta xmlns:x="adobe:ns:meta/">
+          <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+            <rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/">
+              <xmp:Rating>3</xmp:Rating>
+              <xmp:keyword>landscape</xmp:keyword>
+            </rdf:Description>
+          </rdf:RDF>
+        </x:xmpmeta>
+        """
+        try external.write(to: xmpURL(for: pair), atomically: true, encoding: .utf8)
+
+        // Call applyIntent with the STALE cache from `first`. Drift
+        // detection should notice mtime mismatch, re-read disk, and
+        // preserve the foreign keyword.
+        _ = try XMPSidecarWriter.applyIntent(
+            .setRating(5),
+            existingData: first.newData,
+            cachedMTime: first.mtime,
+            for: pair
+        )
+        let raw = try String(contentsOf: xmpURL(for: pair), encoding: .utf8)
+        XCTAssertTrue(raw.contains("<xmp:keyword>landscape</xmp:keyword>"),
+                      "Drift detection must re-read disk so foreign keyword survives")
+        XCTAssertEqual(XMPSidecarReader.read(for: pair)?.rating, 5)
+    }
+
+    // MARK: SidecarIntent
+
+    func test_sidecarIntent_hasWork_falseWhenAllFieldsUnchanged() {
+        XCTAssertFalse(SidecarIntent().hasWork)
+        XCTAssertTrue(SidecarIntent.setRating(5).hasWork)
+        XCTAssertTrue(SidecarIntent.setRating(nil).hasWork,
+                      "clearing a field is still work")
+        XCTAssertTrue(SidecarIntent.setLabel("Red").hasWork)
+    }
+
+    func test_sidecarIntent_merge_otherSetFieldsWin() {
+        var a = SidecarIntent.setRating(3)
+        let b = SidecarIntent.setLabel("Red")
+        a.merge(b)
+        XCTAssertEqual(a.rating, .some(.some(3)),
+                       "self's rating untouched by other (other.rating == .none)")
+        XCTAssertEqual(a.label, .some(.some("Red")),
+                       "other's label fills in")
+
+        var c = SidecarIntent.setRating(2)
+        let d = SidecarIntent.setRating(5)
+        c.merge(d)
+        XCTAssertEqual(c.rating, .some(.some(5)), "other's set field overrides")
+    }
+
     func test_reader_nilForMissingFile() {
         let pair = makePair("Z")
         XCTAssertNil(XMPSidecarReader.read(for: pair))

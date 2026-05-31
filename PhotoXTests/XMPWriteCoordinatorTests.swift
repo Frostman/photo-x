@@ -93,9 +93,145 @@ final class XMPWriteCoordinatorTests: XCTestCase {
         let failures = await collectFailures(from: coordinator, timeout: 0.05)
         XCTAssertEqual(failures.count, 1)
         XCTAssertEqual(failures.first?.stem, "A")
-        XCTAssertEqual(failures.first?.kind, .label("Red"))
+        XCTAssertEqual(failures.first?.intent, .setLabel("Red"))
         XCTAssertEqual(failures.first?.attempts, 3)
         XCTAssertTrue(failures.first?.lastError.contains("permanent") ?? false)
+    }
+
+    // MARK: - intent coalescing
+
+    /// Rapid successive `writeRating` calls on the same stem must
+    /// coalesce: only the last value reaches disk, and the
+    /// coordinator dispatches far fewer write batches than enqueues.
+    func test_rapidSameStem_coalesces() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("xmp-coalesce-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let entry = PhotoEntry(
+            rawURL: tmp.appendingPathComponent("A.ARW"),
+            previewURL: tmp.appendingPathComponent("A.HIF"),
+            stem: "A"
+        )
+        let coordinator = XMPWriteCoordinator(backoff: [])
+        // Fire 10 rating writes back-to-back. With per-stem
+        // serialization + coalescing, at most ~2 batches should
+        // dispatch (the first one races; everything after coalesces
+        // into a tail batch with the latest value).
+        for v in 1...10 {
+            await coordinator.writeRating(v, for: entry)
+        }
+        await coordinator.drain()
+
+        let writeCount = await coordinator.intentWriteCount
+        XCTAssertLessThanOrEqual(writeCount, 2,
+            "10 rapid same-stem rating writes should coalesce to ≤ 2 disk batches, got \(writeCount)")
+        XCTAssertGreaterThanOrEqual(writeCount, 1,
+            "At least one write must reach disk")
+        XCTAssertEqual(XMPSidecarReader.read(for: entry)?.rating, 10,
+            "Final on-disk rating must be the latest value enqueued")
+    }
+
+    /// Rating + label submitted via `writeIntent` are written in one
+    /// disk batch regardless of timing — used by the retry path and
+    /// the undo/redo snapshot replay.
+    func test_writeIntent_combinesFields_inOneBatch() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("xmp-intent-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let entry = PhotoEntry(
+            rawURL: tmp.appendingPathComponent("A.ARW"),
+            previewURL: tmp.appendingPathComponent("A.HIF"),
+            stem: "A"
+        )
+        let coordinator = XMPWriteCoordinator(backoff: [])
+        await coordinator.writeIntent(
+            .setBoth(rating: 4, label: "Blue"),
+            for: entry
+        )
+        await coordinator.drain()
+        let xmp = XMPSidecarReader.read(for: entry)
+        XCTAssertEqual(xmp?.rating, 4)
+        XCTAssertEqual(xmp?.label, "Blue")
+        let writeCount = await coordinator.intentWriteCount
+        XCTAssertEqual(writeCount, 1, "writeIntent must produce exactly one disk batch")
+    }
+
+    // MARK: - failure intent merge
+
+    /// FailedWrite.merged(with:) carries both fields if a rating
+    /// failure is followed by a label failure for the same stem.
+    /// Mirrors the merge logic ViewerState's consumer applies.
+    func test_failedWrite_mergedAcrossKinds_keepsBothFields() {
+        let older = XMPWriteCoordinator.FailedWrite(
+            stem: "A",
+            intent: .setRating(3),
+            attempts: 3,
+            lastError: "old",
+            timestamp: Date(timeIntervalSince1970: 100)
+        )
+        let newer = XMPWriteCoordinator.FailedWrite(
+            stem: "A",
+            intent: .setLabel("Red"),
+            attempts: 3,
+            lastError: "new",
+            timestamp: Date(timeIntervalSince1970: 200)
+        )
+        let merged = older.merged(with: newer)
+        XCTAssertEqual(merged.intent.rating, .some(.some(3)),
+                       "rating from older must survive the merge")
+        XCTAssertEqual(merged.intent.label, .some(.some("Red")),
+                       "label from newer must be present")
+        XCTAssertEqual(merged.lastError, "new",
+                       "newer's error must replace older's")
+        XCTAssertEqual(merged.timestamp, Date(timeIntervalSince1970: 200),
+                       "newer's timestamp must replace older's")
+    }
+
+    /// When the same field fails twice for one stem, the newer
+    /// value wins — merging is "other's set fields override".
+    func test_failedWrite_mergedSameField_newerWins() {
+        let older = XMPWriteCoordinator.FailedWrite(
+            stem: "A",
+            intent: .setRating(2),
+            attempts: 3,
+            lastError: "old",
+            timestamp: Date(timeIntervalSince1970: 100)
+        )
+        let newer = XMPWriteCoordinator.FailedWrite(
+            stem: "A",
+            intent: .setRating(5),
+            attempts: 3,
+            lastError: "new",
+            timestamp: Date(timeIntervalSince1970: 200)
+        )
+        let merged = older.merged(with: newer)
+        XCTAssertEqual(merged.intent.rating, .some(.some(5)))
+    }
+
+    // MARK: - discard
+
+    /// discardPendingWrites cancels the running task and clears
+    /// state. After drain, no failure event should be emitted for
+    /// the discarded write — close-shoot must leave the pill clear.
+    func test_discardPendingWrites_clearsStateAndSuppressesFailure() async throws {
+        let coordinator = XMPWriteCoordinator(backoff: [.milliseconds(10)])
+        // Path that doesn't exist → applyIntent throws → would retry → would emit.
+        let entry = PhotoEntry(
+            rawURL: URL(fileURLWithPath: "/nonexistent-dir-\(UUID().uuidString)/A.ARW"),
+            previewURL: URL(fileURLWithPath: "/nonexistent-dir-\(UUID().uuidString)/A.HIF"),
+            stem: "A"
+        )
+        await coordinator.writeRating(5, for: entry)
+        // Race window: discard before the failure could land.
+        await coordinator.discardPendingWrites()
+        await coordinator.drain()
+        let inFlight = await coordinator.hasInFlightWrites
+        XCTAssertFalse(inFlight, "discard must leave the coordinator idle")
+        let failures = await collectFailures(from: coordinator, timeout: 0.3)
+        XCTAssertTrue(failures.isEmpty,
+                      "discarded writes must not surface as failures (got \(failures.count))")
     }
 
     // MARK: - hasInFlightWrites

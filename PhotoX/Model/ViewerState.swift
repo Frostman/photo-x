@@ -827,13 +827,37 @@ final class ViewerState {
         xmpFailureConsumerTask = Task { @MainActor [weak self] in
             for await failure in stream {
                 guard let self else { return }
-                // Last write per stem wins — older failures for the
-                // same file get overwritten, so the list shows the
-                // current state per file, not a history.
-                self.failedXMPWrites[failure.stem] = failure
-                Log.app.error("XMP write FAILED after \(failure.attempts, privacy: .public) attempts: \(failure.stem, privacy: .public) \(failure.kind.description, privacy: .public) — \(failure.lastError, privacy: .public)")
+                // Merge with any existing failure for the same stem so
+                // a label failure arriving after a rating failure
+                // keeps both fields on the row. Newer metadata wins.
+                if let existing = self.failedXMPWrites[failure.stem] {
+                    self.failedXMPWrites[failure.stem] = existing.merged(with: failure)
+                } else {
+                    self.failedXMPWrites[failure.stem] = failure
+                }
+                Log.app.error("XMP write FAILED after \(failure.attempts, privacy: .public) attempts: \(failure.stem, privacy: .public) — \(failure.lastError, privacy: .public)")
             }
         }
+    }
+
+    /// True iff there's anything the user might lose on a forced
+    /// close: failed writes still in the pill, OR pending / in-flight
+    /// writes the coordinator hasn't landed yet. Used by
+    /// `closeShootGuarded` to gate the discard-confirmation alert.
+    func hasUnsavedXMPWork() async -> Bool {
+        if !failedXMPWrites.isEmpty { return true }
+        return await xmpWriter.hasInFlightWrites
+    }
+
+    /// Discard every pending / in-flight XMP write AND clear the
+    /// failed-writes pill. Caller (closeShootGuarded) must have
+    /// already confirmed with the user. Cancellation is signalled to
+    /// the coordinator's running tasks; current attempts finish but
+    /// the loop exits without emitting failures, so the pill stays
+    /// clear.
+    func discardAllUnsavedXMPState() async {
+        await xmpWriter.discardPendingWrites()
+        failedXMPWrites.removeAll()
     }
 
     /// Re-enqueue every currently-failed write. The dict is cleared
@@ -844,15 +868,18 @@ final class ViewerState {
         let snapshot = failedXMPWrites
         failedXMPWrites.removeAll()
         guard let shoot else { return }
-        for (stem, failed) in snapshot {
+        for (stem, _) in snapshot {
             guard let entry = shoot.entries.first(where: { $0.stem == stem }) else { continue }
-            // Re-derive the intended value from the current in-memory
-            // state — that's what the user wanted; failed.kind is
-            // what the original (now-superseded) write was trying.
+            // Resync the full sidecar to whatever the user's
+            // in-memory intent is right now — both rating and label,
+            // submitted as one intent so the coordinator coalesces
+            // them into a single disk write per stem.
             let current = entryXMPs[stem] ?? .empty
-            switch failed.kind {
-            case .rating: Task { await xmpWriter.writeRating(current.rating, for: entry) }
-            case .label:  Task { await xmpWriter.writeLabel(current.label,  for: entry) }
+            Task {
+                await xmpWriter.writeIntent(
+                    .setBoth(rating: current.rating, label: current.label),
+                    for: entry
+                )
             }
         }
     }
@@ -2463,9 +2490,15 @@ final class ViewerState {
         // Coordinator serializes per-stem, so if the original
         // write is still in flight when undo fires, the revert
         // queues behind it (correct: the file ends up with the
-        // reverted value, not the half-applied original).
-        Task { await xmpWriter.writeRating(previousXMP.rating, for: entry) }
-        Task { await xmpWriter.writeLabel(previousXMP.label, for: entry) }
+        // reverted value, not the half-applied original). Bundle
+        // rating + label into one intent so they coalesce into a
+        // single disk write.
+        Task {
+            await xmpWriter.writeIntent(
+                .setBoth(rating: previousXMP.rating, label: previousXMP.label),
+                for: entry
+            )
+        }
 
         // Ensure the reverted entry is visible under the current
         // filters — otherwise undo would silently hide it.

@@ -543,25 +543,48 @@ struct ContentView: View {
     // ejectVolume, openWithPanel, openPath, etc.) moved to
     // `OpenStarterView`.
 
-    /// Confirm before closing the shoot if an export is in flight; on
-    /// confirmation, cancel the export then close. Without confirmation the
-    /// user could lose work-in-progress with an accidental click.
+    /// Confirm before closing if there are unsaved XMP writes (the
+    /// coordinator's pending queue OR the failed-writes pill) OR an
+    /// export is in flight. Two independent alerts: XMP first, then
+    /// export. If the user backs out at either step, nothing is
+    /// discarded — both side effects are deferred until every
+    /// confirmation passes.
     private func closeShootGuarded() {
-        guard exportRunner.isRunning else {
+        Task { @MainActor in
+            let xmpNeedsConfirm = await state.hasUnsavedXMPWork()
+            if xmpNeedsConfirm, !confirmDiscardUnsavedXMP() { return }
+            if exportRunner.isRunning {
+                let alert = NSAlert()
+                alert.messageText = "Export in progress"
+                alert.informativeText = "An export to one or more destinations is still running. Closing this shoot now will cancel it and leave partially-copied files at the destinations."
+                alert.alertStyle = .warning
+                alert.addButton(withTitle: "Stay")          // default = ⏎
+                let destructive = alert.addButton(withTitle: "Cancel exports and close")
+                destructive.hasDestructiveAction = true
+                guard alert.runModal() == .alertSecondButtonReturn else { return }
+                exportRunner.cancelAll()
+            }
+            if xmpNeedsConfirm {
+                await state.discardAllUnsavedXMPState()
+            }
             state.closeShoot()
-            return
         }
+    }
+
+    /// XMP-side close-shoot alert. Tailors its text to whether the
+    /// loss is failed writes (pill) or in-flight pendings or both.
+    private func confirmDiscardUnsavedXMP() -> Bool {
+        let failed = state.failedXMPWrites.count
         let alert = NSAlert()
-        alert.messageText = "Export in progress"
-        alert.informativeText = "An export to one or more destinations is still running. Closing this shoot now will cancel it and leave partially-copied files at the destinations."
+        alert.messageText = "Unsaved XMP writes"
+        alert.informativeText = failed > 0
+            ? "\(failed) XMP write\(failed == 1 ? "" : "s") to sidecar file\(failed == 1 ? "" : "s") failed and \(failed == 1 ? "is" : "are") waiting in the failures list. Closing this shoot will discard \(failed == 1 ? "it" : "them") along with any rating or label changes still being saved to disk."
+            : "Some XMP writes are still being saved to disk. Closing this shoot now will discard them — your most recent rating and label changes for this shoot would be lost."
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Stay")              // default = ⏎
-        let destructive = alert.addButton(withTitle: "Cancel exports and close")
+        let destructive = alert.addButton(withTitle: "Discard and close")
         destructive.hasDestructiveAction = true
-        if alert.runModal() == .alertSecondButtonReturn {
-            exportRunner.cancelAll()
-            state.closeShoot()
-        }
+        return alert.runModal() == .alertSecondButtonReturn
     }
 
     // openWithPanel + openPath moved to OpenStarterView.
