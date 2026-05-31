@@ -66,7 +66,60 @@ final class ExportSettings {
 
         // Behaviour
         var overwrite: OverwritePolicy = .skipUnchangedElseOverwrite
+        /// When false, the planning phase blocks this destination
+        /// with "Destination not empty" if `<path>/<projectName>/`
+        /// already has files. Default-off keeps the safety net for
+        /// existing users. The destination row's checkbox flips it
+        /// when the user explicitly wants to overlay onto an
+        /// existing project folder.
+        var allowNonEmpty: Bool = false
         var removeOrphans: Bool = false
+
+        // Memberwise init stays auto-synthesized for in-process
+        // callers. The custom Decodable init below restores it
+        // for persisted data — Swift's synthesized decoder
+        // doesn't honour stored-property defaults, so adding a
+        // new field would wipe every persisted destination on
+        // the next launch (silent `try? JSONDecoder.decode(...)`
+        // failure) without this. Future additions: add a
+        // `decodeIfPresent ?? default` line below; the default
+        // matches the stored-property default so the same value
+        // is used whether the field is missing OR the caller
+        // builds via the memberwise init.
+        init(id: UUID = UUID(), path: String,
+             showStars: Set<Int> = [1, 2, 3, 4, 5],
+             showRejected: Bool = true, showUnrated: Bool = true,
+             includeARW: Bool = true, includeHIF: Bool = true, includeXMP: Bool = true,
+             overwrite: OverwritePolicy = .skipUnchangedElseOverwrite,
+             allowNonEmpty: Bool = false,
+             removeOrphans: Bool = false) {
+            self.id = id
+            self.path = path
+            self.showStars = showStars
+            self.showRejected = showRejected
+            self.showUnrated = showUnrated
+            self.includeARW = includeARW
+            self.includeHIF = includeHIF
+            self.includeXMP = includeXMP
+            self.overwrite = overwrite
+            self.allowNonEmpty = allowNonEmpty
+            self.removeOrphans = removeOrphans
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            self.id            = try c.decodeIfPresent(UUID.self,            forKey: .id) ?? UUID()
+            self.path          = try c.decode(String.self,                   forKey: .path)
+            self.showStars     = try c.decodeIfPresent(Set<Int>.self,        forKey: .showStars) ?? [1, 2, 3, 4, 5]
+            self.showRejected  = try c.decodeIfPresent(Bool.self,            forKey: .showRejected) ?? true
+            self.showUnrated   = try c.decodeIfPresent(Bool.self,            forKey: .showUnrated) ?? true
+            self.includeARW    = try c.decodeIfPresent(Bool.self,            forKey: .includeARW) ?? true
+            self.includeHIF    = try c.decodeIfPresent(Bool.self,            forKey: .includeHIF) ?? true
+            self.includeXMP    = try c.decodeIfPresent(Bool.self,            forKey: .includeXMP) ?? true
+            self.overwrite     = try c.decodeIfPresent(OverwritePolicy.self, forKey: .overwrite) ?? .skipUnchangedElseOverwrite
+            self.allowNonEmpty = try c.decodeIfPresent(Bool.self,            forKey: .allowNonEmpty) ?? false
+            self.removeOrphans = try c.decodeIfPresent(Bool.self,            forKey: .removeOrphans) ?? false
+        }
     }
 
     private(set) var projectName: String = ""

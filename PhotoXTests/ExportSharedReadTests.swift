@@ -43,7 +43,12 @@ final class ExportSharedReadTests: XCTestCase {
 
     private func dest(at url: URL,
                       includeXMP: Bool = true) -> ExportSettings.Destination {
-        ExportSettings.Destination(path: url.path, includeXMP: includeXMP)
+        // Tests intentionally re-run exports into the same
+        // dest dir; the new per-row "Allow non-empty" gate
+        // would otherwise block every second run.
+        ExportSettings.Destination(path: url.path,
+                                   includeXMP: includeXMP,
+                                   allowNonEmpty: true)
     }
 
     private func hashes(in folder: URL) throws -> [String: String] {
@@ -267,12 +272,12 @@ final class ExportSharedReadTests: XCTestCase {
         let dB1Filtered = ExportSettings.Destination(
             path: destB1.path,
             showStars: [5], showRejected: false, showUnrated: false,
-            removeOrphans: true
+            allowNonEmpty: true, removeOrphans: true
         )
         let dB2Filtered = ExportSettings.Destination(
             path: destB2.path,
             showStars: [5], showRejected: false, showUnrated: false,
-            removeOrphans: false
+            allowNonEmpty: true, removeOrphans: false
         )
         runner.startAll(entries: [pA, pB], entryXMPs: xmps,
                         projectName: "P", destinations: [dB1Filtered, dB2Filtered],

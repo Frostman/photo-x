@@ -62,7 +62,12 @@ final class ExportCopyLoopTests: XCTestCase {
             showRejected: showRejected,
             showUnrated: showUnrated,
             includeARW: includeARW, includeHIF: includeHIF, includeXMP: includeXMP,
-            overwrite: overwrite, removeOrphans: removeOrphans
+            overwrite: overwrite,
+            // Tests intentionally re-run exports into the same
+            // dest dir; the new per-row "Allow non-empty" gate
+            // would otherwise block every second run.
+            allowNonEmpty: true,
+            removeOrphans: removeOrphans
         )
     }
 

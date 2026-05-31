@@ -84,6 +84,14 @@ final class ExportRunner {
     /// Set when the batch starts; cleared when it finishes.
     private(set) var batchProgress: BatchProgress?
 
+    /// Owns the planning phase's per-task progress trackers
+    /// (source + per-destination). Non-nil while planning is
+    /// in flight; cleared the same MainActor tick that
+    /// `batchProgress` is populated so the UI transitions
+    /// from "Planning…" to copy-progress without an idle
+    /// frame.
+    private(set) var planningProgress: PlanningPhaseProgress?
+
     /// Outcome of the most recently completed batch. Drives the pill's
     /// post-run label ("Export: done" / "Export: cancelled" with "Nm ago").
     /// Not persisted across launches.
@@ -290,22 +298,83 @@ final class ExportRunner {
         // be a window where the user clicked Export, the run is queued,
         // but the assertion hasn't been taken yet.
         beginPreventingSleep(destinationCount: destinations.count)
+        // Publish the planning-progress trackers on the
+        // MainActor BEFORE the task spawns so any UI bound
+        // to `runner.planningProgress` redraws immediately —
+        // no idle frame between the click and the first
+        // "Planning…" indicator.
+        let planning = PlanningPhaseProgress()
+        planningProgress = planning
+
         let task = Task { [weak self] in
             guard let self else { return }
-            // Compute batch totals off-main (planning stats every source file).
-            let plans: [ExportPlanner.Plan] = await Task.detached(priority: .userInitiated) {
-                destinations.map { dest in
+            // Phase 1: parallel planning. Source-side stat
+            // sweep + per-destination readdir in one
+            // TaskGroup; reports per-card progress. Blocks
+            // destinations whose project subfolder is
+            // non-empty when their per-row "Allow
+            // non-empty" toggle is off.
+            let planResult = await ExportPlanner.runPlanningPhase(
+                entries: entries,
+                projectName: projectName,
+                destinations: destinations,
+                progress: planning
+            )
+
+            // Mark blocked destinations failed immediately;
+            // they're skipped from the copy phase. Other
+            // destinations proceed.
+            var runnable: [ExportSettings.Destination] = []
+            for dest in destinations {
+                if let reason = planResult.perDestination[dest.id]?.blockedReason {
+                    self.perDestination[dest.id] = .failed(reason, nil)
+                    self.perDestinationCompletedAt[dest.id] = Date()
+                } else {
+                    runnable.append(dest)
+                }
+            }
+
+            // No runnable destinations → wrap up batch with
+            // the failed outcome path. Mirrors the normal
+            // batch-end book-keeping so the UI's
+            // post-completion label / cleanup all happen.
+            guard !runnable.isEmpty else {
+                let summaries: [(ExportSettings.Destination, Summary)] = destinations.map { ($0, .empty) }
+                self.planningProgress = nil
+                notifications.postAllComplete(summaries)
+                self.endPreventingSleep()
+                let outcome = self.summariseBatchOutcome(for: destinations)
+                self.lastBatchOutcome = outcome
+                self.lastBatchCompletedAt = Date()
+                self.logBatchCompletion(summaries: summaries,
+                                        outcome: outcome,
+                                        startedAt: Date())
+                return
+            }
+
+            // Phase 2: build per-destination plans from the
+            // cached source sizes. No additional stats —
+            // every byte count comes from the planning
+            // phase's map.
+            let plans: [ExportPlanner.Plan] = await Task.detached(priority: .userInitiated) { [planResult, runnable] in
+                runnable.map { dest in
                     ExportPlanner.plan(entries: entries, entryXMPs: entryXMPs,
-                                       projectName: projectName, destination: dest)
+                                       projectName: projectName, destination: dest,
+                                       sourceSizes: planResult.sourceSizes)
                 }
             }.value
             let totalFiles = plans.reduce(0) { $0 + $1.fileOperations.count }
             let totalBytes = plans.reduce(Int64(0)) { $0 + $1.totalBytes }
+            // Atomic swap: clear planningProgress and set
+            // batchProgress in the same MainActor tick so
+            // the per-card UI transitions from planning bar
+            // to copy bar with no idle frame.
+            self.planningProgress = nil
             self.batchProgress = BatchProgress(
                 filesDone: 0, filesTotal: totalFiles,
                 bytesCopied: 0, bytesTotal: totalBytes,
                 startedAt: Date(),
-                destinationCount: destinations.count,
+                destinationCount: runnable.count,
                 // Mode A starts on destination 1; Mode B leaves this nil
                 // because all destinations interleave per source file.
                 currentDestinationIndex: sharedRead ? nil : 1
@@ -315,24 +384,29 @@ final class ExportRunner {
             if sharedRead {
                 summaries = await self.runAllSharedRead(
                     entries: entries, entryXMPs: entryXMPs,
-                    projectName: projectName, destinations: destinations
+                    projectName: projectName, destinations: runnable
                 )
             } else {
                 summaries = await self.runAllSequential(
                     entries: entries, entryXMPs: entryXMPs,
-                    projectName: projectName, destinations: destinations
+                    projectName: projectName, destinations: runnable
                 )
             }
-            // One summary notification at the end of the batch — covers
-            // single- and multi-destination runs alike.
-            notifications.postAllComplete(summaries)
+            // Include blocked destinations in the
+            // notification + outcome roll-up so the post-run
+            // pill / log reflects that something failed.
+            var allSummaries = summaries
+            for dest in destinations where !runnable.contains(where: { $0.id == dest.id }) {
+                allSummaries.append((dest, .empty))
+            }
+            notifications.postAllComplete(allSummaries)
             let startedAt = self.batchProgress?.startedAt ?? Date()
             self.batchProgress = nil
             self.endPreventingSleep()
             let outcome = self.summariseBatchOutcome(for: destinations)
             self.lastBatchOutcome = outcome
             self.lastBatchCompletedAt = Date()
-            self.logBatchCompletion(summaries: summaries,
+            self.logBatchCompletion(summaries: allSummaries,
                                     outcome: outcome,
                                     startedAt: startedAt)
         }
@@ -384,14 +458,50 @@ final class ExportRunner {
         perDestination[destinationID] = .queued
         cancellationTokens[destinationID] = CancellationToken()
         beginPreventingSleep(destinationCount: 1)
+
+        // Same planning-phase publishing pattern as
+        // startAll — emit the trackers before the Task
+        // spawns so the row's progress bar appears
+        // immediately.
+        let planning = PlanningPhaseProgress()
+        planningProgress = planning
+
         let task = Task { [weak self] in
             guard let self else { return }
-            // Per-row Run is a "batch" of one as far as the toolbar pill is
-            // concerned. Plan upfront so batchProgress has accurate totals.
-            let plan: ExportPlanner.Plan = await Task.detached(priority: .userInitiated) {
+            // Phase 1: planning. Same TaskGroup machinery
+            // as Export-all, just one destination.
+            let planResult = await ExportPlanner.runPlanningPhase(
+                entries: entries,
+                projectName: projectName,
+                destinations: [destination],
+                progress: planning
+            )
+
+            // Blocked → fail this destination, end the
+            // "batch" of one.
+            if let reason = planResult.perDestination[destination.id]?.blockedReason {
+                self.perDestination[destination.id] = .failed(reason, nil)
+                self.perDestinationCompletedAt[destination.id] = Date()
+                self.planningProgress = nil
+                notifications.postAllComplete([(destination, .empty)])
+                self.endPreventingSleep()
+                let outcome = self.summariseBatchOutcome(for: [destination])
+                self.lastBatchOutcome = outcome
+                self.lastBatchCompletedAt = Date()
+                self.logBatchCompletion(summaries: [(destination, .empty)],
+                                        outcome: outcome,
+                                        startedAt: Date())
+                return
+            }
+
+            // Phase 2: build the plan from the cached
+            // source sizes — no extra stats.
+            let plan: ExportPlanner.Plan = await Task.detached(priority: .userInitiated) { [planResult] in
                 ExportPlanner.plan(entries: entries, entryXMPs: entryXMPs,
-                                   projectName: projectName, destination: destination)
+                                   projectName: projectName, destination: destination,
+                                   sourceSizes: planResult.sourceSizes)
             }.value
+            self.planningProgress = nil
             self.batchProgress = BatchProgress(
                 filesDone: 0, filesTotal: plan.fileOperations.count,
                 bytesCopied: 0, bytesTotal: plan.totalBytes,
@@ -882,6 +992,38 @@ final class ExportRunner {
         batch.filesDone += filesDelta
         batch.bytesCopied += bytesDelta
         batchProgress = batch
+    }
+
+    /// One stat per source file (ARW + preview + xmp-if-exists) — shared
+    /// across every destination's `ExportPlanner.plan(…)` call via the
+    /// `sourceSizes` parameter. Replaces the previous per-destination
+    /// stat sweep, which on slow source media (SD / CFExpress) added a
+    /// multi-second pre-flight delay scaling with destination count.
+    ///
+    /// Maps absent XMP sidecars to a missing key (not `0`) so the
+    /// planner can treat "key present" as proof-of-existence and skip
+    /// its own redundant `fileExists` check on the same path.
+    nonisolated static func precomputeSourceSizes(
+        entries: [PhotoEntry]
+    ) -> [URL: Int64] {
+        var out: [URL: Int64] = [:]
+        let fm = FileManager.default
+        for entry in entries {
+            if let raw = entry.rawURL { out[raw] = sizeOf(raw, fm: fm) }
+            out[entry.previewURL] = sizeOf(entry.previewURL, fm: fm)
+            let xmp = entry.xmpURL
+            if fm.fileExists(atPath: xmp.path) {
+                out[xmp] = sizeOf(xmp, fm: fm)
+            }
+        }
+        return out
+    }
+
+    nonisolated private static func sizeOf(_ url: URL, fm: FileManager) -> Int64 {
+        let attrs = (try? fm.attributesOfItem(atPath: url.path)) ?? [:]
+        if let n = attrs[.size] as? Int64 { return n }
+        if let n = (attrs[.size] as? NSNumber)?.int64Value { return n }
+        return 0
     }
 
     /// Atomic copy. Writes the source to a sibling `.tmp` file in the

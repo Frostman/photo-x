@@ -97,7 +97,9 @@ struct WorkspaceTabPicker: View {
     /// - Idle: doc icon + "Export".
     @ViewBuilder
     private func exportLabel(now: Date) -> some View {
-        if let batch = runner.batchProgress {
+        if runner.planningProgress != nil {
+            planningLabel
+        } else if let batch = runner.batchProgress {
             runningLabel(batch)
         } else if let outcome = runner.lastBatchOutcome,
                   let completedAt = runner.lastBatchCompletedAt {
@@ -105,6 +107,15 @@ struct WorkspaceTabPicker: View {
                           ago: agoString(from: completedAt, now: now))
         } else {
             idleLabel
+        }
+    }
+
+    private var planningLabel: some View {
+        HStack(spacing: 4) {
+            ProgressView()
+                .scaleEffect(0.5)
+                .frame(width: 12, height: 12)
+            Text("Planning…").font(.caption.bold())
         }
     }
 

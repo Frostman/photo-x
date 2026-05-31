@@ -121,7 +121,19 @@ struct ExportPaneView: View {
     private var content: some View {
         VStack(alignment: .leading, spacing: 18) {
             projectSection
+            sourceSection
             destinationsSection
+        }
+    }
+
+    private var sourceSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Source")
+                .font(.caption.smallCaps()).foregroundStyle(.secondary)
+            ExportSourceCard(
+                sourceURL: state.shoot?.folderURL,
+                runner: runner
+            )
         }
     }
 
@@ -175,6 +187,7 @@ struct ExportPaneView: View {
                             completedAt: runner.perDestinationCompletedAt[dest.id],
                             canRun: canRun,
                             isAnotherRunning: runner.isRunning,
+                            planningProgress: runner.planningProgress?.destinations[dest.id],
                             onRunOne: { runExportOne(dest) },
                             onCancel: { runner.cancel(dest.id) },
                             onRemove: { settings.remove(id: dest.id) },
@@ -303,7 +316,10 @@ struct ExportPaneView: View {
         if !confirmSourceConflictsClean(forSingle: nil, shoot: shoot) { return }
         let needsConfirm = settings.destinations.contains(where: \.removeOrphans)
         if needsConfirm, !confirmOrphanRemoval(forSingle: nil) { return }
-        if !confirmDestinationNotEmpty(forSingle: nil) { return }
+        // Destination-not-empty enforcement now happens in
+        // ExportRunner's planning phase per-destination,
+        // gated by each Destination's own `allowNonEmpty`
+        // checkbox. No pre-flight modal.
         runner.startAll(
             entries: shoot.entries,
             entryXMPs: state.entryXMPs,
@@ -317,7 +333,6 @@ struct ExportPaneView: View {
         guard canRun, let shoot = state.shoot else { return }
         if !confirmSourceConflictsClean(forSingle: dest, shoot: shoot) { return }
         if dest.removeOrphans, !confirmOrphanRemoval(forSingle: dest) { return }
-        if !confirmDestinationNotEmpty(forSingle: dest) { return }
         runner.startOne(
             dest.id,
             entries: shoot.entries,
@@ -395,60 +410,6 @@ struct ExportPaneView: View {
         return alert.runModal() == .alertSecondButtonReturn
     }
 
-    /// In-scope destinations whose `<dest>/<projectName>/` subfolder
-    /// already contains at least one non-hidden item. One
-    /// non-recursive `contentsOfDirectory` per destination — cheap
-    /// on local disks, acceptable on SD cards.
-    private func nonEmptyProjectDestinations(
-        forSingle: ExportSettings.Destination?
-    ) -> [(ExportSettings.Destination, Int)] {
-        let project = settings.projectName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !project.isEmpty else { return [] }
-        let scope = forSingle.map { [$0] } ?? settings.destinations
-        let fm = FileManager.default
-        return scope.compactMap { dest in
-            let subURL = URL(fileURLWithPath: dest.path)
-                .appendingPathComponent(project)
-            var isDir: ObjCBool = false
-            guard fm.fileExists(atPath: subURL.path, isDirectory: &isDir),
-                  isDir.boolValue else { return nil }
-            let items = (try? fm.contentsOfDirectory(
-                at: subURL, includingPropertiesForKeys: nil,
-                options: [.skipsHiddenFiles])) ?? []
-            return items.isEmpty ? nil : (dest, items.count)
-        }
-    }
-
-    /// Confirm before writing into a project subfolder that already
-    /// has content — catches the easy mistake of starting a second
-    /// export with the same project name. `forSingle == nil` runs
-    /// the combined Export-all alert. Silenced entirely when
-    /// `SettingsKey.skipDestinationNotEmptyConfirm` is true.
-    private func confirmDestinationNotEmpty(
-        forSingle: ExportSettings.Destination?
-    ) -> Bool {
-        if AppDefaults.shared.bool(forKey: SettingsKey.skipDestinationNotEmptyConfirm) {
-            return true
-        }
-        let hits = nonEmptyProjectDestinations(forSingle: forSingle)
-        guard !hits.isEmpty else { return true }
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        if hits.count == 1, let (dest, count) = hits.first {
-            let project = settings.projectName.trimmingCharacters(in: .whitespacesAndNewlines)
-            alert.messageText = "Destination already contains files"
-            alert.informativeText = "\(dest.path)/\(project)/ already has \(count) item\(count == 1 ? "" : "s"). Continuing may overwrite or append depending on this destination's overwrite policy. (Disable this confirmation in Settings → Workflow.)"
-        } else {
-            alert.messageText = "Some destinations already contain files"
-            alert.informativeText = hits.map { dest, count in
-                "• \(dest.path) — \(count) item\(count == 1 ? "" : "s")"
-            }.joined(separator: "\n") + "\n\nContinuing may overwrite or append depending on each destination's overwrite policy. (Disable this confirmation in Settings → Workflow.)"
-        }
-        alert.addButton(withTitle: "Cancel")
-        let goBtn = alert.addButton(withTitle: "Export anyway")
-        goBtn.hasDestructiveAction = true
-        return alert.runModal() == .alertSecondButtonReturn
-    }
 }
 
 /// Human-friendly "ago" label. Under a minute → "<1m ago"; under an hour

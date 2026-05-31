@@ -10,6 +10,12 @@ struct ExportDestinationRow: View {
     let completedAt: Date?
     let canRun: Bool
     let isAnotherRunning: Bool
+    /// Non-nil while the export runner's planning phase is
+    /// scanning this destination's project folder. Drives an
+    /// inline progress bar in the status row that gives way
+    /// to the regular copy-progress bar once planning
+    /// completes and the copy phase starts.
+    let planningProgress: TaskProgress?
     let onRunOne: () -> Void
     let onCancel: () -> Void
     let onRemove: () -> Void
@@ -182,6 +188,15 @@ struct ExportDestinationRow: View {
             .fixedSize()
             .help(destination.overwrite.helpText)
 
+            Toggle(isOn: boolBinding(\.allowNonEmpty)) {
+                Label("Allow non-empty", systemImage: destination.allowNonEmpty
+                      ? "tray.full.fill" : "tray")
+                    .foregroundStyle(destination.allowNonEmpty ? Color.blue : Color.secondary)
+            }
+            .toggleStyle(.checkbox)
+            .controlSize(.small)
+            .help("When off, exporting to this destination errors out if its project subfolder already has files. Turn on to overlay onto an existing project folder.")
+
             Toggle(isOn: boolBinding(\.removeOrphans)) {
                 Label("Remove orphans", systemImage: destination.removeOrphans
                       ? "trash.fill" : "trash")
@@ -207,6 +222,28 @@ struct ExportDestinationRow: View {
 
     @ViewBuilder
     private func statusContent(now: Date) -> some View {
+        // Planning-phase row trumps the runnerState
+        // display: when planningProgress is non-nil the
+        // user wants to see "scanning this destination"
+        // progress; the underlying state at that point is
+        // still .idle / .queued anyway.
+        if let p = planningProgress, p.total > 0 {
+            HStack(spacing: 8) {
+                ProgressView(value: p.fraction)
+                    .progressViewStyle(.linear)
+                    .frame(maxWidth: 220)
+                Text("Planning…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+        } else {
+            runnerStateContent(now: now)
+        }
+    }
+
+    @ViewBuilder
+    private func runnerStateContent(now: Date) -> some View {
         switch runnerState {
         case .idle:
             Text("Idle").font(.caption).foregroundStyle(.secondary)
