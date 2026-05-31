@@ -407,10 +407,7 @@ struct OpenStarterView: View {
             // System file dialog has already dismissed by
             // this point so we're not interrupting it.
             mode = .view
-            if state.shoot?.folderURL.path == shoot.folderURL.path {
-                return  // same shoot; skip teardown + rescan
-            }
-            await state.loadShoot(shoot, focus: focus)
+            await ShootOpener.open(shoot: shoot, focus: focus, requestedTarget: .replaceFrontmost)
         }
     }
 
@@ -423,7 +420,7 @@ struct OpenStarterView: View {
         // the visible tab change is the feedback.
         mode = .view
         Task {
-            await OpenShootRouter.load(path: path, state: state)
+            await ShootOpener.open(path: path, requestedTarget: .replaceFrontmost)
         }
     }
 

@@ -20,22 +20,16 @@ enum LaunchFlags {
 @main
 struct PhotoXApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    /// Single instance across the whole app. PhotoX is a single-window
-    /// application today — see the comment in
-    /// `AppDelegate.applicationWillFinishLaunching` about why AppKit's
-    /// automatic window tabbing is disabled. Lifting this requires
-    /// moving `viewerState` *inside* the `WindowGroup` body closure
-    /// (so SwiftUI gives each new window its own instance) and
-    /// retrofitting `ExportRunner` + `AppDelegate` + Sparkle's
-    /// shoot-URL provider for multi-instance coordination.
-    @State private var viewerState = ViewerState()
     @State private var recents = RecentShoots.shared
     /// Build the Sparkle updater unless E2E tests disabled it via
     /// `-photoxDisableSparkle`. Optional so the App keeps a single
     /// nil-safe ref instead of branching every read site.
     @State private var updater: UpdaterController? = LaunchFlags.disableSparkle ? nil : UpdaterController()
     @AppStorage(SettingsKey.appearance, store: AppDefaults.shared) private var appearanceRaw = SettingsKey.Defaults.appearance
-    @Environment(\.scenePhase) private var scenePhase
+    /// Each window publishes its own ViewerState via `.focusedValue`,
+    /// so menu commands at this scope target the frontmost window
+    /// instead of a stale single instance.
+    @FocusedValue(\.viewerState) private var focusedState: ViewerState?
 
     private var appearance: AppearanceMode {
         AppearanceMode(rawValue: appearanceRaw) ?? .system
@@ -43,37 +37,8 @@ struct PhotoXApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView(state: viewerState, updater: updater)
+            WindowRoot(updater: updater)
                 .preferredColorScheme(appearance.colorScheme)
-                .task {
-                    // Provide the updater with a way to read the
-                    // currently-open shoot URL right before Sparkle
-                    // quits the app for an install — captured into
-                    // PendingReopenStore so bootstrap can resume it.
-                    updater?.shootURLProvider = { [weak viewerState] in
-                        viewerState?.shoot?.folderURL
-                    }
-                    // Hand the state to the AppDelegate so the
-                    // quit-confirm path can inspect failed /
-                    // in-flight XMP writes.
-                    appDelegate.viewerState = viewerState
-                    await bootstrap()
-                }
-                .onChange(of: scenePhase) { _, phase in
-                    // On background (Dock-hide / Cmd-Tab) capture the
-                    // current shoot+stem so a later relaunch can
-                    // resume on the same entry. Cheap — touches at
-                    // most two UserDefaults keys. ⌘Q goes through
-                    // applicationWillTerminate (see below) since
-                    // scenePhase .background is unreliable on quit.
-                    if phase == .background {
-                        viewerState.captureLastEntryToStores()
-                    }
-                }
-                .onReceive(NotificationCenter.default.publisher(
-                    for: .photoxWillTerminate)) { _ in
-                    viewerState.captureLastEntryToStores()
-                }
                 // URL routing for `photox(-dev)://card?path=…`
                 // (posted by the background card watcher's
                 // notification) is handled by
@@ -107,10 +72,13 @@ struct PhotoXApp: App {
                 // window action. No keyboard shortcut so a stray press
                 // during fast nav can't surface it accidentally.
                 Button {
-                    appDelegate.statsWindowController.show(state: viewerState)
+                    if let state = focusedState {
+                        appDelegate.statsWindowController.show(state: state)
+                    }
                 } label: {
                     Label("Usage Stats…", systemImage: "chart.bar")
                 }
+                .disabled(focusedState == nil)
             }
             // Bind Cmd+Z / Cmd+Shift+Z to ViewerState's UndoManager.
             // We can't use `.environment(\.undoManager, ...)` because
@@ -122,7 +90,7 @@ struct PhotoXApp: App {
             // `redoMenuItemTitle` so the menu reads "Undo Rate 5
             // Stars", "Undo Reject", etc.
             CommandGroup(replacing: .undoRedo) {
-                UndoRedoMenuButtons(state: viewerState)
+                UndoRedoMenuButtons(state: focusedState)
             }
 
             CommandGroup(replacing: .newItem) {
@@ -134,7 +102,10 @@ struct PhotoXApp: App {
                 Menu("Open Recent") {
                     ForEach(recents.paths, id: \.self) { path in
                         Button(menuLabel(for: path)) {
-                            Task { await openPath(path) }
+                            Task {
+                                await ShootOpener.open(path: path,
+                                                        requestedTarget: .replaceFrontmost)
+                            }
                         }
                     }
                     if !recents.paths.isEmpty {
@@ -146,9 +117,10 @@ struct PhotoXApp: App {
             }
             CommandMenu("View") {
                 Button("Fit") {
-                    viewerState.setViewportToFit()
+                    focusedState?.setViewportToFit()
                 }
                 .keyboardShortcut("0", modifiers: .command)
+                .disabled(focusedState == nil)
 
                 Divider()
 
@@ -185,90 +157,18 @@ struct PhotoXApp: App {
         }
 
         // Standard macOS Settings scene — binds ⌘, automatically and adds
-        // "Settings…" to the app menu. The viewerState environment lets
-        // Settings → Advanced read live cache stats (per-texture bytes,
-        // current count, etc.) from the currently-loaded shoot.
+        // "Settings…" to the app menu. SettingsHost reads the frontmost
+        // window's ViewerState from WindowRegistry so Settings → Advanced
+        // can show live cache stats for the active shoot.
         Settings {
-            SettingsView()
-                .environment(viewerState)
+            SettingsHost()
                 .preferredColorScheme(appearance.colorScheme)
-        }
-    }
-
-    private func bootstrap() async {
-        // Pick up any new card-watcher binary inside this app
-        // bundle and recover if launchd lost track of the
-        // helper. See `CardWatcherSupervisor.bootstrapAtLaunch`
-        // for the full state machine — running → bounce,
-        // registered-but-stopped → start, SM/launchd-desync →
-        // re-register + start. Detached so the shoot-load /
-        // updater work below isn't gated on launchctl I/O.
-        // After the bootstrap finishes we surface unhealthy
-        // outcomes via an alert so the user actually notices
-        // the watcher is broken (rather than only seeing it
-        // in Settings the next time they open the pane).
-        Task.detached(priority: .background) {
-            let status = await CardWatcherSupervisor.bootstrapAtLaunch()
-            await MainActor.run {
-                // Order matters: a broken watcher's "needs
-                // attention" alert outranks any promo. Only
-                // one promo per launch, so the user never
-                // sees two stacked modal alerts on a cold
-                // start.
-                presentCardWatcherAlertIfNeeded(status: status)
-                presentOnboardingPromosIfNeeded()
-            }
-        }
-
-        // Sparkle-driven restart: if the previous run set a pending
-        // reopen path (in the last 10 min), prefer it over the
-        // configured default folder. `consume()` always clears the
-        // keys, fresh or stale.
-        if let reopen = PendingReopenStore.consume() {
-            await openPath(reopen.path)
-            return
-        }
-        // If the user has configured a default folder and it exists with
-        // pairs, auto-load it. Otherwise just leave the window in its empty
-        // state — no error, no nag.
-        if let (shoot, firstFocus) = SamplePathProvider.resolveShoot() {
-            // Restore the last-viewed entry if the default folder is
-            // also a known favorite/recent. Otherwise focus the first
-            // entry (current behavior).
-            let path = shoot.folderURL.path
-            let savedStem = FavoriteShoots.shared.lastEntry(for: path)
-                         ?? RecentShoots.shared.lastEntry(for: path)
-            let focus = savedStem
-                .flatMap { stem in shoot.entries.first { $0.stem == stem } }
-                ?? firstFocus
-            await viewerState.loadShoot(shoot, focus: focus)
         }
     }
 
     private func openWithPanel() async {
         guard let (shoot, focus) = OpenPanelCoordinator.runShootPicker() else { return }
-        await viewerState.loadShoot(shoot, focus: focus)
-    }
-
-    private func openPath(_ path: String) async {
-        let url = URL(fileURLWithPath: path)
-        var isDir: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir),
-              isDir.boolValue else {
-            viewerState.errorMessage = "Folder no longer exists: \(path)"
-            return
-        }
-        let shoot = ShootScanner.scan(folder: url)
-        guard let firstFocus = shoot.entries.first else {
-            viewerState.errorMessage = "No ARW + HIF/JPG pairs (or standalone HIF/JPG files) found in \(url.lastPathComponent)"
-            return
-        }
-        let savedStem = FavoriteShoots.shared.lastEntry(for: path)
-                     ?? RecentShoots.shared.lastEntry(for: path)
-        let focus = savedStem
-            .flatMap { stem in shoot.entries.first { $0.stem == stem } }
-            ?? firstFocus
-        await viewerState.loadShoot(shoot, focus: focus)
+        await ShootOpener.open(shoot: shoot, focus: focus, requestedTarget: .replaceFrontmost)
     }
 
     private func menuLabel(for path: String) -> String {
@@ -450,55 +350,176 @@ extension Notification.Name {
 /// disabled state and title strings would never refresh, because
 /// NSUndoManager itself isn't `@Observable`.
 private struct UndoRedoMenuButtons: View {
-    let state: ViewerState
+    /// Resolved from `@FocusedValue(\.viewerState)` at the App
+    /// scope; nil when no PhotoX window is the focused frontmost
+    /// (e.g. Settings or the About panel is key).
+    let state: ViewerState?
 
     var body: some View {
         // Read the observable counter to register a SwiftUI
         // dependency. Every undo-state change bumps it, which
         // forces this view to re-evaluate `canUndo` / `canRedo`
         // / `undoMenuItemTitle` from the underlying UndoManager.
-        let _ = state.undoStateVersion
-        Button(state.undoManager.undoMenuItemTitle) {
-            state.undoManager.undo()
+        let _ = state?.undoStateVersion
+        Button(state?.undoManager.undoMenuItemTitle ?? "Undo") {
+            state?.undoManager.undo()
         }
         .keyboardShortcut("z", modifiers: .command)
-        .disabled(!state.undoManager.canUndo)
+        .disabled(state?.undoManager.canUndo != true)
 
-        Button(state.undoManager.redoMenuItemTitle) {
-            state.undoManager.redo()
+        Button(state?.undoManager.redoMenuItemTitle ?? "Redo") {
+            state?.undoManager.redo()
         }
         .keyboardShortcut("z", modifiers: [.command, .shift])
-        .disabled(!state.undoManager.canRedo)
+        .disabled(state?.undoManager.canRedo != true)
+    }
+}
+
+/// Per-window root view that owns the `ViewerState`. SwiftUI
+/// instantiates one of these per `WindowGroup` spawn, so each
+/// window gets its own state. Registers itself with
+/// `WindowRegistry` via a hidden `WindowAccessor` so AppDelegate /
+/// ShootOpener / Sparkle can resolve "the frontmost window's
+/// state" without a single app-scope reference.
+struct WindowRoot: View {
+    let updater: UpdaterController?
+
+    @State private var viewerState = ViewerState()
+    @Environment(\.scenePhase) private var scenePhase
+
+    /// Process-wide latch: bootstrap runs once across all windows.
+    /// (Stage 1 spawns at most one window, but the latch is
+    /// already correct for Stage 2's multi-window UX.)
+    @MainActor private static var didBootstrap = false
+    @MainActor private static var didInstallTestObserver = false
+
+    var body: some View {
+        ContentView(state: viewerState, updater: updater)
+            .focusedValue(\.viewerState, viewerState)
+            .background(WindowAccessor { window in
+                WindowRegistry.shared.register(window: window, viewerState: viewerState)
+                // Window-close interception (export-running guard).
+                // SwiftUI's WindowGroup doesn't assign a delegate, so
+                // this slot is free; the AppDelegate consults
+                // `WindowRegistry` if it needs the window's
+                // ViewerState.
+                if window.delegate == nil,
+                   let appDelegate = NSApp.delegate as? AppDelegate {
+                    window.delegate = appDelegate
+                }
+            })
+            .task {
+                // Sparkle's shoot-URL provider routes through the
+                // registry so it always resolves to the frontmost
+                // window's open shoot (matches today's single-window
+                // behaviour by definition).
+                updater?.shootURLProvider = {
+                    WindowRegistry.shared.frontmostViewerState?.shoot?.folderURL
+                }
+                installUITestResetObserverIfNeeded()
+                await firstWindowBootstrapIfNeeded()
+            }
+            .onChange(of: scenePhase) { _, phase in
+                // On background (Dock-hide / Cmd-Tab) capture the
+                // current shoot+stem so a later relaunch can resume on
+                // the same entry. Cheap — touches at most two
+                // UserDefaults keys. ⌘Q goes through
+                // applicationWillTerminate (see AppDelegate) since
+                // scenePhase .background is unreliable on quit.
+                if phase == .background {
+                    viewerState.captureLastEntryToStores()
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(
+                for: .photoxWillTerminate)) { _ in
+                viewerState.captureLastEntryToStores()
+            }
+    }
+
+    private func installUITestResetObserverIfNeeded() {
+        guard LaunchFlags.uiTestMode, !Self.didInstallTestObserver else { return }
+        Self.didInstallTestObserver = true
+        UITestResetObserver.install(viewerState: viewerState)
+    }
+
+    private func firstWindowBootstrapIfNeeded() async {
+        guard !Self.didBootstrap else { return }
+        Self.didBootstrap = true
+
+        // App-open metric (process-wide; piggy-backs on this
+        // window's metrics object since all ViewerState metrics
+        // persist via the same UserDefaults RMW).
+        viewerState.metrics.recordAppOpen()
+
+        await bootstrap()
+    }
+
+    private func bootstrap() async {
+        // Pick up any new card-watcher binary inside this app
+        // bundle and recover if launchd lost track of the
+        // helper. See `CardWatcherSupervisor.bootstrapAtLaunch`
+        // for the full state machine — running → bounce,
+        // registered-but-stopped → start, SM/launchd-desync →
+        // re-register + start. Detached so the shoot-load /
+        // updater work below isn't gated on launchctl I/O.
+        // After the bootstrap finishes we surface unhealthy
+        // outcomes via an alert so the user actually notices
+        // the watcher is broken (rather than only seeing it
+        // in Settings the next time they open the pane).
+        Task.detached(priority: .background) {
+            let status = await CardWatcherSupervisor.bootstrapAtLaunch()
+            await MainActor.run {
+                // Order matters: a broken watcher's "needs
+                // attention" alert outranks any promo. Only
+                // one promo per launch, so the user never
+                // sees two stacked modal alerts on a cold
+                // start.
+                presentCardWatcherAlertIfNeeded(status: status)
+                presentOnboardingPromosIfNeeded()
+            }
+        }
+
+        // Sparkle-driven restart: if the previous run set a pending
+        // reopen path (in the last 10 min), prefer it over the
+        // configured default folder. `consume()` always clears the
+        // keys, fresh or stale.
+        if let reopen = PendingReopenStore.consume() {
+            await ShootOpener.open(path: reopen.path, requestedTarget: .replaceFrontmost)
+            return
+        }
+        // If the user has configured a default folder and it exists with
+        // pairs, auto-load it. Otherwise just leave the window in its empty
+        // state — no error, no nag.
+        if let (shoot, firstFocus) = SamplePathProvider.resolveShoot() {
+            // Restore the last-viewed entry if the default folder is
+            // also a known favorite/recent. Otherwise focus the first
+            // entry (current behavior).
+            let path = shoot.folderURL.path
+            let savedStem = FavoriteShoots.shared.lastEntry(for: path)
+                         ?? RecentShoots.shared.lastEntry(for: path)
+            let focus = savedStem
+                .flatMap { stem in shoot.entries.first { $0.stem == stem } }
+                ?? firstFocus
+            await ShootOpener.open(shoot: shoot, focus: focus, requestedTarget: .replaceFrontmost)
+        }
+    }
+}
+
+/// Backing view for the Settings scene. Looks up the frontmost
+/// registered window's ViewerState so Settings → Advanced sees
+/// live cache stats from the active shoot. A static placeholder
+/// covers the rare case where Settings is opened before any
+/// `WindowRoot` has registered (e.g. during early test launch).
+private struct SettingsHost: View {
+    private static let placeholder = ViewerState()
+
+    var body: some View {
+        SettingsView()
+            .environment(WindowRegistry.shared.frontmostViewerState ?? Self.placeholder)
     }
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUserNotificationCenterDelegate {
-    /// Wired by `PhotoXApp` via `.onAppear` so the
-    /// `applicationShouldTerminate` quit-confirm can inspect failed
-    /// XMP writes + the coordinator's in-flight state. Weak so the
-    /// delegate doesn't artificially extend the state's lifetime.
-    weak var viewerState: ViewerState? {
-        didSet {
-            // Fires once per process on the first wire-up — the
-            // WindowGroup .task runs after launch and assigns from
-            // nil to non-nil. Subsequent File -> New Window calls
-            // re-fire the .task but viewerState is already set; the
-            // didRecordAppOpen flag gates double-counting.
-            guard !didRecordAppOpen, let viewerState else { return }
-            didRecordAppOpen = true
-            // recordAppOpen is MainActor-isolated; didSet runs in a
-            // nonisolated context (Swift can't statically prove the
-            // setter caller is on MainActor). Trampoline via Task to
-            // satisfy the compiler. The .task block doing the
-            // assignment is already on MainActor, so this is a
-            // single hop with no real cross-actor cost.
-            Task { @MainActor [viewerState] in
-                viewerState.metrics.recordAppOpen()
-            }
-        }
-    }
-    private var didRecordAppOpen = false
-
     /// Single floating Usage Stats window for the lifetime of the
     /// app. Reusing one instance across clicks (rather than spawning
     /// a new window each time) mirrors `FailedWritesWindowController`.
@@ -514,21 +535,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
         // the line below so the writes definitely hit disk.
         NotificationCenter.default.post(name: .photoxWillTerminate, object: nil)
         AppDefaults.shared.synchronize()
-        // Best-effort indexer-cache flush. Most of the time the
-        // cache was already flushed by finishIndexing; this catches
-        // any pending writes (e.g. partial indexing interrupted by
-        // quit). RunLoop spin lets the detached encode complete
-        // before the process exits — hard-capped at 2 s so a hung
-        // disk can't deadlock quit.
-        if let state = viewerState {
-            let cache = state.cache
-            let flushDone = DispatchSemaphore(value: 0)
-            Task {
+        // Best-effort indexer-cache flush for every open window. Most
+        // of the time each cache was already flushed by finishIndexing;
+        // this catches any pending writes (e.g. partial indexing
+        // interrupted by quit). RunLoop spin lets the detached encode
+        // complete before the process exits — hard-capped at 2 s
+        // total so a hung disk can't deadlock quit.
+        let caches = WindowRegistry.shared.all.map(\.cache)
+        guard !caches.isEmpty else { return }
+        let flushDone = DispatchSemaphore(value: 0)
+        Task {
+            for cache in caches {
                 await cache.flush()
-                flushDone.signal()
             }
-            _ = flushDone.wait(timeout: .now() + .seconds(2))
+            flushDone.signal()
         }
+        _ = flushDone.wait(timeout: .now() + .seconds(2))
     }
 
     /// Disable title-bar double-click action (minimize / zoom). NSWindow reads
@@ -552,36 +574,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
             forEventClass: AEEventClass(kInternetEventClass),
             andEventID: AEEventID(kAEGetURL)
         )
-        // PhotoX is single-window today (ViewerState + ExportRunner +
-        // this AppDelegate's weak ref all assume one viewer at a time).
-        // Opting out of AppKit's automatic window tabbing hides the
-        // "Show Tab Bar" / "Merge All Windows" / "Move Tab to New
-        // Window" Window-menu items that would otherwise expose a tab
-        // bar that has no useful second tab to populate. Re-evaluate
-        // when multi-window support lands; see the note on
-        // `PhotoXApp.viewerState`.
+        // Each window owns its own ViewerState (see `WindowRoot`),
+        // but AppKit's automatic window tabbing would fuse two windows
+        // into one tab group whose shared title-bar chrome contradicts
+        // the per-window data model. Keeping tabbing off also hides
+        // the "Show Tab Bar" / "Merge All Windows" / "Move Tab to New
+        // Window" Window-menu items.
         NSWindow.allowsAutomaticWindowTabbing = false
     }
 
     /// Maximize the main window to the screen's visible frame on first launch.
     /// SwiftUI's WindowGroup picks a default size that's smaller than the
     /// screen; for a culling viewer, the larger the canvas the better.
-    /// Also installs us as the window's delegate so windowShouldClose can
-    /// intercept red-button / ⌘W close during an export.
+    /// `WindowRoot`'s `WindowAccessor` assigns this AppDelegate as each
+    /// window's delegate so `windowShouldClose` can intercept ⌘W / red-button
+    /// close during an export.
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Take ownership of UN delegate so we can suppress notifications
         // when the app is in the foreground and route clicks back into
         // the export sheet.
         UNUserNotificationCenter.current().delegate = self
-
-        // E2E shared-session test support: install a Darwin
-        // notification listener that the test runner uses to rewind
-        // ViewerState to a fresh-launch baseline between tests
-        // (avoids the ~25 s per-test cold-start tax). Gated on the
-        // launch flag — production never registers an observer.
-        if LaunchFlags.uiTestMode, let state = viewerState {
-            UITestResetObserver.install(viewerState: state)
-        }
 
         // Sync the indexer cache policy from saved settings BEFORE
         // any shoot opens. The Settings UI's `.onChange` handlers
@@ -599,10 +611,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
                let screen = window.screen ?? NSScreen.main {
                 window.setFrame(screen.visibleFrame, display: true)
             }
-            // Become the window delegate so we can refuse to close while an
-            // export is running. SwiftUI's WindowGroup doesn't set its own
-            // delegate, so this slot is free for us.
-            window.delegate = self
         }
     }
 
@@ -623,9 +631,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
               let path = URLComponents(url: url, resolvingAgainstBaseURL: false)?
                   .queryItems?
                   .first(where: { $0.name == "path" })?
-                  .value,
-              let state = viewerState else { return }
+                  .value
+        else { return }
+        // NSAppleEventManager delivers on the main thread but the
+        // selector isn't statically annotated as MainActor; the
+        // Task hop both resolves the frontmost state under the
+        // registry's MainActor isolation and runs the async load.
         Task { @MainActor in
+            guard let state = WindowRegistry.shared.frontmostViewerState else { return }
             await openCardURL(path: path, state: state)
         }
     }
@@ -695,7 +708,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
             }
         }
 
-        guard let state = viewerState else { return .terminateNow }
+        guard let state = WindowRegistry.shared.frontmostViewerState else { return .terminateNow }
         // Always go through the .terminateLater path now: we need an
         // await for the metrics flush regardless of the XMP-failure
         // decision, so consolidating the branches keeps the

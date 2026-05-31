@@ -992,7 +992,9 @@ struct ContentView: View {
             state.errorMessage = "No ARW + HIF/JPG pair (or standalone HIF/JPG) found in dropped items"
             return false
         }
-        Task { await state.loadShoot(shoot, focus: focus) }
+        Task {
+            await ShootOpener.open(shoot: shoot, focus: focus, requestedTarget: .replaceFrontmost)
+        }
         return true
     }
 }
