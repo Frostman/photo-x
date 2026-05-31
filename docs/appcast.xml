@@ -664,6 +664,18 @@
         type="application/octet-stream"
         sparkle:edSignature="CbomeJSPPOolJaC4awhLLkE/OpJHzRX7azFXWY+TB0fj/64BhhkLWshO/NM7RURVhEKQxARbDcVo548GpHZpAw==" length="12354638" />
     </item>
+    <item>
+      <title>v0.345.0-ffddae320</title>
+      <pubDate>Sat, 30 May 2026 21:45:04 -0700</pubDate>
+      <sparkle:version>345</sparkle:version>
+      <sparkle:shortVersionString>0.345.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[<ul><li>XMP writes: coalesce per stem, merge failures, discard on close</li></ul>]]></description>
+      <enclosure
+        url="https://github.com/Frostman/photo-x/releases/download/v0.345.0/PhotoX-v0.345.0-ffddae320.dmg"
+        type="application/octet-stream"
+        sparkle:edSignature="KCgKkKXf61JxIpHNzUVNTrz1eQ38kBBKavFRLJety3Hy/8CxlAlEmeUFTgY52E1j1SpSpClvhOqdbys3FnTnAw==" length="12423671" />
+    </item>
     <!-- scripts/release.sh splices new <item> entries here, just before </channel>. -->
   </channel>
 </rss>
