@@ -262,9 +262,9 @@ struct SettingsView: View {
 
             Section("Workflow") {
                 Toggle("Auto-advance after keyboard rating", isOn: $autoAdvance)
-                    .help("When you use a keyboard shortcut (1–5, Shift+1–5, R) to set a star, label, or reject, jump to the next pair. Clearing a rating does not advance.")
+                    .help("When you use a keyboard shortcut (1–5, R) to set a star or reject, jump to the next pair. Clearing a rating does not advance. Colour labels (Shift+1–5) never auto-advance.")
                 Toggle("Auto-advance after sidebar rating", isOn: $autoAdvanceSidebar)
-                    .help("When you click a star, label dot, or the Reject button in the sidebar Decisions panel, jump to the next pair.")
+                    .help("When you click a star or the Reject button in the sidebar Decisions panel, jump to the next pair. Colour-label clicks never auto-advance.")
                 Picker("G rejects in burst", selection: $gRejectScopeRaw) {
                     ForEach(GRejectScope.allCases) { scope in
                         Text(scope.displayName).tag(scope.rawValue)

@@ -2385,15 +2385,10 @@ final class ViewerState {
         currentEntryFiles.xmp = true
         let capturedEntry = entry
 
-        if label != nil, autoAdvanceAfterRating(source: source) {
-            nextPair()
-        }
-
         Task { await xmpWriter.writeLabel(label, for: capturedEntry) }
 
-        // Undo registration. Same shape as setRating — focusedStem
-        // is the labeled entry so undo brings the user back even
-        // after auto-advance.
+        // Undo registration — focusedStem is the labeled entry so
+        // undo brings the user back to it.
         let actionName = Self.humanReadableUndoActionName(label: label)
         undoManager.beginUndoGrouping()
         undoManager.registerUndo(withTarget: self) { state in
