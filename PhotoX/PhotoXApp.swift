@@ -476,15 +476,17 @@ struct WindowRoot: View {
     @MainActor private static var didInstallTestObserver = false
     @MainActor private static var didRegisterSpawner = false
 
-    /// Window title — `PhotoX` for an empty window, `PhotoX: <path>`
-    /// (path abbreviated with `~`) when a shoot is loaded. Drives
-    /// the title bar plus macOS surfaces that show window labels
-    /// (Mission Control, ⌘` switcher, Window menu) so two open
-    /// shoots are distinguishable at a glance.
+    /// Window title — `<appName>` for an empty window,
+    /// `<appName>: <path>` (path abbreviated with `~`) when a shoot
+    /// is loaded. `<appName>` reads `CFBundleDisplayName` so dev
+    /// builds advertise as "PhotoXDev" — useful when both the dev
+    /// and the installed Release copy are running side by side.
     private var windowTitle: String {
-        guard let url = viewerState.shoot?.folderURL else { return "PhotoX" }
+        let appName = (Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
+            ?? "PhotoX"
+        guard let url = viewerState.shoot?.folderURL else { return appName }
         let abbrev = (url.path as NSString).abbreviatingWithTildeInPath
-        return "PhotoX: \(abbrev)"
+        return "\(appName): \(abbrev)"
     }
 
     var body: some View {
@@ -745,6 +747,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
         // catch later toggle flips; this is the cold-start path.
         IndexerCache.reloadPolicyFromDefaults()
 
+        // Start watching kernel memory-pressure events so the two
+        // shared LRU caches (MTLTextureCache, PreviewBytesCache)
+        // shrink under `.warning` / `.critical` and restore on
+        // `.normal`. Idle-window entries are naturally first to
+        // evict since they're at the LRU tail.
+        MemoryPressureMonitor.shared.start()
+
         // Bootstrap the background card-watcher helper once per
         // process. The supervisor has its own once-per-session
         // gate, but pinning the call here (rather than in a view
@@ -862,15 +871,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
     /// the window vanishes and the user sees the alert against an empty
     /// app. We intercept here so the window stays put when the user picks
     /// Stay.
+    /// Window close = shoot close + window close. Mirrors
+    /// `ContentView.closeShootGuarded` (XMP prompt + export prompt
+    /// + selective cache cleanup) but driven from the ⌘W / red-
+    /// button path. Returns false synchronously and runs the async
+    /// confirmation flow in a Task; on full confirmation, calls
+    /// `sender.close()` which bypasses `windowShouldClose` so it
+    /// won't recurse.
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        // Check THIS window's runner — exports in other windows
-        // shouldn't block this one's close.
-        guard let runner = WindowRegistry.shared.viewerState(for: sender)?.exportRunner,
-              runner.isRunning else { return true }
-        let alert = makeExportRunningAlert(verb: "close the window")
-        if alert.runModal() == .alertSecondButtonReturn {
-            runner.cancelAll()
-            return true
+        // Unknown window (test surfaces, panels) → allow close.
+        guard let state = WindowRegistry.shared.viewerState(for: sender) else { return true }
+        // Empty window has nothing to clean up — let it close.
+        if state.shoot == nil { return true }
+        Task { @MainActor in
+            // Export prompt (per-window — exports in OTHER windows
+            // shouldn't block this one).
+            if state.exportRunner.isRunning {
+                let alert = makeExportRunningAlert(verb: "close the window")
+                if alert.runModal() != .alertSecondButtonReturn { return }
+                state.exportRunner.cancelAll()
+            }
+            // XMP prompt — failed writes + in-flight writes both
+            // surface as "unsaved work" for confirmation purposes.
+            if await state.hasUnsavedXMPWork() {
+                let failedCount = state.failedXMPWrites.count
+                let proceed = self.runUnsavedXMPAlert(failedCount: failedCount, verb: "closing")
+                if !proceed { return }
+                await state.discardAllUnsavedXMPState()
+            }
+            // Close the shoot first so its cache entries are
+            // selectively cleared and last-entry / metrics are
+            // captured. Then close the window (NSWindow.close
+            // bypasses windowShouldClose → no recursion).
+            await state.closeShoot()
+            sender.close()
         }
         return false
     }
@@ -917,7 +951,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
 
             let totalFailed = states.reduce(0) { $0 + $1.failedXMPWrites.count }
             if totalFailed > 0 {
-                let proceed = self.runUnsavedXMPAlert(failedCount: totalFailed)
+                let proceed = self.runUnsavedXMPAlert(failedCount: totalFailed, verb: "quitting")
                 sender.reply(toApplicationShouldTerminate: proceed)
                 return
             }
@@ -931,7 +965,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
                 sender.reply(toApplicationShouldTerminate: true)
                 return
             }
-            let proceed = self.runUnsavedXMPAlert(failedCount: 0)
+            let proceed = self.runUnsavedXMPAlert(failedCount: 0, verb: "quitting")
             sender.reply(toApplicationShouldTerminate: proceed)
         }
         return .terminateLater
@@ -939,16 +973,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
 
     /// Modal alert for the unsaved-XMP-writes case. Returns true if
     /// the user chose to quit anyway, false if they want to stay.
-    private func runUnsavedXMPAlert(failedCount: Int) -> Bool {
+    /// Shared unsaved-XMP-writes alert. `verb` drives the sentence
+    /// ("quitting" / "closing this window") and the destructive
+    /// button label ("Quit anyway" / "Close anyway"). Returns true
+    /// if the user chose to proceed (discard the unsaved writes).
+    private func runUnsavedXMPAlert(failedCount: Int, verb: String) -> Bool {
         let alert = NSAlert()
         alert.messageText = "Unsaved rating changes"
+        let gerund = verb.prefix(1).uppercased() + verb.dropFirst()
         alert.informativeText = failedCount > 0
-            ? "\(failedCount) write\(failedCount == 1 ? "" : "s") to XMP sidecar files have failed. Quitting now will lose them. Click \"Stay\" to review them in the Failed XMP Writes window."
-            : "Some rating writes are still being written to disk. Quitting now might lose them."
+            ? "\(failedCount) write\(failedCount == 1 ? "" : "s") to XMP sidecar files have failed. \(gerund) now will lose them. Click \"Stay\" to review them in the Failed XMP Writes window."
+            : "Some rating writes are still being written to disk. \(gerund) now might lose them."
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Stay")
-        let quitBtn = alert.addButton(withTitle: "Quit anyway")
-        quitBtn.hasDestructiveAction = true
+        let actionLabel = String(verb.split(separator: " ").first ?? "Proceed").capitalized
+        let action = alert.addButton(withTitle: "\(actionLabel) anyway")
+        action.hasDestructiveAction = true
         return alert.runModal() == .alertSecondButtonReturn
     }
 

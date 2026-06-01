@@ -898,6 +898,12 @@ final class ViewerState {
     /// decode so the focus entry's metadata batch is already in flight by
     /// the time the HEIF preview lands on-screen.
     func loadShoot(_ shoot: Shoot, focus: PhotoEntry) async {
+        // Capture the outgoing shoot's folder so we can selectively
+        // drop ITS entries from the shared caches once the new
+        // shoot is in place. Process-wide caches (texture, preview
+        // bytes) would otherwise hold stale entries for the closing
+        // shoot until LRU eviction got around to them.
+        let oldFolder = self.shoot?.folderURL
         // Before we tear down the current shoot, save the user's
         // last position so a future reopen (favorite / recent click,
         // app relaunch) lands them back where they were.
@@ -907,6 +913,7 @@ final class ViewerState {
         let oldCache = cache
         Task { await oldCache.close() }
         resetForShootSwitch()
+        await Self.dropSharedCaches(forFolder: oldFolder)
         metrics.recordShootOpened()
         // Swap in a cache scoped to the new shoot. Reading the
         // existing .plist (if any) happens synchronously in the
@@ -992,8 +999,8 @@ final class ViewerState {
     /// individual tests are allowed to mutate. NEVER call in
     /// production — there's no UI surface for it and the
     /// `failedXMPWrites` wipe would silently swallow real errors.
-    func resetForUITest() {
-        closeShoot()
+    func resetForUITest() async {
+        await closeShoot()
         // Failed XMP writes deliberately persist across shoots in
         // production (the user must see them). For tests we want
         // a clean slate so the titlebar pill doesn't leak.
@@ -1007,7 +1014,16 @@ final class ViewerState {
     }
 
     /// Drop the current shoot and return to the empty starter state.
-    func closeShoot() {
+    /// Async so the shared-cache clears complete before the caller
+    /// proceeds (e.g. `windowShouldClose` awaiting before calling
+    /// `sender.close()`); otherwise on the last-window red-button
+    /// path the app terminates mid-cleanup and the clear never
+    /// lands.
+    func closeShoot() async {
+        // See `loadShoot` for why we capture the outgoing folder
+        // before tearing down — used to selectively clear the
+        // shared caches' entries for this shoot only.
+        let oldFolder = self.shoot?.folderURL
         // Save the user's position before tearing down so reopening
         // this shoot (favorite / recent click) lands on the same entry.
         captureLastEntryToStores()
@@ -1017,6 +1033,7 @@ final class ViewerState {
         let oldCache = cache
         Task { await oldCache.close() }
         resetForShootSwitch()
+        await Self.dropSharedCaches(forFolder: oldFolder)
         shoot = nil
         // Replace with a no-op cache so subsequent calls don't
         // touch the previous shoot's data.
@@ -1037,6 +1054,24 @@ final class ViewerState {
         // shoot's per-destination state stranded on the toolbar
         // tab for the next shoot.
         exportRunner.resetState(force: true)
+    }
+
+    /// Selectively drop a shoot's entries from the two process-wide
+    /// LRU caches. Called by `closeShoot` and `loadShoot` after the
+    /// state swap so window B keeps its cached bytes / textures
+    /// when window A switches or closes its shoot. No-op when
+    /// folder is nil (closing an already-empty window). Detached
+    /// so the `actor` await on `PreviewBytesCache` doesn't gate the
+    /// synchronous close path.
+    /// Awaited by `closeShoot` / `loadShoot` so the cache clears
+    /// complete BEFORE the caller returns. Spawning an unstructured
+    /// Task here (the previous shape) lost the cleanup whenever the
+    /// caller was followed by `sender.close()` on the last open
+    /// window — the app terminated before the Task got a turn.
+    private static func dropSharedCaches(forFolder folder: URL?) async {
+        guard let folder else { return }
+        MTLTextureCache.shared.clear(matching: folder)
+        await PreviewBytesCache.shared.clear(matching: folder)
     }
 
     /// Shared teardown for closeShoot + loadShoot. Cancels all trackable
@@ -1070,8 +1105,13 @@ final class ViewerState {
         currentApplyTask = nil
         for (_, task) in prefetchTasks { task.cancel() }
         prefetchTasks.removeAll()
-        MTLTextureCache.shared.clear()
-        Task { await pipeline.previewBytes.clear() }
+        // MTLTextureCache and PreviewBytesCache are process-wide.
+        // Entries are keyed by per-file paths so different shoots
+        // never collide, and LRU eviction naturally trims stale
+        // shoots as new content fills the budget. An explicit
+        // `.clear()` here would wipe ALL open windows' cached
+        // data, not just the closing shoot's — bad for multi-
+        // window.
         thumbnails.removeAll()
         entryXMPs.removeAll()
         stemsWithXMPOnDisk.removeAll()
@@ -2708,7 +2748,7 @@ final class ViewerState {
             let neighbor = entries[idx]
             let stem = neighbor.stem
             if prefetchTasks[stem] != nil { continue }
-            let key = DecodeKey(entryID: neighbor.id, variant: .preview, decoder: .imageIO)
+            let key = DecodeKey(entryID: neighbor.commonPath, variant: .preview, decoder: .imageIO)
             prefetchTasks[stem] = Task { [weak self] in
                 guard let self else { return }
                 if Task.isCancelled { return }
@@ -2767,7 +2807,7 @@ final class ViewerState {
         // canvas's MTLTextureCache key lines up with whatever the
         // pipeline produced.
         let keyDecoder: DecoderChoice = (variant == .preview) ? .imageIO : chosenDecoder
-        let key = DecodeKey(entryID: entry.id, variant: variant, decoder: keyDecoder)
+        let key = DecodeKey(entryID: entry.commonPath, variant: variant, decoder: keyDecoder)
         self.errorMessage = nil
         self.isDecoding = true
         defer { isDecoding = false }

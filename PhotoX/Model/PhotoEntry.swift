@@ -16,6 +16,17 @@ struct PhotoEntry: Identifiable, Hashable, Sendable {
 
     var id: String { stem }
 
+    /// Path-based identifier shared by an entry's `.preview` and
+    /// `.raw` variants. Used as `DecodeKey.entryID` so the texture
+    /// cache + single-flight dedup are unique across shoots — two
+    /// shoots that both contain a `DSC04176` would collide on
+    /// stem alone, but their `commonPath`s differ. Drops the file
+    /// extension so RAW and preview of the same entry hash the
+    /// same way.
+    var commonPath: String {
+        (rawURL ?? previewURL).deletingPathExtension().path
+    }
+
     /// Lightroom-compatible sidecar next to the RAW if we have one,
     /// otherwise next to the preview. Same `<stem>.xmp` either way
     /// because the pair shares a stem.

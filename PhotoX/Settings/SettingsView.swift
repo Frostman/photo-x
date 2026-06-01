@@ -357,8 +357,9 @@ struct SettingsView: View {
             MTLTextureCache.shared.setCapacity(max(1, new))
         }
         .onChange(of: previewBytesCacheMB) { _, new in
-            let pipeline = state.pipeline
-            Task { await pipeline.previewBytes.setByteCapacity(max(1, new) * 1024 * 1024) }
+            // PreviewBytesCache is process-wide — one cap binding
+            // covers every open window.
+            Task { await PreviewBytesCache.shared.setByteCapacity(max(1, new) * 1024 * 1024) }
         }
         .onChange(of: cacheExifSummary)      { _, new in IndexerCache.policy.cacheExifSummary  = new }
         .onChange(of: cacheAFData)            { _, new in IndexerCache.policy.cacheAFData       = new }

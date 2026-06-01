@@ -14,11 +14,12 @@ import Foundation
 /// doesn't outlive the session.
 @MainActor
 final class DecodePipeline {
-    /// Raw-byte cache for preview files: 2 GB ≈ ~200+ HIFs in RAM.
-    /// Sits in front of `PreviewDecoder` so back-and-forth culling
-    /// never re-reads from the source card. Cleared on shoot switch
-    /// by `ViewerState.resetForShootSwitch`.
-    let previewBytes: PreviewBytesCache
+    /// Raw-byte cache for preview files — process-wide so two
+    /// open windows share one 2 GB budget rather than each owning
+    /// their own copy. Keys are absolute paths so entries from
+    /// different shoots never collide; LRU eviction handles aging
+    /// out stale shoots without an explicit clear.
+    var previewBytes: PreviewBytesCache { .shared }
 
     private let previewDecoder: any ImageDecoder
     private let rawImageIODecoder: any ImageDecoder = RAWImageIODecoder()
@@ -26,18 +27,8 @@ final class DecodePipeline {
 
     private var inflight: [DecodeKey: Task<DecodedImage, Error>] = [:]
 
-    init(previewBytesCapacity: Int? = nil) {
-        // Honor the user-tuned cap from Settings → Advanced. The Int?
-        // parameter override lets tests pin a specific value; nil =
-        // read from AppDefaults (with the standard Defaults fallback
-        // for missing keys). `object(forKey:) as? Int` distinguishes
-        // "unset" from "user set it to 0" — the latter would silently
-        // disable the cache via `integer(forKey:)`.
-        let configured = (AppDefaults.shared.object(forKey: SettingsKey.previewBytesCacheMB) as? Int)
-                         ?? SettingsKey.Defaults.previewBytesCacheMB
-        let cap = previewBytesCapacity ?? (max(1, configured) * 1024 * 1024)
-        self.previewBytes = PreviewBytesCache(byteCapacity: cap)
-        self.previewDecoder = PreviewDecoder(bytesCache: self.previewBytes)
+    init() {
+        self.previewDecoder = PreviewDecoder(bytesCache: .shared)
     }
 
     /// Decode `entry.variant` into a `DecodedImage`. Single-flight per
@@ -59,7 +50,7 @@ final class DecodePipeline {
         // PreviewDecoder. Normalise the dedup key so preview nav doesn't
         // accidentally fan out across different decoder slots.
         let keyDecoder: DecoderChoice = (effectiveVariant == .preview) ? .imageIO : decoder
-        let key = DecodeKey(entryID: entry.id, variant: effectiveVariant, decoder: keyDecoder)
+        let key = DecodeKey(entryID: entry.commonPath, variant: effectiveVariant, decoder: keyDecoder)
 
         if let existing = inflight[key] {
             return try await existing.value

@@ -203,18 +203,31 @@ struct OpenStarterView: View {
         }
     }
 
-    /// Walk a card path (`/Volumes/<NAME>/DCIM/<folder>`) two levels up
-    /// to its volume root and ask the system to unmount + eject it.
-    /// Drops the HIF bytes cache first so any mmap'd Data we held
-    /// from a previous shoot view doesn't keep the volume busy. On
-    /// failure (volume in use by another app) surfaces an NSAlert so
-    /// the user knows nothing happened and why.
+    /// Walk a card path (`/Volumes/<NAME>/DCIM/<folder>`) two levels
+    /// up to its volume root and ask the system to unmount + eject
+    /// it. If any open PhotoX window (across the whole app, not
+    /// just this view's window) has a shoot loaded from this card,
+    /// surface a "close the shoot first" alert and abort — closing
+    /// shoots is left to the user, not automated. On unmount
+    /// failure surfaces an `NSAlert` (volume in use by another
+    /// app, etc.).
     private func ejectVolume(forCardPath path: String) {
         let volumeURL = URL(fileURLWithPath: path)
             .deletingLastPathComponent()   // /Volumes/<NAME>/DCIM
             .deletingLastPathComponent()   // /Volumes/<NAME>
         Task {
-            await state.pipeline.previewBytes.clear()
+            let affected = WindowRegistry.shared.windows(withShootOn: volumeURL)
+            if !affected.isEmpty {
+                let n = affected.count
+                let shootNoun = n == 1 ? "shoot is" : "shoots are"
+                let alert = NSAlert()
+                alert.messageText = "Can't eject '\(volumeURL.lastPathComponent)'"
+                alert.informativeText = "\(n) \(shootNoun) open on this card. Close \(n == 1 ? "it" : "them") in \(n == 1 ? "its" : "their") window\(n == 1 ? "" : "s") before ejecting."
+                alert.alertStyle = .warning
+                alert.addButton(withTitle: "OK")
+                alert.runModal()
+                return
+            }
             do {
                 try NSWorkspace.shared.unmountAndEjectDevice(at: volumeURL)
                 // VolumeWatcher's didUnmount observer will refresh the

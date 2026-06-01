@@ -36,7 +36,7 @@ final class PreviewDecoder: ImageDecoder {
                 #if DEBUG
                 let usedMB = await cache.bytesUsed / (1024 * 1024)
                 let count  = await cache.count
-                Log.decode.notice("preview bytes HIT: \(url.lastPathComponent, privacy: .public) (\(cached.count, privacy: .public) B, cache \(count, privacy: .public) entries / \(usedMB, privacy: .public) MB)")
+                Log.cache.notice("preview bytes HIT: \(url.lastPathComponent, privacy: .public) (\(cached.count, privacy: .public) B, cache \(count, privacy: .public) entries / \(usedMB, privacy: .public) MB)")
                 #endif
                 data = cached
             } else {
@@ -50,7 +50,7 @@ final class PreviewDecoder: ImageDecoder {
                 #if DEBUG
                 let usedMB = await cache.bytesUsed / (1024 * 1024)
                 let count  = await cache.count
-                Log.decode.notice("preview bytes MISS: \(url.lastPathComponent, privacy: .public) read \(data.count, privacy: .public) B in \(readMS, format: .fixed(precision: 1)) ms (cache \(count, privacy: .public) entries / \(usedMB, privacy: .public) MB)")
+                Log.cache.notice("preview bytes MISS: \(url.lastPathComponent, privacy: .public) read \(data.count, privacy: .public) B in \(readMS, format: .fixed(precision: 1)) ms (cache \(count, privacy: .public) entries / \(usedMB, privacy: .public) MB)")
                 #endif
             }
         } else {

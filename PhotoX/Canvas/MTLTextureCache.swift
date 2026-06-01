@@ -94,11 +94,15 @@ final class MTLTextureCache {
     func setCapacity(_ newCapacity: Int) {
         let clamped = max(1, newCapacity)
         guard clamped != capacity else { return }
+        let oldCapacity = capacity
         capacity = clamped
+        var evicted = 0
         while order.count > capacity {
             let evict = order.removeFirst()
             entries.removeValue(forKey: evict)
+            evicted += 1
         }
+        Log.cache.notice("texture setCapacity \(oldCapacity, privacy: .public) → \(self.capacity, privacy: .public) (evicted \(evicted, privacy: .public))")
     }
 
     /// Snapshot of cache state for the Settings → Advanced live
@@ -138,10 +142,21 @@ final class MTLTextureCache {
     /// and return the cached `Entry`. Concurrent calls for the same key
     /// share a single upload via the `inflight` dict.
     func warm(cgImage: CGImage, key: DecodeKey, orientation: Int) async throws -> Entry {
-        if let cached = get(key) { return cached }
+        if let cached = get(key) {
+            #if DEBUG
+            Log.cache.notice("texture HIT: \(key.entryID, privacy: .public) [\(key.variant.rawValue, privacy: .public)] (count \(self.entries.count, privacy: .public)/\(self.capacity, privacy: .public))")
+            #endif
+            return cached
+        }
         if let existing = inflight[key] {
+            #if DEBUG
+            Log.cache.notice("texture INFLIGHT JOIN: \(key.entryID, privacy: .public) [\(key.variant.rawValue, privacy: .public)]")
+            #endif
             return try await existing.value
         }
+        #if DEBUG
+        Log.cache.notice("texture MISS: \(key.entryID, privacy: .public) [\(key.variant.rawValue, privacy: .public)] → uploading (count \(self.entries.count, privacy: .public)/\(self.capacity, privacy: .public))")
+        #endif
 
         let loader = textureLoader
         let queue = commandQueue
@@ -171,8 +186,39 @@ final class MTLTextureCache {
     /// NOT cancelled (MTKTextureLoader doesn't honor Task cancellation
     /// at a granular level); they'll resolve and clean themselves up.
     func clear() {
+        #if DEBUG
+        Log.cache.notice("texture CLEAR ALL: dropped \(self.entries.count, privacy: .public) entries")
+        #endif
         entries.removeAll()
         order.removeAll()
+    }
+
+    /// Selectively drop every entry whose source path lives inside
+    /// `folder`. Mirrors `PreviewBytesCache.clear(matching:)` —
+    /// `ViewerState.closeShoot` / `loadShoot` call both so a shoot
+    /// closing in window A reclaims its GPU textures without
+    /// disturbing other windows' entries. Relies on
+    /// `DecodeKey.entryID` being a path-based identifier (set in
+    /// `DecodePipeline` and the prefetch hooks).
+    func clear(matching folder: URL) {
+        let prefix = folder.standardizedFileURL.path + "/"
+        #if DEBUG
+        let countBefore = entries.count
+        #endif
+        order.removeAll { key in
+            let drop = key.entryID.hasPrefix(prefix)
+            if drop { entries.removeValue(forKey: key) }
+            return drop
+        }
+        #if DEBUG
+        let dropped = countBefore - entries.count
+        if dropped > 0 {
+            // Abbreviated full path so two shoots that happen to
+            // share a folder name don't look identical in the log.
+            let pretty = (folder.standardizedFileURL.path as NSString).abbreviatingWithTildeInPath
+            Log.cache.notice("texture CLEAR matching=\(pretty, privacy: .public): dropped \(dropped, privacy: .public) (kept \(self.entries.count, privacy: .public))")
+        }
+        #endif
     }
 
     /// Test/diagnostic — current entry count.
@@ -194,10 +240,22 @@ final class MTLTextureCache {
         }
         entries[key] = entry
         order.append(key)
+        #if DEBUG
+        var evictedKeys: [DecodeKey] = []
+        #endif
         while order.count > capacity {
             let evict = order.removeFirst()
             entries.removeValue(forKey: evict)
+            #if DEBUG
+            evictedKeys.append(evict)
+            #endif
         }
+        #if DEBUG
+        if !evictedKeys.isEmpty {
+            let names = evictedKeys.map { ($0.entryID as NSString).lastPathComponent }.joined(separator: ", ")
+            Log.cache.notice("texture LRU EVICT \(evictedKeys.count, privacy: .public) on insert \(key.entryID, privacy: .public): \(names, privacy: .public)")
+        }
+        #endif
     }
 
     /// MTKTextureLoader fails with "Image decoding failed" on a lot

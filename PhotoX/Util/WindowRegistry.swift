@@ -121,6 +121,25 @@ final class WindowRegistry {
         return nil
     }
 
+    /// Registered windows whose currently-loaded shoot lives inside
+    /// `volume`. Used by the eject flow to find shoots that would be
+    /// stranded if the volume unmounts. Paths normalized via
+    /// `standardizedFileURL` so symlink aliases of the same volume
+    /// dedupe correctly.
+    func windows(withShootOn volume: URL) -> [(window: NSWindow, viewerState: ViewerState)] {
+        let prefix = volume.standardizedFileURL.path + "/"
+        compact()
+        return entries.values.compactMap { entry in
+            guard
+                let window = entry.window,
+                let state = entry.viewerState,
+                let url = state.shoot?.folderURL,
+                url.standardizedFileURL.path.hasPrefix(prefix)
+            else { return nil }
+            return (window, state)
+        }
+    }
+
     /// First registered window whose ViewerState has no shoot loaded.
     /// Used by the card-URL router to "adopt" an empty window before
     /// spawning a new one.

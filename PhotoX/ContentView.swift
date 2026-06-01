@@ -585,7 +585,7 @@ struct ContentView: View {
             if xmpNeedsConfirm {
                 await state.discardAllUnsavedXMPState()
             }
-            state.closeShoot()
+            await state.closeShoot()
         }
     }
 

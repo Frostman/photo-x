@@ -92,7 +92,7 @@ enum UITestResetObserver {
         // parallel. The new task subsumes the old.
         currentResetTask?.cancel()
         currentResetTask = Task { @MainActor in
-            viewerState.resetForUITest()
+            await viewerState.resetForUITest()
             // Re-bootstrap from PHOTOX_SAMPLE_DIR. Deliberately NOT
             // the launch-path's savedStem-first lookup: the
             // previous test's `captureLastEntryToStores` (called

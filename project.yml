@@ -97,7 +97,12 @@ targets:
       path: PhotoX/Info.plist
       properties:
         CFBundleName: $(PRODUCT_NAME)
-        CFBundleDisplayName: PhotoX
+        # Per-config so dev notifications, Dock label, About panel,
+        # and window titles read "PhotoXDev" — quickly tells you the
+        # build a banner came from when both dev and release are
+        # registered on the same machine. See PHOTOX_DISPLAY_NAME
+        # below.
+        CFBundleDisplayName: $(PHOTOX_DISPLAY_NAME)
         CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         CFBundleShortVersionString: $(MARKETING_VERSION)
@@ -190,8 +195,14 @@ targets:
           # Card-watcher LaunchAgent identity (per-config so debug and
           # release helpers register as separate launchd jobs).
           PHOTOX_URL_SCHEME: photox-dev
+          # Dev builds advertise as "PhotoXDev" so notifications,
+          # Dock label, Cmd-Tab, and the window title are
+          # unambiguously the dev copy even when /Applications/PhotoX
+          # is also installed.
+          PHOTOX_DISPLAY_NAME: PhotoXDev
         Release:
           PRODUCT_BUNDLE_IDENTIFIER: dev.frostman.PhotoX
+          PHOTOX_DISPLAY_NAME: PhotoX
           PHOTOX_URL_SCHEME: photox
 
   PhotoXCardWatcher:
@@ -227,6 +238,13 @@ targets:
       properties:
         CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
         CFBundleName: $(PRODUCT_NAME)
+        # Display name aligned with the parent app — when the
+        # helper posts a card-mount notification, the banner reads
+        # "PhotoXDev" for dev / "PhotoX" for release. Without this,
+        # macOS falls back to CFBundleName ("PhotoXCardWatcher")
+        # which leaks the helper-implementation detail and doesn't
+        # distinguish dev vs release at a glance.
+        CFBundleDisplayName: $(PHOTOX_DISPLAY_NAME)
         CFBundleExecutable: $(EXECUTABLE_NAME)
         CFBundlePackageType: $(PRODUCT_BUNDLE_PACKAGE_TYPE)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
@@ -280,6 +298,9 @@ targets:
           PHOTOX_PARENT_BUNDLE_ID: dev.frostman.PhotoX.debug
           PHOTOX_HELPER_LABEL: dev.frostman.PhotoX.debug.CardWatcher
           PHOTOX_URL_SCHEME: photox-dev
+          # Notifications posted by the helper read "PhotoXDev" so
+          # they're clearly the dev build's banners.
+          PHOTOX_DISPLAY_NAME: PhotoXDev
           CODE_SIGN_ENTITLEMENTS: PhotoXCardWatcher/PhotoXCardWatcher-Debug.entitlements
           # Helper's notification icon matches the dev app's
           # amber "DEV" pill variant.
@@ -289,6 +310,7 @@ targets:
           PHOTOX_PARENT_BUNDLE_ID: dev.frostman.PhotoX
           PHOTOX_HELPER_LABEL: dev.frostman.PhotoX.CardWatcher
           PHOTOX_URL_SCHEME: photox
+          PHOTOX_DISPLAY_NAME: PhotoX
           CODE_SIGN_ENTITLEMENTS: PhotoXCardWatcher/PhotoXCardWatcher.entitlements
 
   PhotoXTests:

@@ -4,6 +4,13 @@ enum Log {
     static let app = Logger(subsystem: "dev.frostman.PhotoX", category: "app")
     static let decode = Logger(subsystem: "dev.frostman.PhotoX", category: "decode")
     static let canvas = Logger(subsystem: "dev.frostman.PhotoX", category: "canvas")
+    /// All cache hit / miss / clear / insert events — `MTLTextureCache`,
+    /// `PreviewBytesCache`, future caches. Filter Console.app on
+    /// `category:cache` to see only cache traffic and nothing else.
+    /// Lifecycle (`CLEAR`) lines stay at `.notice`; per-nav `HIT` /
+    /// `MISS` are gated `#if DEBUG` at the call site since they fire
+    /// per image.
+    static let cache = Logger(subsystem: "dev.frostman.PhotoX", category: "cache")
 
     /// DEBUG-only update-lifecycle notice. Self-update fires a lot
     /// of per-check / per-callback chatter (probe ticks, scheduler
