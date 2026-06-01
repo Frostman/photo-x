@@ -588,30 +588,6 @@ struct WindowRoot: View {
     }
 
     private func bootstrap(skipAutoLoad: Bool) async {
-        // Pick up any new card-watcher binary inside this app
-        // bundle and recover if launchd lost track of the
-        // helper. See `CardWatcherSupervisor.bootstrapAtLaunch`
-        // for the full state machine — running → bounce,
-        // registered-but-stopped → start, SM/launchd-desync →
-        // re-register + start. Detached so the shoot-load /
-        // updater work below isn't gated on launchctl I/O.
-        // After the bootstrap finishes we surface unhealthy
-        // outcomes via an alert so the user actually notices
-        // the watcher is broken (rather than only seeing it
-        // in Settings the next time they open the pane).
-        Task.detached(priority: .background) {
-            let status = await CardWatcherSupervisor.bootstrapAtLaunch()
-            await MainActor.run {
-                // Order matters: a broken watcher's "needs
-                // attention" alert outranks any promo. Only
-                // one promo per launch, so the user never
-                // sees two stacked modal alerts on a cold
-                // start.
-                presentCardWatcherAlertIfNeeded(status: status)
-                presentOnboardingPromosIfNeeded()
-            }
-        }
-
         // Caller already loaded a shoot into this window (Open in
         // New Window, Dock drop, etc.) — don't second-guess them
         // with a Sparkle reopen or default-folder auto-load.
@@ -769,12 +745,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
         // catch later toggle flips; this is the cold-start path.
         IndexerCache.reloadPolicyFromDefaults()
 
-        // Take over each registered window's delegate as it becomes
-        // main. Setting the delegate during `WindowAccessor.updateNSView`
-        // races with SwiftUI's own delegate install; SwiftUI wins and
-        // we never see `windowShouldClose` (so exports can't refuse a
-        // mid-flight ⌘W). `didBecomeMainNotification` fires after
-        // SwiftUI's setup completes, so a re-take here is durable.
+        // Bootstrap the background card-watcher helper once per
+        // process. The supervisor has its own once-per-session
+        // gate, but pinning the call here (rather than in a view
+        // `.task`) makes the "one helper, one bootstrap" intent
+        // explicit and decouples it from multi-window scene
+        // creation. Detached so launchctl I/O doesn't stall app
+        // launch; unhealthy outcomes surface as an alert.
+        Task.detached(priority: .background) {
+            let status = await CardWatcherSupervisor.bootstrapAtLaunch()
+            await MainActor.run {
+                // Order matters: a broken watcher's "needs
+                // attention" alert outranks any promo. Only one
+                // promo per launch, so the user never sees two
+                // stacked modal alerts on a cold start.
+                presentCardWatcherAlertIfNeeded(status: status)
+                presentOnboardingPromosIfNeeded()
+            }
+        }
+
         // Take over each registered window's delegate so
         // `windowShouldClose` can refuse close while THIS window's
         // export runner is busy. SwiftUI's WindowGroup installs its
@@ -820,21 +809,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
     @objc func handleURLAppleEvent(_ event: NSAppleEventDescriptor,
                                    withReplyEvent reply: NSAppleEventDescriptor) {
         guard let urlStr = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))?.stringValue,
-              let url = URL(string: urlStr) else { return }
-        NSApp.activate(ignoringOtherApps: true)
-        guard url.host == "card",
+              let url = URL(string: urlStr),
+              url.host == "card",
               let path = URLComponents(url: url, resolvingAgainstBaseURL: false)?
                   .queryItems?
                   .first(where: { $0.name == "path" })?
                   .value
         else { return }
+        NSApp.activate(ignoringOtherApps: true)
         // NSAppleEventManager delivers on the main thread but the
-        // selector isn't statically annotated as MainActor; the
-        // Task hop both resolves the frontmost state under the
-        // registry's MainActor isolation and runs the async load.
+        // selector isn't statically annotated as MainActor; hop to
+        // the actor for `CardURLRouter` (which touches the
+        // MainActor-isolated registry + spawns SwiftUI windows).
         Task { @MainActor in
-            guard let state = WindowRegistry.shared.frontmostViewerState else { return }
-            await openCardURL(path: path, state: state)
+            CardURLRouter.handle(path: path)
         }
     }
 
@@ -983,33 +971,3 @@ fileprivate func makeExportRunningAlert(verb: String) -> NSAlert {
     return alert
 }
 
-/// URL-scheme entry point used by `WindowGroup`'s
-/// `.onOpenURL` when the background card watcher's
-/// notification action fires. Same close-shoot +
-/// export-confirmation flow that
-/// `ContentView.closeShootGuarded()` uses:
-/// - Same path already loaded → just hop to View tab.
-/// - Different shoot + export in flight → show the shared
-///   "Export in progress" alert and only proceed if the
-///   user picks the destructive action.
-/// - Otherwise → load and hop to View.
-@MainActor
-fileprivate func openCardURL(path: String, state: ViewerState) async {
-    if state.shoot?.folderURL.path == path {
-        NotificationCenter.default.post(
-            name: .photoxSwitchWorkspace,
-            object: WorkspaceSwitchRequest(mode: .view, target: state))
-        return
-    }
-    if state.shoot != nil, state.exportRunner.isRunning {
-        let alert = makeExportRunningAlert(verb: "switch to the card")
-        if alert.runModal() != .alertSecondButtonReturn {
-            return
-        }
-        state.exportRunner.cancelAll()
-    }
-    await OpenShootRouter.load(path: path, state: state)
-    NotificationCenter.default.post(
-        name: .photoxSwitchWorkspace,
-        object: WorkspaceSwitchRequest(mode: .view, target: state))
-}
