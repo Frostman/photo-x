@@ -21,6 +21,8 @@ enum ShootOpener {
     /// is left alone (a freshly-spawned new window stays empty).
     enum Target {
         /// Replace the shoot in the frontmost registered window.
+        /// Use for menu-bar commands where the source window is
+        /// whichever was key when the menu opened.
         case replaceFrontmost
         /// Spawn a new window. Stage 1 has no menu items that
         /// produce this; Stage 2 wires `⌘⇧O` / `⌘N` / Dock-drop
@@ -29,6 +31,13 @@ enum ShootOpener {
         /// Load into a caller-specified window (used by the
         /// card-URL router after it picks an empty window).
         case targetWindow(NSWindow)
+        /// Load into a specific `ViewerState`. Use for in-window
+        /// UI actions (drag-drop, the in-window Open tab's recent
+        /// picker, the in-window "Open Folder…" button) so the
+        /// target is unambiguously *this* window — not whatever
+        /// happens to be `NSApp.mainWindow` at the moment the
+        /// async Task resolves.
+        case targetState(ViewerState)
     }
 
     enum Outcome {
@@ -78,10 +87,13 @@ enum ShootOpener {
             return WindowRegistry.shared.frontmostViewerState
         case .targetWindow(let window):
             return WindowRegistry.shared.viewerState(for: window)
+        case .targetState(let state):
+            return state
         case .newWindow:
-            // Stage 2 will wire the SwiftUI `openWindow` env action
-            // through here so .newWindow can spawn + register a
-            // fresh window before returning.
+            // .newWindow is consumed via WindowRegistry's pending-
+            // shoot slot + SwiftUI's `openWindow` env action (driven
+            // by FileMenuButtons / AppDelegate.application(_:open:)).
+            // ShootOpener doesn't spawn windows itself.
             return nil
         }
     }
@@ -89,7 +101,13 @@ enum ShootOpener {
     private static func focus(_ window: NSWindow) {
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        NotificationCenter.default.post(
-            name: .photoxSwitchWorkspace, object: WorkspaceMode.view)
+        // Target the View-tab switch at this specific window's
+        // ViewerState — otherwise every open window's ContentView
+        // would observe the broadcast and yank its own tab.
+        if let target = WindowRegistry.shared.viewerState(for: window) {
+            NotificationCenter.default.post(
+                name: .photoxSwitchWorkspace,
+                object: WorkspaceSwitchRequest(mode: .view, target: target))
+        }
     }
 }

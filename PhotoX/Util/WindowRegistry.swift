@@ -1,6 +1,14 @@
 import AppKit
 import Foundation
 
+/// Identifiers for SwiftUI `WindowGroup` instances. Used both by
+/// the `.openWindow(id:)` environment action and by AppKit bridges
+/// that spawn windows from outside SwiftUI (Dock-drop handler,
+/// card-URL router).
+enum WindowID {
+    static let main = "main"
+}
+
 /// App-singleton registry mapping each open `NSWindow` to its
 /// `ViewerState`. Multi-window support routes through here:
 /// - `ShootOpener` consults the registry to enforce one-window-per-
@@ -25,6 +33,34 @@ final class WindowRegistry {
     }
 
     private var entries: [ObjectIdentifier: Entry] = [:]
+
+    /// Bridge between AppKit callbacks (Dock drop, card-URL handler)
+    /// and SwiftUI's `@Environment(\.openWindow)`. The App's
+    /// `WindowRoot` captures the action and stores it here once;
+    /// callers from outside any View context invoke
+    /// `spawnNewWindow?()` to spawn a fresh `WindowGroup` instance.
+    var spawnNewWindow: (() -> Void)?
+
+    /// Shoot to claim when the next window registers. Used to
+    /// thread a shoot through SwiftUI's window-spawn machinery —
+    /// callers stash the shoot, call `spawnNewWindow?()`, and the
+    /// just-spawned `WindowRoot` consumes the entry on first
+    /// `.task` run. Single-slot is fine: only one window is in
+    /// flight at a time per user action.
+    enum PendingShoot {
+        case path(String)
+        case scanned(shoot: Shoot, focus: PhotoEntry)
+    }
+    private var pendingShoot: PendingShoot?
+
+    func enqueuePendingShoot(_ shoot: PendingShoot) {
+        pendingShoot = shoot
+    }
+
+    func consumePendingShoot() -> PendingShoot? {
+        defer { pendingShoot = nil }
+        return pendingShoot
+    }
 
     /// Register a window↔viewerState mapping. Idempotent if the same
     /// pair is re-registered (e.g. SwiftUI reruns the WindowAccessor

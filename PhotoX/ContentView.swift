@@ -33,6 +33,11 @@ private struct ModeWiring: ViewModifier {
     @Binding var showHelp: Bool
     @Binding var showAnnotationHelp: Bool
     let shootMissing: Bool
+    /// Identity used to filter targeted workspace-switch
+    /// notifications. Each window's `WorkspaceSwitchRequest`
+    /// carries its target `ViewerState`; observers ignore
+    /// requests aimed at other windows.
+    let state: ViewerState
 
     func body(content: Content) -> some View {
         content
@@ -85,11 +90,14 @@ private struct ModeWiring: ViewModifier {
             }
             .onReceive(NotificationCenter.default.publisher(
                 for: .photoxSwitchWorkspace)) { notif in
-                guard let target = notif.object as? WorkspaceMode else { return }
+                guard let req = notif.object as? WorkspaceSwitchRequest else { return }
+                // Filter by target identity so a switch aimed at
+                // window A doesn't yank window B's tab.
+                guard req.target === state else { return }
                 // Tabs that require a shoot become no-ops on
                 // the starter screen.
-                if workspaceTab(for: target).requiresShoot, shootMissing { return }
-                mode = target
+                if workspaceTab(for: req.mode).requiresShoot, shootMissing { return }
+                mode = req.mode
             }
     }
 }
@@ -131,6 +139,10 @@ struct ContentView: View {
     @State private var helpAnchorStore = HelpAnchorStore()
     @State private var showJumpSheet: Bool = false
     @State private var copiedFlash: Bool = false
+    /// Title-bar "Copied path" flash, kept distinct from the canvas
+    /// stem pill's `copiedFlash` so a click on either doesn't visually
+    /// echo through the other surface.
+    @State private var titleCopiedFlash: Bool = false
     @AppStorage(SettingsKey.appearance, store: AppDefaults.shared) private var appearanceRaw = SettingsKey.Defaults.appearance
     @AppStorage(SettingsKey.showCanvasLoadingIndicator, store: AppDefaults.shared) private var loadingIndicatorEnabled = SettingsKey.Defaults.showCanvasLoadingIndicator
     // recents / favorites / volumes / folderStats / favoriteDropTarget
@@ -250,7 +262,8 @@ struct ContentView: View {
                              focus: $focus,
                              showHelp: $showHelp,
                              showAnnotationHelp: $showAnnotationHelp,
-                             shootMissing: state.shoot == nil))
+                             shootMissing: state.shoot == nil,
+                             state: state))
         // Keybindings are routed through the NSEvent local
         // monitor installed in `.onAppear` (see `installKeyMonitor`
         // + `handleKeyDown` below). SwiftUI's `.onKeyPress`
@@ -305,15 +318,18 @@ struct ContentView: View {
                 // Always populate the principal slot — when it returns
                 // EmptyView, SwiftUI collapses the toolbar's three-region
                 // layout and the .primaryAction items drift toward center
-                // instead of hugging the right edge. The text is wrapped in
-                // a plain Button that flips to the Open tab — same
-                // outcome as before (the user lands on the open-folder
-                // surface), now consistent with the tab model.
+                // instead of hugging the right edge. Clicking the path
+                // copies it to the clipboard (briefly flashes "Copied path")
+                // — handy for sharing the shoot location.
                 Button {
-                    mode = .open
+                    if let url = state.shoot?.folderURL {
+                        copyShootPathToClipboard(url)
+                    }
                 } label: {
                     Group {
-                        if let url = state.shoot?.folderURL {
+                        if titleCopiedFlash {
+                            Text("Copied path")
+                        } else if let url = state.shoot?.folderURL {
                             Text((url.path as NSString).abbreviatingWithTildeInPath)
                                 .help(url.path)
                         } else {
@@ -327,7 +343,8 @@ struct ContentView: View {
                     .padding(.horizontal, 10)
                 }
                 .buttonStyle(.plain)
-                .help("Open another folder (⌘1)")
+                .disabled(state.shoot == nil)
+                .help("Click to copy the shoot folder path")
             }
 
             // Pill cluster: failed-writes (red, only when non-empty)
@@ -696,6 +713,16 @@ struct ContentView: View {
         }
     }
 
+    private func copyShootPathToClipboard(_ url: URL) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(url.path, forType: .string)
+        titleCopiedFlash = true
+        Task {
+            try? await Task.sleep(for: .milliseconds(800))
+            await MainActor.run { titleCopiedFlash = false }
+        }
+    }
+
     private func copyPath(for entry: PhotoEntry) {
         let fm = FileManager.default
         let url: URL? = {
@@ -993,7 +1020,9 @@ struct ContentView: View {
             return false
         }
         Task {
-            await ShootOpener.open(shoot: shoot, focus: focus, requestedTarget: .replaceFrontmost)
+            // Drop happened on THIS window — target its state directly
+            // so the load doesn't race against an unrelated frontmost.
+            await ShootOpener.open(shoot: shoot, focus: focus, requestedTarget: .targetState(state))
         }
         return true
     }

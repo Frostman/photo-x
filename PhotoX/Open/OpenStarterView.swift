@@ -401,26 +401,28 @@ struct OpenStarterView: View {
     private func openWithPanel() {
         Task {
             guard let (shoot, focus) = OpenPanelCoordinator.runShootPicker() else { return }
-            // Hop to View immediately after the picker
-            // returns so the tab change confirms the
-            // selection (important on slow source media).
-            // System file dialog has already dismissed by
-            // this point so we're not interrupting it.
-            mode = .view
-            await ShootOpener.open(shoot: shoot, focus: focus, requestedTarget: .replaceFrontmost)
+            // Check dedup BEFORE flipping mode — if the shoot is
+            // already open in another window, ShootOpener will
+            // focus that window and we must stay on Open here
+            // (flipping to View first causes a visible flicker).
+            if WindowRegistry.shared.window(forShootPath: shoot.folderURL.path) == nil {
+                mode = .view
+            }
+            _ = await ShootOpener.open(
+                shoot: shoot, focus: focus, requestedTarget: .targetState(state))
         }
     }
 
     private func openPath(_ path: String) {
-        // Switch to View immediately — both for the same-
-        // shoot short-circuit and for the fresh-load path —
-        // so the tab change confirms the click. On slow
-        // source media (SMB / remote) the canvas may stay
-        // empty for a beat while the scan + load finishes;
-        // the visible tab change is the feedback.
-        mode = .view
+        // See `openWithPanel` for why we check dedup before
+        // touching mode. Sync check + sync mode write keeps the
+        // View tab appearance flicker-free.
+        if WindowRegistry.shared.window(forShootPath: path) == nil {
+            mode = .view
+        }
         Task {
-            await ShootOpener.open(path: path, requestedTarget: .replaceFrontmost)
+            _ = await ShootOpener.open(
+                path: path, requestedTarget: .targetState(state))
         }
     }
 

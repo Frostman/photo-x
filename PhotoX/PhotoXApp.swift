@@ -36,7 +36,7 @@ struct PhotoXApp: App {
     }
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup(id: WindowID.main) {
             WindowRoot(updater: updater)
                 .preferredColorScheme(appearance.colorScheme)
                 // URL routing for `photox(-dev)://card?path=…`
@@ -94,26 +94,7 @@ struct PhotoXApp: App {
             }
 
             CommandGroup(replacing: .newItem) {
-                Button("Open Folder…") {
-                    Task { await openWithPanel() }
-                }
-                .keyboardShortcut("o", modifiers: .command)
-
-                Menu("Open Recent") {
-                    ForEach(recents.paths, id: \.self) { path in
-                        Button(menuLabel(for: path)) {
-                            Task {
-                                await ShootOpener.open(path: path,
-                                                        requestedTarget: .replaceFrontmost)
-                            }
-                        }
-                    }
-                    if !recents.paths.isEmpty {
-                        Divider()
-                        Button("Clear Menu") { recents.clear() }
-                    }
-                }
-                .disabled(recents.paths.isEmpty)
+                FileMenuButtons(recents: recents)
             }
             CommandMenu("View") {
                 Button("Fit") {
@@ -133,11 +114,13 @@ struct PhotoXApp: App {
                 // added.
                 ForEach(workspaceTabs) { tab in
                     Button("Switch to \(tab.title)") {
+                        guard let target = focusedState else { return }
                         NotificationCenter.default.post(
                             name: .photoxSwitchWorkspace,
-                            object: tab.mode)
+                            object: WorkspaceSwitchRequest(mode: tab.mode, target: target))
                     }
                     .keyboardShortcut(tab.shortcut, modifiers: .command)
+                    .disabled(focusedState == nil)
                 }
             }
             // Help → "Keyboard Shortcuts" — pulls up the flat
@@ -164,15 +147,6 @@ struct PhotoXApp: App {
             SettingsHost()
                 .preferredColorScheme(appearance.colorScheme)
         }
-    }
-
-    private func openWithPanel() async {
-        guard let (shoot, focus) = OpenPanelCoordinator.runShootPicker() else { return }
-        await ShootOpener.open(shoot: shoot, focus: focus, requestedTarget: .replaceFrontmost)
-    }
-
-    private func menuLabel(for path: String) -> String {
-        (path as NSString).abbreviatingWithTildeInPath
     }
 
     private func showAboutPanel() {
@@ -344,6 +318,20 @@ extension Notification.Name {
     static let photoxSwitchWorkspace = Notification.Name("dev.frostman.PhotoX.switchWorkspace")
 }
 
+/// Payload for `.photoxSwitchWorkspace` so workspace-tab switches
+/// target a single window rather than broadcasting to every open
+/// window. Without the target field, switching the focused window
+/// to View also yanked all other windows onto their View tab — a
+/// regression introduced when each window got its own ContentView
+/// instance observing the notification.
+struct WorkspaceSwitchRequest {
+    let mode: WorkspaceMode
+    /// Receiver of the switch. Held as a reference so observers
+    /// can identity-compare (`req.target === state`); the value
+    /// never escapes the notification's synchronous delivery.
+    let target: ViewerState
+}
+
 /// Edit → Undo / Redo menu items, bound to ViewerState.undoManager.
 /// Wrapped in its own View so the body re-evaluates when
 /// `state.undoStateVersion` bumps — without that, the menu's
@@ -375,6 +363,101 @@ private struct UndoRedoMenuButtons: View {
     }
 }
 
+/// File-menu items that need access to SwiftUI's `openWindow`
+/// environment action. Lives as a View (not a Commands struct) so
+/// it can use `@Environment(\.openWindow)`. The parent
+/// `CommandGroup(replacing: .newItem)` invokes it once.
+private struct FileMenuButtons: View {
+    @Bindable var recents: RecentShoots
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button("New Window") {
+            openWindow(id: WindowID.main)
+        }
+        .keyboardShortcut("n", modifiers: .command)
+
+        Button("Open Folder…") {
+            Task { await openWithPanel(inNewWindow: false) }
+        }
+        .keyboardShortcut("o", modifiers: .command)
+
+        Button("Open in New Window…") {
+            Task { await openWithPanel(inNewWindow: true) }
+        }
+        .keyboardShortcut("o", modifiers: [.command, .shift])
+
+        Menu("Open Recent") {
+            ForEach(recents.paths, id: \.self) { path in
+                // Hold Option to open the recent in a new window —
+                // mirrors Finder's modifier-click convention. Read
+                // the modifier state at click-time via NSEvent so
+                // SwiftUI's static `Button` action can branch.
+                Button(menuLabel(for: path)) {
+                    let inNewWindow = NSEvent.modifierFlags.contains(.option)
+                    Task {
+                        if inNewWindow {
+                            openRecentInNewWindow(path: path)
+                        } else {
+                            await ShootOpener.open(path: path,
+                                                    requestedTarget: .replaceFrontmost)
+                        }
+                    }
+                }
+                .help("Hold ⌥ to open in a new window")
+            }
+            if !recents.paths.isEmpty {
+                Divider()
+                Button("Clear Menu") { recents.clear() }
+            }
+        }
+        .disabled(recents.paths.isEmpty)
+    }
+
+    private func openWithPanel(inNewWindow: Bool) async {
+        guard let (shoot, focus) = OpenPanelCoordinator.runShootPicker() else { return }
+        if inNewWindow {
+            // Dedup first — if this shoot is already open in some
+            // window, focus that instead of spawning a fresh empty
+            // window the user would have to close.
+            if let existing = WindowRegistry.shared.window(forShootPath: shoot.folderURL.path) {
+                focusDedup(existing)
+                return
+            }
+            WindowRegistry.shared.enqueuePendingShoot(.scanned(shoot: shoot, focus: focus))
+            openWindow(id: WindowID.main)
+        } else {
+            await ShootOpener.open(shoot: shoot, focus: focus, requestedTarget: .replaceFrontmost)
+        }
+    }
+
+    private func openRecentInNewWindow(path: String) {
+        if let existing = WindowRegistry.shared.window(forShootPath: path) {
+            focusDedup(existing)
+            return
+        }
+        WindowRegistry.shared.enqueuePendingShoot(.path(path))
+        openWindow(id: WindowID.main)
+    }
+
+    /// Bring an existing window forward (dedup hit) and post a
+    /// View-tab switch targeted at *that* window's ViewerState so
+    /// other open windows keep their current tab.
+    private func focusDedup(_ window: NSWindow) {
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        if let target = WindowRegistry.shared.viewerState(for: window) {
+            NotificationCenter.default.post(
+                name: .photoxSwitchWorkspace,
+                object: WorkspaceSwitchRequest(mode: .view, target: target))
+        }
+    }
+
+    private func menuLabel(for path: String) -> String {
+        (path as NSString).abbreviatingWithTildeInPath
+    }
+}
+
 /// Per-window root view that owns the `ViewerState`. SwiftUI
 /// instantiates one of these per `WindowGroup` spawn, so each
 /// window gets its own state. Registers itself with
@@ -386,15 +469,27 @@ struct WindowRoot: View {
 
     @State private var viewerState = ViewerState()
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.openWindow) private var openWindow
 
     /// Process-wide latch: bootstrap runs once across all windows.
-    /// (Stage 1 spawns at most one window, but the latch is
-    /// already correct for Stage 2's multi-window UX.)
     @MainActor private static var didBootstrap = false
     @MainActor private static var didInstallTestObserver = false
+    @MainActor private static var didRegisterSpawner = false
+
+    /// Window title — `PhotoX` for an empty window, `PhotoX: <path>`
+    /// (path abbreviated with `~`) when a shoot is loaded. Drives
+    /// the title bar plus macOS surfaces that show window labels
+    /// (Mission Control, ⌘` switcher, Window menu) so two open
+    /// shoots are distinguishable at a glance.
+    private var windowTitle: String {
+        guard let url = viewerState.shoot?.folderURL else { return "PhotoX" }
+        let abbrev = (url.path as NSString).abbreviatingWithTildeInPath
+        return "PhotoX: \(abbrev)"
+    }
 
     var body: some View {
         ContentView(state: viewerState, updater: updater)
+            .navigationTitle(windowTitle)
             .focusedValue(\.viewerState, viewerState)
             .background(WindowAccessor { window in
                 WindowRegistry.shared.register(window: window, viewerState: viewerState)
@@ -407,17 +502,30 @@ struct WindowRoot: View {
                    let appDelegate = NSApp.delegate as? AppDelegate {
                     window.delegate = appDelegate
                 }
+                // Maximize every spawned window to the screen's
+                // visible frame — culling benefits from the largest
+                // possible canvas. Skip under XCUITest so tests see
+                // a predictable default frame.
+                if !LaunchFlags.uiTestMode,
+                   let screen = window.screen ?? NSScreen.main {
+                    window.setFrame(screen.visibleFrame, display: true)
+                }
             })
             .task {
+                registerSpawnerIfNeeded()
                 // Sparkle's shoot-URL provider routes through the
                 // registry so it always resolves to the frontmost
-                // window's open shoot (matches today's single-window
-                // behaviour by definition).
+                // window's open shoot.
                 updater?.shootURLProvider = {
                     WindowRegistry.shared.frontmostViewerState?.shoot?.folderURL
                 }
                 installUITestResetObserverIfNeeded()
-                await firstWindowBootstrapIfNeeded()
+
+                // Pending-shoot consumption (set by File → Open in
+                // New Window, Dock-drop, card-URL router) wins over
+                // the default-folder bootstrap.
+                let explicitShoot = await consumePendingShootIfAny()
+                await firstWindowBootstrapIfNeeded(skipAutoLoad: explicitShoot)
             }
             .onChange(of: scenePhase) { _, phase in
                 // On background (Dock-hide / Cmd-Tab) capture the
@@ -436,13 +544,42 @@ struct WindowRoot: View {
             }
     }
 
+    /// Caches SwiftUI's `openWindow` env action in the registry so
+    /// AppKit-side callbacks (Dock-drop, card-URL router) can spawn
+    /// new windows from outside any View context. Registration runs
+    /// once per process; subsequent windows leave the cached closure
+    /// alone (an `OpenWindowAction` is app-scoped, not tied to the
+    /// originating window's lifetime).
+    private func registerSpawnerIfNeeded() {
+        guard !Self.didRegisterSpawner else { return }
+        Self.didRegisterSpawner = true
+        WindowRegistry.shared.spawnNewWindow = {
+            openWindow(id: WindowID.main)
+        }
+    }
+
     private func installUITestResetObserverIfNeeded() {
         guard LaunchFlags.uiTestMode, !Self.didInstallTestObserver else { return }
         Self.didInstallTestObserver = true
         UITestResetObserver.install(viewerState: viewerState)
     }
 
-    private func firstWindowBootstrapIfNeeded() async {
+    /// Loads any pending shoot stashed by a caller that spawned this
+    /// window (File → Open in New Window, Dock drop, etc.). Returns
+    /// `true` if a shoot was loaded so the bootstrap path can skip
+    /// the default-folder auto-load.
+    private func consumePendingShootIfAny() async -> Bool {
+        guard let pending = WindowRegistry.shared.consumePendingShoot() else { return false }
+        switch pending {
+        case .path(let path):
+            await OpenShootRouter.load(path: path, state: viewerState)
+        case .scanned(let shoot, let focus):
+            await viewerState.loadShoot(shoot, focus: focus)
+        }
+        return true
+    }
+
+    private func firstWindowBootstrapIfNeeded(skipAutoLoad: Bool) async {
         guard !Self.didBootstrap else { return }
         Self.didBootstrap = true
 
@@ -451,10 +588,10 @@ struct WindowRoot: View {
         // persist via the same UserDefaults RMW).
         viewerState.metrics.recordAppOpen()
 
-        await bootstrap()
+        await bootstrap(skipAutoLoad: skipAutoLoad)
     }
 
-    private func bootstrap() async {
+    private func bootstrap(skipAutoLoad: Bool) async {
         // Pick up any new card-watcher binary inside this app
         // bundle and recover if launchd lost track of the
         // helper. See `CardWatcherSupervisor.bootstrapAtLaunch`
@@ -478,6 +615,11 @@ struct WindowRoot: View {
                 presentOnboardingPromosIfNeeded()
             }
         }
+
+        // Caller already loaded a shoot into this window (Open in
+        // New Window, Dock drop, etc.) — don't second-guess them
+        // with a Sparkle reopen or default-folder auto-load.
+        if skipAutoLoad { return }
 
         // Sparkle-driven restart: if the previous run set a pending
         // reopen path (in the last 10 min), prefer it over the
@@ -527,6 +669,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
+    }
+
+    /// Folders dropped on the Dock icon (or "Open With PhotoX" from
+    /// Finder) — open each in a new window with one-window-per-shoot
+    /// dedup. If no windows exist yet (cold launch via Finder), the
+    /// pending shoot is claimed by the auto-spawned first window
+    /// instead of triggering a second spawn.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        let folderPaths = urls.compactMap { url -> String? in
+            guard url.isFileURL else { return nil }
+            var isDir: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir),
+                  isDir.boolValue else { return nil }
+            return url.path
+        }
+        guard !folderPaths.isEmpty else { return }
+        Task { @MainActor in
+            for path in folderPaths {
+                if let existing = WindowRegistry.shared.window(forShootPath: path) {
+                    existing.makeKeyAndOrderFront(nil)
+                    NSApp.activate(ignoringOtherApps: true)
+                    continue
+                }
+                WindowRegistry.shared.enqueuePendingShoot(.path(path))
+                if WindowRegistry.shared.all.isEmpty {
+                    // Cold launch via Finder: the auto-spawned first
+                    // window will claim the pending shoot. Don't ask
+                    // SwiftUI for a second window.
+                    continue
+                }
+                WindowRegistry.shared.spawnNewWindow?()
+            }
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -583,12 +758,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
         NSWindow.allowsAutomaticWindowTabbing = false
     }
 
-    /// Maximize the main window to the screen's visible frame on first launch.
-    /// SwiftUI's WindowGroup picks a default size that's smaller than the
-    /// screen; for a culling viewer, the larger the canvas the better.
-    /// `WindowRoot`'s `WindowAccessor` assigns this AppDelegate as each
-    /// window's delegate so `windowShouldClose` can intercept ⌘W / red-button
-    /// close during an export.
+    /// `WindowRoot`'s `WindowAccessor` handles per-window setup
+    /// (registry registration, AppDelegate-as-window-delegate,
+    /// auto-maximize to the screen's visible frame). This callback
+    /// just handles app-scope setup that doesn't need a window.
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Take ownership of UN delegate so we can suppress notifications
         // when the app is in the foreground and route clicks back into
@@ -599,19 +772,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
         // any shoot opens. The Settings UI's `.onChange` handlers
         // catch later toggle flips; this is the cold-start path.
         IndexerCache.reloadPolicyFromDefaults()
-
-        DispatchQueue.main.async {
-            guard let window = NSApplication.shared.windows.first(where: { $0.canBecomeMain })
-            else { return }
-            // Skip the auto-maximize under -photoxUITestMode YES so
-            // XCUITest sees a predictable default frame (the maximize
-            // races with the test's first query and can return stale
-            // coordinates).
-            if !LaunchFlags.uiTestMode,
-               let screen = window.screen ?? NSScreen.main {
-                window.setFrame(screen.visibleFrame, display: true)
-            }
-        }
     }
 
     // MARK: URL scheme (Apple Event hijack)
@@ -708,26 +868,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
             }
         }
 
-        guard let state = WindowRegistry.shared.frontmostViewerState else { return .terminateNow }
+        let states = WindowRegistry.shared.all
+        guard !states.isEmpty else { return .terminateNow }
         // Always go through the .terminateLater path now: we need an
         // await for the metrics flush regardless of the XMP-failure
         // decision, so consolidating the branches keeps the
-        // termination contract simple.
+        // termination contract simple. Per-window state is
+        // consolidated into single counts so the user sees one
+        // alert ("3 unsaved writes" across two open shoots) rather
+        // than one alert per window.
         Task { @MainActor in
             // Drain any in-memory counter deltas to disk before
             // quit so the next launch's stats window reflects this
             // session's activity. Best-effort, expected to land in
             // tens of ms; failures here never block termination.
-            await state.metrics.flushPending()
+            for state in states {
+                await state.metrics.flushPending()
+            }
 
-            let failedCount = state.failedXMPWrites.count
-            if failedCount > 0 {
-                let proceed = self.runUnsavedXMPAlert(failedCount: failedCount)
+            let totalFailed = states.reduce(0) { $0 + $1.failedXMPWrites.count }
+            if totalFailed > 0 {
+                let proceed = self.runUnsavedXMPAlert(failedCount: totalFailed)
                 sender.reply(toApplicationShouldTerminate: proceed)
                 return
             }
-            let inFlight = await state.xmpWriter.hasInFlightWrites
-            guard inFlight else {
+            var anyInFlight = false
+            for state in states where !anyInFlight {
+                if await state.xmpWriter.hasInFlightWrites {
+                    anyInFlight = true
+                }
+            }
+            guard anyInFlight else {
                 sender.reply(toApplicationShouldTerminate: true)
                 return
             }
@@ -785,7 +956,8 @@ fileprivate func makeExportRunningAlert(verb: String) -> NSAlert {
 fileprivate func openCardURL(path: String, state: ViewerState) async {
     if state.shoot?.folderURL.path == path {
         NotificationCenter.default.post(
-            name: .photoxSwitchWorkspace, object: WorkspaceMode.view)
+            name: .photoxSwitchWorkspace,
+            object: WorkspaceSwitchRequest(mode: .view, target: state))
         return
     }
     if state.shoot != nil, ExportRunner.shared.isRunning {
@@ -797,5 +969,6 @@ fileprivate func openCardURL(path: String, state: ViewerState) async {
     }
     await OpenShootRouter.load(path: path, state: state)
     NotificationCenter.default.post(
-        name: .photoxSwitchWorkspace, object: WorkspaceMode.view)
+        name: .photoxSwitchWorkspace,
+        object: WorkspaceSwitchRequest(mode: .view, target: state))
 }
