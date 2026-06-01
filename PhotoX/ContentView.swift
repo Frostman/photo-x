@@ -763,7 +763,17 @@ struct ContentView: View {
         // (which would warn under Swift 6 strict concurrency
         // because NSEvent isn't Sendable).
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { @MainActor event in
-            handleKeyDown(event)
+            // Multi-window: every installed monitor fires for
+            // every keyDown across the process, in reverse install
+            // order. Without this gate, the most recently opened
+            // window's monitor would handle (and consume) keys
+            // destined for the user-focused window. Pass through
+            // unless our state matches the key window's state.
+            if let keyWindow = NSApp.keyWindow,
+               WindowRegistry.shared.viewerState(for: keyWindow) === state {
+                return handleKeyDown(event)
+            }
+            return event
         }
     }
 
