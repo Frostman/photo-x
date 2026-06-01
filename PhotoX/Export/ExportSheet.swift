@@ -16,7 +16,7 @@ struct ExportPaneView: View {
     /// and propagates it into AppKit's responder chain.
     var focus: FocusState<WorkspaceFocus?>.Binding
     @State private var settings = ExportSettings.shared
-    @State private var runner = ExportRunner.shared
+    private var runner: ExportRunner { state.exportRunner }
     @State private var dropTarget: UUID? = nil
 
     private var projectNameBinding: Binding<String> {

@@ -2,10 +2,10 @@ import Foundation
 import Observation
 
 /// The in-flight engine that does the actual file copies for the Export
-/// feature. Singleton because state (per-destination progress, overall
-/// percent, current filename, etc.) must outlive any single sheet open
-/// — the user can close the sheet and the toolbar pill keeps reporting
-/// progress.
+/// feature. Owned per-window by `ViewerState` so two open shoots can
+/// run independent export batches with their own progress, per-
+/// destination state, and toolbar pill. Per-window state survives the
+/// sheet being closed (user can switch tabs while a batch runs).
 ///
 /// `ExportRunner` deliberately doesn't own a `ViewerState` or `Shoot` —
 /// callers pass `entries` + `entryXMPs` BY VALUE at start, so the run is
@@ -13,7 +13,6 @@ import Observation
 @MainActor
 @Observable
 final class ExportRunner {
-    static let shared = ExportRunner()
 
     /// Notified each time a destination finishes a run cleanly
     /// (.done — NOT .cancelled or .failed). ViewerState wires this

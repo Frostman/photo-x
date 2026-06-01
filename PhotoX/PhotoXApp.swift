@@ -493,15 +493,11 @@ struct WindowRoot: View {
             .focusedValue(\.viewerState, viewerState)
             .background(WindowAccessor { window in
                 WindowRegistry.shared.register(window: window, viewerState: viewerState)
-                // Window-close interception (export-running guard).
-                // SwiftUI's WindowGroup doesn't assign a delegate, so
-                // this slot is free; the AppDelegate consults
-                // `WindowRegistry` if it needs the window's
-                // ViewerState.
-                if window.delegate == nil,
-                   let appDelegate = NSApp.delegate as? AppDelegate {
-                    window.delegate = appDelegate
-                }
+                // Window-delegate take-over is handled globally via
+                // AppDelegate's `NSWindow.didBecomeMainNotification`
+                // observer — `WindowAccessor.updateNSView` fires too
+                // early in SwiftUI's setup; SwiftUI overrides our
+                // delegate afterward.
                 // Maximize every spawned window to the screen's
                 // visible frame — culling benefits from the largest
                 // possible canvas. Skip under XCUITest so tests see
@@ -759,9 +755,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
     }
 
     /// `WindowRoot`'s `WindowAccessor` handles per-window setup
-    /// (registry registration, AppDelegate-as-window-delegate,
-    /// auto-maximize to the screen's visible frame). This callback
-    /// just handles app-scope setup that doesn't need a window.
+    /// (registry registration, auto-maximize to the screen's
+    /// visible frame). This callback handles app-scope setup and
+    /// the global window-delegate observer.
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Take ownership of UN delegate so we can suppress notifications
         // when the app is in the foreground and route clicks back into
@@ -772,6 +768,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
         // any shoot opens. The Settings UI's `.onChange` handlers
         // catch later toggle flips; this is the cold-start path.
         IndexerCache.reloadPolicyFromDefaults()
+
+        // Take over each registered window's delegate as it becomes
+        // main. Setting the delegate during `WindowAccessor.updateNSView`
+        // races with SwiftUI's own delegate install; SwiftUI wins and
+        // we never see `windowShouldClose` (so exports can't refuse a
+        // mid-flight ⌘W). `didBecomeMainNotification` fires after
+        // SwiftUI's setup completes, so a re-take here is durable.
+        // Take over each registered window's delegate so
+        // `windowShouldClose` can refuse close while THIS window's
+        // export runner is busy. SwiftUI's WindowGroup installs its
+        // own `AppKitWindowController` as the delegate during scene
+        // setup, AFTER `WindowAccessor.updateNSView` runs — setting
+        // the delegate from inside the accessor loses the race. The
+        // sweep here (deferred one runloop tick so SwiftUI finishes
+        // its own install first) catches the launch window; the
+        // `didBecomeKey` observer below covers windows spawned later
+        // via ⌘N / ⌘⇧O / Dock-drop.
+        DispatchQueue.main.async {
+            for window in NSApp.windows where
+                WindowRegistry.shared.viewerState(for: window) != nil
+                && window.delegate !== self
+            {
+                window.delegate = self
+            }
+        }
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeKeyNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notif in
+            MainActor.assumeIsolated {
+                guard let self,
+                      let window = notif.object as? NSWindow,
+                      WindowRegistry.shared.viewerState(for: window) != nil,
+                      window.delegate !== self
+                else { return }
+                window.delegate = self
+            }
+        }
     }
 
     // MARK: URL scheme (Apple Event hijack)
@@ -840,10 +875,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
     /// app. We intercept here so the window stays put when the user picks
     /// Stay.
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        guard ExportRunner.shared.isRunning else { return true }
+        // Check THIS window's runner — exports in other windows
+        // shouldn't block this one's close.
+        guard let runner = WindowRegistry.shared.viewerState(for: sender)?.exportRunner,
+              runner.isRunning else { return true }
         let alert = makeExportRunningAlert(verb: "close the window")
         if alert.runModal() == .alertSecondButtonReturn {
-            ExportRunner.shared.cancelAll()
+            runner.cancelAll()
             return true
         }
         return false
@@ -858,10 +896,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
         // Export check first (existing behaviour). If the user picks
         // "Cancel exports and quit", fall through to the XMP check;
         // we can still bail on the XMP step before actually quitting.
-        if ExportRunner.shared.isRunning {
+        let runningExports = WindowRegistry.shared.all
+            .map(\.exportRunner)
+            .filter(\.isRunning)
+        if !runningExports.isEmpty {
             let alert = makeExportRunningAlert(verb: "quit")
             if alert.runModal() == .alertSecondButtonReturn {
-                ExportRunner.shared.cancelAll()
+                for runner in runningExports { runner.cancelAll() }
                 // fall through to XMP check
             } else {
                 return .terminateCancel
@@ -960,12 +1001,12 @@ fileprivate func openCardURL(path: String, state: ViewerState) async {
             object: WorkspaceSwitchRequest(mode: .view, target: state))
         return
     }
-    if state.shoot != nil, ExportRunner.shared.isRunning {
+    if state.shoot != nil, state.exportRunner.isRunning {
         let alert = makeExportRunningAlert(verb: "switch to the card")
         if alert.runModal() != .alertSecondButtonReturn {
             return
         }
-        ExportRunner.shared.cancelAll()
+        state.exportRunner.cancelAll()
     }
     await OpenShootRouter.load(path: path, state: state)
     NotificationCenter.default.post(

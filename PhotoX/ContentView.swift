@@ -150,11 +150,11 @@ struct ContentView: View {
     /// Drives the segmented toolbar picker. `.open` shows the
     /// starter screen, `.view` shows the canvas + sidebar +
     /// filmstrip + status bar, `.export` swaps the content area
-    /// for `ExportPaneView`. Singletons (ExportSettings.shared,
-    /// ExportRunner.shared) preserve the export's state across
-    /// switches, so toggling is free.
+    /// for `ExportPaneView`. `ExportRunner` lives on `ViewerState`
+    /// (per-window), so the export's progress survives mode
+    /// switches without needing a process-wide singleton.
     @State private var mode: WorkspaceMode = .open
-    @State private var exportRunner = ExportRunner.shared
+    private var exportRunner: ExportRunner { state.exportRunner }
     @Environment(\.openSettings) private var openSettings
 
     private var appearance: AppearanceMode {
@@ -190,9 +190,10 @@ struct ContentView: View {
                     }
                 }
             case .export:
-                // The pane's own state lives in singletons
-                // (ExportSettings.shared, ExportRunner.shared)
-                // so re-mount loses nothing. Focus is driven
+                // The pane's state lives in `ExportSettings.shared`
+                // (process-wide default-store) + `state.exportRunner`
+                // (per-window), so a re-mount loses nothing. Focus is
+                // driven
                 // by the shared `$focus` binding via
                 // ModeWiring's mode-change handler, not via
                 // an `onAppear` trick — that's why the .id(mode)

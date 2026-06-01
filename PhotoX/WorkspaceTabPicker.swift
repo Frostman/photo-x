@@ -14,7 +14,7 @@ import SwiftUI
 struct WorkspaceTabPicker: View {
     @Bindable var state: ViewerState
     @Binding var mode: WorkspaceMode
-    @State private var runner = ExportRunner.shared
+    private var runner: ExportRunner { state.exportRunner }
 
     var body: some View {
         // Refresh once a minute so the "Nm ago" finished label keeps

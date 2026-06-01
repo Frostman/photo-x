@@ -627,6 +627,14 @@ final class ViewerState {
     /// `project_xmp_write_reliability.md`.
     let xmpWriter = XMPWriteCoordinator()
 
+    /// Per-window export engine. Owning this on ViewerState (instead
+    /// of a process-wide singleton) lets two open shoots run their
+    /// own export batches in parallel, with independent toolbar
+    /// pills and per-destination state. `UsageMetrics` is already
+    /// RMW-safe so the completion callbacks below persist correctly
+    /// even with concurrent exports across windows.
+    let exportRunner = ExportRunner()
+
     /// Lifetime usage counters surfaced in the Stats window and (when
     /// the user opts in) uploaded to PostHog. Mutators tick in-memory
     /// only; a background task persists every
@@ -720,11 +728,11 @@ final class ViewerState {
         self.overlays = initialOverlays
         startXMPFailureConsumer()
         startUndoStateObserver()
-        // Wire ExportRunner's per-destination completion event into
-        // UsageMetrics. Set after `metrics` is initialised — a
-        // captured weak self avoids the runner clinging to us if
+        // Wire this window's ExportRunner per-destination completion
+        // event into UsageMetrics. Set after `metrics` is initialised —
+        // a captured weak self avoids the runner clinging to us if
         // ViewerState is ever re-init'd (tests).
-        ExportRunner.shared.onDestinationCompleted = { [weak self] summary in
+        exportRunner.onDestinationCompleted = { [weak self] summary in
             self?.metrics.recordExportCompleted(imageCount: summary.copied)
         }
         startTelemetryPeriodicLoop()
@@ -1028,7 +1036,7 @@ final class ViewerState {
         // here, which without `force` would leave the previous
         // shoot's per-destination state stranded on the toolbar
         // tab for the next shoot.
-        ExportRunner.shared.resetState(force: true)
+        exportRunner.resetState(force: true)
     }
 
     /// Shared teardown for closeShoot + loadShoot. Cancels all trackable
