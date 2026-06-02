@@ -188,15 +188,22 @@ test *only="":
 # test launches the real app and clones the full sample/ fixture into
 # a temp dir. 10-min hard cap (anything longer is almost certainly a
 # hang — e.g. a permission dialog popped or the app deadlocked).
-#   just e2e                                            → full suite
-#   just e2e PhotoXUITests/SmokeTests                   → one class
-# just e2e PhotoXUITests/RatingTests/test_starRating_writesXMPSidecar → one method
+#
+# `PhotoXUITests/` prefix is auto-added when missing, so the shorthand
+# and fully-qualified forms are both fine.
+#   just e2e                                          → full suite
+#   just e2e SmokeTests                               → one class (shorthand)
+#   just e2e PhotoXUITests/SmokeTests                 → one class (explicit)
+#   just e2e RatingTests/test_starRating_writesXMPSidecar → one method
 e2e *only="":
     #!/usr/bin/env bash
     set -euo pipefail
     ARGS=(test -scheme PhotoX -configuration Debug -destination 'platform=macOS' -only-testing:PhotoXUITests)
     for filter in {{ only }}; do
-        ARGS+=(-only-testing:"$filter")
+        case "$filter" in
+            PhotoXUITests/*|PhotoXUITests) ARGS+=(-only-testing:"$filter") ;;
+            *)                             ARGS+=(-only-testing:"PhotoXUITests/$filter") ;;
+        esac
     done
     # CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION=YES: see comment on
     # the `build` recipe — needed for vm-e2e where tar-stream sync
@@ -410,12 +417,14 @@ fake-card:
 # xcodebuild only.
 #
 #   just vm-e2e                                             → full suite
-#   just vm-e2e PhotoXUITests/SmokeTests                    → one class
-#   just vm-e2e PhotoXUITests/RatingTests/test_starRating…  → one method
+#   just vm-e2e SmokeTests                                  → one class (shorthand)
+#   just vm-e2e PhotoXUITests/SmokeTests                    → one class (explicit)
+#   just vm-e2e RatingTests/test_starRating_writesXMPSidecar → one method
 #
-# Filter syntax matches `just e2e` exactly. On failure, the latest
-# .xcresult bundle is pulled to build/e2e-results/<timestamp>/ for
-# inspection; the most-recent 5 are kept.
+# `PhotoXUITests/` prefix is auto-added when missing (in vm-remote.sh's
+# cmd_run normalization). Filter syntax matches `just e2e` exactly. On
+# failure, the latest .xcresult bundle is pulled to build/e2e-results/
+# <timestamp>/ for inspection; the most-recent 5 are kept.
 vm-e2e *only="":
     ./scripts/vm-remote.sh run {{ only }}
 

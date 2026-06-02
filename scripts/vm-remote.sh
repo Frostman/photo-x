@@ -638,7 +638,20 @@ cmd_run() {
         shift
     fi
 
-    local filters=("$@")
+    # Normalize each filter to a fully-qualified xcodebuild path so
+    # callers can use shorthand. xcodebuild rejects a bare class name
+    # without the bundle prefix ("SmokeTests" → "isn't a member of
+    # the specified test plan or scheme"), and typing PhotoXUITests/
+    # on every invocation is tedium for no benefit. The PhotoXUITests
+    # bundle is the only XCUITest target in the scheme, so the prefix
+    # is unambiguous.
+    local filters=()
+    for arg in "$@"; do
+        case "${arg}" in
+            PhotoXUITests/*|PhotoXUITests) filters+=("${arg}") ;;
+            *)                             filters+=("PhotoXUITests/${arg}") ;;
+        esac
+    done
 
     # Stamp the test-run start (UTC). _collect_logs uses this to
     # bound `log show` to just the window the tests covered.
