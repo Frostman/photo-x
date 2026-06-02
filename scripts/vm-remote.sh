@@ -210,14 +210,22 @@ ensure_ssh_key() {
     ssh-keygen -t ed25519 -f "${SSH_KEY}" -N '' -C "photox-e2e@$(hostname -s)" -q
 }
 
-# Git-derived version strings, matching `just dev`'s logic exactly
-# so vm-e2e and just dev produce binaries with consistent identity.
-git_describe_args() {
+# Expected GitDescribe string — matches the `just dev` derivation
+# verbatim so vm-e2e and `just dev` stamp binaries identically. Used
+# at build time as a build-setting override, AND at post-ship time as
+# the ground truth for _verify_shipment.
+expected_git_describe() {
     local sha9 dirty=""
     sha9=$(git rev-parse --short=9 HEAD)
     [[ -n "$(git status --porcelain)" ]] && dirty="-dirty"
-    printf 'MARKETING_VERSION=0.0.0 CURRENT_PROJECT_VERSION=0 GIT_DESCRIBE=v0.0.0-dev-%s%s' \
-        "${sha9}" "${dirty}"
+    printf 'v0.0.0-dev-%s%s' "${sha9}" "${dirty}"
+}
+
+# Git-derived version strings, matching `just dev`'s logic exactly
+# so vm-e2e and just dev produce binaries with consistent identity.
+git_describe_args() {
+    printf 'MARKETING_VERSION=0.0.0 CURRENT_PROJECT_VERSION=0 GIT_DESCRIBE=%s' \
+        "$(expected_git_describe)"
 }
 
 # POSTHOG_API_KEY override, same as Justfile's _posthog_key.
@@ -477,11 +485,44 @@ _ship_fixtures() {
     log "fixture sync complete"
 }
 
-# Headline ship: build on host, ship artifacts, ship fixtures.
+# Read GitDescribe from a bundle's Info.plist in the VM. Empty string
+# if absent (bundle missing or key not set).
+_vm_bundle_git_describe() {
+    local plist=$1
+    vm_ssh "plutil -extract GitDescribe raw '${plist}' 2>/dev/null || true"
+}
+
+# Verify the bundles we just shipped advertise the GitDescribe we
+# expect. Catches: rsync didn't actually update the files (stale
+# bundle), wrong xcodebuild override propagation, accidental shipment
+# from a different build path, and so on. Also checks the embedded
+# PhotoXCardWatcher.app — the supervisor in PhotoX bounces the
+# helper to the canonical in-bundle path on every launch, so as
+# long as the bundled helper is current the running one will be too.
+_verify_shipment() {
+    local expected
+    expected=$(expected_git_describe)
+    local app_plist="${VM_ARTIFACTS}/Debug/PhotoX.app/Contents/Info.plist"
+    local helper_plist="${VM_ARTIFACTS}/Debug/PhotoX.app/Contents/Library/LoginItems/PhotoXCardWatcher.app/Contents/Info.plist"
+    local app_got helper_got
+    app_got=$(_vm_bundle_git_describe "${app_plist}" | tr -d '[:space:]')
+    helper_got=$(_vm_bundle_git_describe "${helper_plist}" | tr -d '[:space:]')
+
+    if [[ "${app_got}" != "${expected}" ]]; then
+        die ship-failed "PhotoX.app GitDescribe mismatch: got '${app_got}', expected '${expected}'"
+    fi
+    if [[ "${helper_got}" != "${expected}" ]]; then
+        die ship-failed "PhotoXCardWatcher.app GitDescribe mismatch: got '${helper_got}', expected '${expected}'"
+    fi
+    log "shipment verified: PhotoX + PhotoXCardWatcher @ ${expected}"
+}
+
+# Headline ship: build on host, ship artifacts, ship fixtures, verify.
 cmd_ship() {
     cmd_host_build
     _ship_artifacts
     _ship_fixtures
+    _verify_shipment
 }
 
 # Read the env var override for the test runner so PhotoXUITestCase's
@@ -691,11 +732,63 @@ cmd_pull_xcresult() {
         return 0
     fi
 
-    # Extract screenshots, capture VM logs, print failure summary.
+    # Extract screenshots, capture VM logs, verify the captured logs
+    # show the running PhotoX + PhotoXCardWatcher at the expected
+    # version, print failure summary.
     _extract_screenshots "${local_xcresult}" "${dest}/screenshots"
     _collect_logs "${dest}"
+    _verify_runtime_version "${dest}/logs/photox.log"
     _print_failure_summary "${local_xcresult}" "${dest}/screenshots"
     log "xcresult ready: ${dest}/"
+}
+
+# Grep the captured unified-log for the launch-time identity lines
+# emitted by PhotoX (PhotoXApp.init) and PhotoXCardWatcher (main).
+# If a line is present and the version mismatches the expected, that
+# means a stale process from a previous run was alive — a real
+# correctness problem. If a line is absent, that's a warning (the
+# process may not have launched, or crashed before logging).
+_verify_runtime_version() {
+    local log_path=$1
+    [[ -f "${log_path}" ]] || return 0
+
+    local expected
+    expected=$(expected_git_describe)
+
+    # PhotoX (main app): one line per process launch, emitted from
+    # PhotoXApp.init's Logger(subsystem: "dev.frostman.PhotoX",
+    # category: "boot"). The os_log printer renders our `=` literal
+    # verbatim.
+    local app_lines app_versions
+    app_lines=$(grep -E 'PhotoX launching: GitDescribe=' "${log_path}" 2>/dev/null || true)
+    if [[ -z "${app_lines}" ]]; then
+        log "WARN: no \`PhotoX launching\` line in captured logs — running app version unverified"
+    else
+        app_versions=$(echo "${app_lines}" \
+            | grep -oE 'GitDescribe=[^[:space:]]+' \
+            | sed 's/^GitDescribe=//' | sort -u)
+        if [[ "${app_versions}" != "${expected}" ]]; then
+            die runtime-version-mismatch "PhotoX runtime version mismatch: log shows '${app_versions}', expected '${expected}'"
+        fi
+        log "runtime verified: PhotoX log shows GitDescribe=${expected}"
+    fi
+
+    # PhotoXCardWatcher: emits `startup. version=<v> URL scheme=…` at
+    # applicationDidFinishLaunching (PhotoXCardWatcher/main.swift).
+    # The helper only logs if SMAppService approved + launched it.
+    # We don't enforce its presence (LoginItem approval is interactive
+    # in macOS Tahoe), but if present, the version MUST match.
+    local helper_lines helper_versions
+    helper_lines=$(grep -E 'startup\. version=' "${log_path}" 2>/dev/null || true)
+    if [[ -n "${helper_lines}" ]]; then
+        helper_versions=$(echo "${helper_lines}" \
+            | grep -oE 'version=[^[:space:]]+' \
+            | sed 's/^version=//' | sort -u)
+        if [[ "${helper_versions}" != "${expected}" ]]; then
+            die runtime-version-mismatch "PhotoXCardWatcher runtime version mismatch: log shows '${helper_versions}', expected '${expected}'"
+        fi
+        log "runtime verified: PhotoXCardWatcher log shows version=${expected}"
+    fi
 }
 
 # Bulk-export every attachment (screenshots, screen recordings,

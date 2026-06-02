@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import ServiceManagement
 import UserNotifications
+import os
 
 /// Launch-arg helpers. XCUITest passes argv via
 /// `app.launchArguments = ["-photoxDisableSparkle", "YES", ...]` —
@@ -21,6 +22,18 @@ enum LaunchFlags {
 struct PhotoXApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var recents = RecentShoots.shared
+
+    /// Log the GitDescribe baked into Info.plist at the *earliest*
+    /// possible point in the process lifetime — SwiftUI invokes the
+    /// `App` struct's init before AppDelegate's didFinishLaunching.
+    /// vm-e2e's log capture (`build/e2e-results/<ts>/logs/photox.log`)
+    /// greps for this line to verify the *running* binary matches the
+    /// `_verify_shipment` check on the bundle plist.
+    init() {
+        let git = (Bundle.main.object(forInfoDictionaryKey: "GitDescribe") as? String) ?? "<no-GitDescribe>"
+        Logger(subsystem: "dev.frostman.PhotoX", category: "boot")
+            .info("PhotoX launching: GitDescribe=\(git, privacy: .public)")
+    }
     /// Build the Sparkle updater unless E2E tests disabled it via
     /// `-photoxDisableSparkle`. Optional so the App keeps a single
     /// nil-safe ref instead of branching every read site.
