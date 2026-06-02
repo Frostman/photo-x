@@ -315,11 +315,11 @@ final class ViewerStateUndoTests: XCTestCase {
 
     // MARK: - shoot switch clears stack
 
-    func test_shootSwitch_clearsUndoStack() {
+    func test_shootSwitch_clearsUndoStack() async {
         let state = makeState(stems: ["A", "B"])
         state.setRating(5)
         XCTAssertTrue(state.undoManager.canUndo)
-        state.closeShoot()
+        await state.closeShoot()
         XCTAssertFalse(state.undoManager.canUndo,
                        "closeShoot must clear cross-shoot undo history")
     }

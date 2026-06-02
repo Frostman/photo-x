@@ -138,9 +138,21 @@ _posthog_key:
 # Compile-check the Debug target. Use this while editing — it's the
 # fast path that does NOT relaunch the dev app (unlike `just dev`).
 # No clean, no version injection — just enough to surface type errors.
+#
+# CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION=YES disables Xcode's
+# tripwire that fails the build when an entitlements file's
+# size/mtime appears to change mid-build. The check is fine in a
+# normal host workflow but trips inside the VM-backed e2e path
+# (vm-build / vm-e2e) because the source is rewritten by a tar
+# stream before each build, and Xcode 26.5 flags that as
+# modification even when the content is byte-identical to the
+# previous extraction. We're not shipping signed binaries from
+# Debug builds, so disabling the tripwire is harmless — the
+# entitlements content itself is unchanged.
 build:
     xcodebuild -scheme PhotoX -configuration Debug -destination 'platform=macOS' build \
-        POSTHOG_API_KEY="$(just _posthog_key)"
+        POSTHOG_API_KEY="$(just _posthog_key)" \
+        CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION=YES
 
 # Run the test suite (or a slice of it).
 #   just test                                              → full suite
@@ -157,6 +169,10 @@ test *only="":
     for filter in {{only}}; do
         ARGS+=(-only-testing:"$filter")
     done
+    # CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION=YES: see comment on
+    # the `build` recipe — needed for vm-test where tar-stream sync
+    # perturbs source mtimes.
+    ARGS+=(CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION=YES)
     # Hard 60s cap — unit tests should never need longer; a hang here
     # almost always means a stuck subprocess or runaway test, so we
     # fail fast instead of waiting indefinitely.
@@ -176,6 +192,10 @@ e2e *only="":
     for filter in {{only}}; do
         ARGS+=(-only-testing:"$filter")
     done
+    # CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION=YES: see comment on
+    # the `build` recipe — needed for vm-e2e where tar-stream sync
+    # perturbs source mtimes.
+    ARGS+=(CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION=YES)
     timeout 600 xcodebuild "${ARGS[@]}"
 
 # Regenerate the Release + Debug app iconsets via the icon generator.
@@ -335,3 +355,100 @@ fake-card:
         hdiutil attach "$DMG" >/dev/null
         echo "    mounted at $MOUNT (DCIM/100PHOTOX inside)"
     fi
+
+# ─── VM-backed e2e ──────────────────────────────────────────────────────────
+#
+# The `vm-*` family runs XCUITest end-to-end tests inside a Tart-
+# managed macOS VM (`ghcr.io/cirruslabs/macos-tahoe-xcode:latest`)
+# rather than on the host. The VM has its own WindowServer, so the
+# host's cursor / focus / windows are never touched during a run —
+# Claude Code (and the user) can iterate on e2e tests while still
+# using this laptop for other work.
+#
+# Trade-offs to know about:
+#   • CPU/RAM are shared with the host. A run consumes ~4 cores +
+#     ~8 GB RAM while xcodebuild executes. Heavy host workloads
+#     (video render, big Xcode build) will compete.
+#   • Disk: ~80 GB sparse VM image (ghcr.io image) + ~3.7 GB sample/
+#     duplicate (APFS clonefile doesn't cross the VM boundary, so the
+#     fixture is rsynced into the VM once and lives there).
+#   • The image follows :latest. When upstream pushes a new Xcode
+#     image, `vm-e2e` detects the digest change and recreates the VM
+#     (~3–5 min one-time catch-up).
+#   • Credentials inside the VM are `admin/admin` (Cirrus image
+#     default) — VM-internal-only.
+#
+# Architecture in one diagram:
+#
+#   host                                 VM (photox-e2e)
+#   ────                                 ───────────────
+#   just vm-e2e SmokeTests               admin user, GUI session
+#      │                                 tart-guest-agent loaded
+#      ├─ tart pull :latest (cheap)
+#      ├─ recreate VM if image digest    /Volumes/My Shared Files/
+#      │  changed since last clone         photox-src/ ←┐ virtiofs ro
+#      ├─ tart run --no-graphics &                       │
+#      ├─ tart exec rsync src ──────────┐                │
+#      ├─ tart exec rsync sample/ once  │   ~/photo-x ←──┘  (writable)
+#      ├─ tart exec just e2e <filter>   └─→ xcodebuild test
+#      └─ pull xcresult on failure          → build/e2e-results/
+#
+# Failure modes are surfaced as `ERROR: <tag>` lines from
+# scripts/vm-remote.sh — see that file for the tag → hint map.
+# Use `just vm-shell` to drop into the VM for debugging.
+
+# Run the XCUITest e2e suite (or a slice of it) inside the Tart VM.
+# Idempotent: pulls image, creates/starts/provisions VM, syncs source,
+# runs `just e2e {{only}}`, streams output back. First invocation is
+# slow (~5–10 min cold pull + provision); subsequent runs are sync +
+# xcodebuild only.
+#
+#   just vm-e2e                                             → full suite
+#   just vm-e2e PhotoXUITests/SmokeTests                    → one class
+#   just vm-e2e PhotoXUITests/RatingTests/test_starRating…  → one method
+#
+# Filter syntax matches `just e2e` exactly. On failure, the latest
+# .xcresult bundle is pulled to build/e2e-results/<timestamp>/ for
+# inspection; the most-recent 5 are kept.
+vm-e2e *only="":
+    ./scripts/vm-remote.sh run {{only}}
+
+# Bring the VM up without running anything: pull image (if needed),
+# clone (if needed), start, provision, sync. Useful at the start of a
+# working session to absorb the ~30–45 s cold-start cost up-front so
+# subsequent `vm-e2e` invocations are warm.
+vm-up:
+    ./scripts/vm-remote.sh up
+
+# Stop the VM (saves ~8 GB RAM). Image and disk stay; `vm-up`
+# resurrects the same VM with all provisioning intact. Run at end of
+# day or before suspending the laptop.
+vm-down:
+    ./scripts/vm-remote.sh down
+
+# SSH into the running VM for interactive debugging. Password is
+# `admin` (Cirrus image default; VM-internal-only). Use to inspect
+# failed builds, check `xcrun` versions, tail logs, etc.
+vm-shell:
+    ./scripts/vm-remote.sh shell
+
+# Wipe test artifacts (~admin/test-artifacts) and DerivedData inside
+# the VM. Forces the next `vm-e2e` to fully re-ship and re-link.
+# Preserves sample/ — that's the slow-to-resync ~3.7 GB fixture.
+vm-clean:
+    ./scripts/vm-remote.sh clean
+
+# Force-pull the latest upstream image and recreate the VM. Useful
+# when the auto-update path (digest cache in `vm-e2e`) is suspected
+# stale, or when you explicitly want today's image now. ~80 GB
+# delete + re-occupy, ~30 s re-provision (the new lightweight
+# provisioner). Normal `vm-e2e` already auto-pulls when upstream
+# changes, so this is rarely needed.
+vm-pull:
+    ./scripts/vm-remote.sh pull
+
+# One-line status snapshot: VM state (running / suspended / stopped),
+# on-disk size of the VM directory (includes suspend snapshot), and
+# the outcome of the last vm-e2e run.
+vm-status:
+    ./scripts/vm-remote.sh status

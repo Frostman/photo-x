@@ -172,11 +172,11 @@ final class FilmstripVisibleCacheTests: XCTestCase {
         XCTAssertEqual(state.filmstripVisibleComputesForTests, 2)
     }
 
-    func test_closeShoot_invalidatesAndClears() {
+    func test_closeShoot_invalidatesAndClears() async {
         let state = makeBurstState()
         _ = state.filmstripVisible(collapseActive: false)
         XCTAssertEqual(state.filmstripVisibleComputesForTests, 1)
-        state.closeShoot()
+        await state.closeShoot()
         // After closeShoot, the cache is cleared. Without a shoot,
         // filmstripVisible returns empty arrays — but that still requires
         // a recompute (cache was nil'd).

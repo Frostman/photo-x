@@ -55,7 +55,23 @@ class PhotoXUITestCase: XCTestCase {
     /// test source file (`#file` is the path the test bundle was
     /// compiled against, which always points back into the repo
     /// during dev) until we find a `sample/` sibling.
+    ///
+    /// **`PHOTOX_FIXTURE_SOURCE_DIR` override**: when the prebuilt
+    /// test bundle is shipped to a remote runner (e.g. the Tart
+    /// `photox-e2e` VM driven by `just vm-e2e`), the compiled-in
+    /// `#file` path is the HOST repo location, which doesn't exist
+    /// in the runner's filesystem. The dispatcher injects
+    /// `PHOTOX_FIXTURE_SOURCE_DIR=/Users/admin/photox-fixtures/sample`
+    /// into the xctestrun's environment so this lookup short-circuits
+    /// to the runner's local fixture copy without the walk.
     private static let repoSampleURL: URL = {
+        if let override = ProcessInfo.processInfo.environment["PHOTOX_FIXTURE_SOURCE_DIR"] {
+            var isDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: override, isDirectory: &isDir),
+               isDir.boolValue {
+                return URL(fileURLWithPath: override)
+            }
+        }
         var dir = URL(fileURLWithPath: #file).deletingLastPathComponent()
         while dir.path != "/" {
             let candidate = dir.appendingPathComponent("sample")
@@ -192,6 +208,28 @@ class PhotoXUITestCase: XCTestCase {
     }
 
     // MARK: app launch
+
+    /// Capture a screenshot of the current frontmost window and
+    /// attach it to the active test activity with `.keepAlways`
+    /// retention so it survives in the xcresult bundle even on
+    /// passing runs. Call this at "interesting moments" — after a
+    /// navigation, before/after a rating mutation, etc. — and the
+    /// VM-side dispatcher will pull every attachment into
+    /// `build/e2e-results/<ts>/screenshots/<test>/` for review on
+    /// the host.
+    ///
+    /// Failure auto-screenshots are captured by XCUITest for free;
+    /// this helper is for the "show me what the UI looked like
+    /// during this step" cases.
+    @discardableResult
+    func attachScreenshot(name: String) -> XCTAttachment {
+        let shot = app.screenshot()
+        let attachment = XCTAttachment(screenshot: shot)
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        return attachment
+    }
 
     /// Promote the test runner-spawned app window to key + frontmost.
     /// `app.launch()` alone doesn't always do it — SwiftUI's
