@@ -144,20 +144,24 @@ vm_ip() {
         || die vm-unreachable "tart-guest-agent did not respond within 30 s — try \`just vm-down && just vm-up\`"
 }
 
-# tart exec wrappers. `-i` only when the parent stdin is a pipe;
-# `-t` only when stdin is a TTY (so CI / pipe invocations don't
-# break). The two variants exist so callers that supply stdin
-# (cat | …) don't allocate a redundant pty.
+# tart exec wrappers. Neither passes `-t` (allocate PTY) — Tart
+# 2.32 crashes with a `try!` panic in tart/Exec.swift:100
+# ("failed to get terminal size: Inappropriate ioctl for device")
+# when `-t` is requested but the caller's stdout is a pipe, which
+# is true for every call site here (we either capture stdout into
+# a variable or pipe it into `tar -xf -`). We don't need a PTY for
+# any of these — they're scripted, no interactivity. Interactive
+# debug shells go through `cmd_shell` over plain SSH.
+#
+# `vm_exec` retains `-i` for callers that stream stdin (the
+# provisioner script, `tar -cf -` source streams). `vm_exec_no_stdin`
+# omits `-i` for callers whose command provides all its own input.
 vm_exec() {
-    local tty_flag=""
-    [[ -t 0 ]] && tty_flag="-t"
-    tart exec -i ${tty_flag} "${VM_NAME}" "$@"
+    tart exec -i "${VM_NAME}" "$@"
 }
 
 vm_exec_no_stdin() {
-    local tty_flag=""
-    [[ -t 0 ]] && tty_flag="-t"
-    tart exec ${tty_flag} "${VM_NAME}" "$@"
+    tart exec "${VM_NAME}" "$@"
 }
 
 # ssh-rsync transport. SSH options keep host-key churn out of the
