@@ -210,15 +210,29 @@ ensure_ssh_key() {
     ssh-keygen -t ed25519 -f "${SSH_KEY}" -N '' -C "photox-e2e@$(hostname -s)" -q
 }
 
-# Expected GitDescribe string — matches the `just dev` derivation
-# verbatim so vm-e2e and `just dev` stamp binaries identically. Used
-# at build time as a build-setting override, AND at post-ship time as
-# the ground truth for _verify_shipment.
+# Expected GitDescribe string — used at build time as a build-setting
+# override AND at post-ship/post-run time as the ground truth for
+# `_verify_shipment` and `_verify_runtime_version`. Cached after the
+# first call (`EXPECTED_GIT_DESCRIBE`) so the build invocation and
+# the two verify gates see the SAME value within one dispatcher run.
+#
+# Dirty trees get a `-dirty-HHMMSS` suffix (local time) so back-to-
+# back test cycles with no intermediate commit still produce
+# distinguishable build identities in logs and on disk. A clean HEAD
+# just gets the 9-char sha. Matches `just dev`'s derivation aside
+# from the timestamp suffix (dev launches don't need the
+# disambiguator).
+EXPECTED_GIT_DESCRIBE=""
 expected_git_describe() {
-    local sha9 dirty=""
-    sha9=$(git rev-parse --short=9 HEAD)
-    [[ -n "$(git status --porcelain)" ]] && dirty="-dirty"
-    printf 'v0.0.0-dev-%s%s' "${sha9}" "${dirty}"
+    if [[ -z "${EXPECTED_GIT_DESCRIBE}" ]]; then
+        local sha9 suffix=""
+        sha9=$(git rev-parse --short=9 HEAD)
+        if [[ -n "$(git status --porcelain)" ]]; then
+            suffix="-dirty-$(date +%H%M%S)"
+        fi
+        EXPECTED_GIT_DESCRIBE="v0.0.0-dev-${sha9}${suffix}"
+    fi
+    printf '%s' "${EXPECTED_GIT_DESCRIBE}"
 }
 
 # Git-derived version strings, matching `just dev`'s logic exactly
@@ -366,11 +380,50 @@ cmd_ensure_provisioned() {
     log "provisioning complete"
 }
 
+# Stamp PhotoX.app and the embedded PhotoXCardWatcher.app Info.plists
+# with the expected GitDescribe, then ad-hoc re-sign. xcodebuild's
+# incremental cache doesn't track command-line build-setting
+# overrides as inputs, so a dirty-tree rebuild with no source change
+# will keep the GitDescribe from a prior run. Post-processing forces
+# the running binary's `Bundle.main.object(forInfoDictionaryKey:
+# "GitDescribe")` to read the value we expect, which lets
+# `_verify_shipment` and `_verify_runtime_version` enforce exact
+# match.
+#
+# Order matters: re-sign the embedded helper FIRST, then the parent
+# app, so the parent's seal includes the helper's new content hash.
+_stamp_bundles() {
+    local expected app helper
+    expected=$(expected_git_describe)
+    app="${HOST_PRODUCTS_DEBUG}/PhotoX.app"
+    helper="${app}/Contents/Library/LoginItems/PhotoXCardWatcher.app"
+
+    for bundle in "${helper}" "${app}"; do
+        local plist="${bundle}/Contents/Info.plist"
+        [[ -f "${plist}" ]] || continue
+        plutil -replace GitDescribe -string "${expected}" "${plist}"
+        # Ad-hoc re-sign. `--preserve-metadata=entitlements,flags` keeps
+        # the entitlements from the original signing so we don't strip
+        # `com.apple.security.cs.disable-library-validation` and the
+        # hardened-runtime-off flag. Errors are non-fatal (Debug builds
+        # are happy to launch with imperfect signatures).
+        codesign --force --sign - \
+            --preserve-metadata=entitlements,flags \
+            "${bundle}" >/dev/null 2>&1 || true
+    done
+}
+
 # Run xcodebuild build-for-testing on the host with an isolated
 # DerivedData. Mirrors the version overrides used by `just dev` so
 # the binary's About panel still reads like a real dev build.
 cmd_host_build() {
     cmd_ensure_provisioned
+    # Prime EXPECTED_GIT_DESCRIBE in the parent shell. Otherwise the
+    # first call happens inside `$(git_describe_args)` (a subshell)
+    # for the xcodebuild override, the cache lives only in that
+    # subshell, and `_stamp_bundles` / `_verify_shipment` re-compute
+    # a fresh HHMMSS — landing 1+ s later and tripping the gate.
+    expected_git_describe >/dev/null
     log "host build-for-testing → ${HOST_DD} (isolated from \`just dev\`'s cache)…"
     # shellcheck disable=SC2046
     if ! xcodebuild build-for-testing \
@@ -383,7 +436,8 @@ cmd_host_build() {
             -quiet 2>&1 | tee -a "${VM_RUN_LOG}"; then
         die host-build-failed "host xcodebuild build-for-testing failed — full log at ${VM_RUN_LOG}"
     fi
-    log "host build complete"
+    _stamp_bundles
+    log "host build complete (stamped @ $(expected_git_describe))"
 }
 
 # Find the xctestrun that build-for-testing emitted. Newer Xcode names
