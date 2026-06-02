@@ -571,6 +571,41 @@ _verify_shipment() {
     log "shipment verified: PhotoX + PhotoXCardWatcher @ ${expected}"
 }
 
+# Suppress system-level notification banners inside the VM so they
+# don't pollute XCUITest screenshots and screen recordings. The
+# main offender on our Tahoe image is macOS's BTM banner for
+# "tart-guest-agent" (Cirrus's Guest Agent triggers it whenever it
+# touches background activity), but the same machinery hides the
+# CardWatcher SMAppService approval banner and any future helpers
+# Apple decides to advertise.
+#
+# Approach: unload NotificationCenter's launchd job entirely so it
+# cannot respawn and re-render the banner. Lighter-weight tries
+# (`killall NotificationCenter`, sqlite-delete on usernoted's DB,
+# `sfltool resetbtm`) all leave the banner sticky because BTM's
+# "notified" disposition flag persists across the kill/respawn
+# cycle in macOS Tahoe (verified empirically: `sfltool dumpbtm`
+# shows `Disposition: [enabled, allowed, notified]` for
+# tart-guest-agent and the banner reappears within ~1 s of any
+# attempt to clear it short of unload).
+#
+# `launchctl bootout` requires the GUI session domain so we resolve
+# the admin user's UID first. After unload, NotificationCenter
+# cannot show banners until either the next reboot or an explicit
+# `bootstrap`. We rely on the next VM resume (after `tart suspend`)
+# to bring it back; the suspend snapshot captures the post-bootout
+# state, so subsequent runs inherit it for free.
+_dismiss_system_banners() {
+    log "unloading NotificationCenter (prevents BTM banner from rendering during tests)…"
+    vm_ssh '
+        UID_VAL=$(id -u)
+        ROOT_NC=/System/Library/LaunchAgents/com.apple.notificationcenterui.plist
+        echo admin | sudo -S launchctl bootout gui/${UID_VAL} ${ROOT_NC} 2>/dev/null || true
+        killall NotificationCenter 2>/dev/null || true
+        true
+    '
+}
+
 # Headline ship: build on host, ship artifacts, ship fixtures, verify.
 cmd_ship() {
     cmd_host_build
@@ -591,6 +626,7 @@ _test_env_args() {
 # xctestrun and DerivedData inside the VM.
 cmd_run() {
     cmd_ship
+    _dismiss_system_banners
 
     local skip_smoke=0
     if [[ "${PHOTOX_E2E_SKIP_SMOKE:-0}" == "1" ]]; then
