@@ -150,6 +150,16 @@ private func notify(cardPath: String, volumeName: String, shootName: String) {
             log.error("notification add failed: \(error.localizedDescription, privacy: .public) — domain=\((error as NSError).domain, privacy: .public) code=\((error as NSError).code, privacy: .public)")
         } else {
             log.info("notification add ok for \(volumeName, privacy: .public) / \(shootName, privacy: .public)")
+            // Darwin-notification side-channel so XCUITests can
+            // observe that the card-mount notification was posted
+            // without depending on the visual banner (which doesn't
+            // render in the vm-e2e VM — see
+            // scripts/vm-remote.sh::_dismiss_system_banners).
+            // No-op in production (no observer).
+            CFNotificationCenterPostNotification(
+                CFNotificationCenterGetDarwinNotifyCenter(),
+                CFNotificationName("dev.frostman.PhotoX.NotificationPosted.\(notificationCategoryID)" as CFString),
+                nil, nil, true)
         }
     }
 }

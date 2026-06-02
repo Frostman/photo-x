@@ -1,11 +1,15 @@
 import AppKit
 import Foundation
 import UserNotifications
+import os
 
 /// Thin wrapper around `UNUserNotificationCenter` for the Export feature.
 /// Authorization is requested lazily on the first attempt to post.
 @MainActor
 enum ExportNotifications {
+
+    private static let log = Logger(subsystem: "dev.frostman.PhotoX",
+                                    category: "export")
 
     private static var authorizationRequested = false
 
@@ -75,7 +79,21 @@ enum ExportNotifications {
             let request = UNNotificationRequest(
                 identifier: identifier, content: content, trigger: nil
             )
-            try? await UNUserNotificationCenter.current().add(request)
+            do {
+                try await UNUserNotificationCenter.current().add(request)
+                log.info("posted export notification: \(content.categoryIdentifier, privacy: .public) id=\(identifier, privacy: .public)")
+                // Darwin-notification side-channel so XCUITests can
+                // observe the post without depending on the visual
+                // banner (which doesn't render in the vm-e2e VM —
+                // see scripts/vm-remote.sh::_dismiss_system_banners).
+                // No-op in production (no observer).
+                CFNotificationCenterPostNotification(
+                    CFNotificationCenterGetDarwinNotifyCenter(),
+                    CFNotificationName("dev.frostman.PhotoX.NotificationPosted.\(content.categoryIdentifier)" as CFString),
+                    nil, nil, true)
+            } catch {
+                log.error("export notification add failed: \(error.localizedDescription, privacy: .public)")
+            }
         }
     }
 }

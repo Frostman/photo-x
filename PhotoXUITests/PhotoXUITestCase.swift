@@ -209,6 +209,72 @@ class PhotoXUITestCase: XCTestCase {
 
     // MARK: app launch
 
+    /// Wait for the app (or PhotoXCardWatcher) to announce that it
+    /// just posted a UN* notification with the given category. Both
+    /// targets emit a Darwin notification
+    /// `dev.frostman.PhotoX.NotificationPosted.<category>` immediately
+    /// after a successful `UNUserNotificationCenter.add` so XCUITest
+    /// can verify the post without depending on the visual banner —
+    /// which doesn't render in the vm-e2e VM, where the dispatcher
+    /// `launchctl bootout`s `NotificationCenter` to keep the
+    /// tart-guest-agent BTM banner out of captures.
+    ///
+    /// Mirrors the Darwin-notify pattern in
+    /// `PhotoXSessionUITestCase.swift:184-216`. Returns `true` if the
+    /// notification arrived within `timeout`; `false` (and an
+    /// `XCTFail`) otherwise.
+    @discardableResult
+    func assertNotificationPosted(category: String,
+                                  within timeout: TimeInterval = 2,
+                                  file: StaticString = #file,
+                                  line: UInt = #line) -> Bool {
+        let received = expectation(description: "notification.\(category)")
+        let center = CFNotificationCenterGetDarwinNotifyCenter()
+        let name = "dev.frostman.PhotoX.NotificationPosted.\(category)" as CFString
+
+        let box = Unmanaged.passRetained(NotificationSentinelBox(expectation: received))
+        defer {
+            CFNotificationCenterRemoveObserver(center,
+                                                box.toOpaque(),
+                                                CFNotificationName(name),
+                                                nil)
+            box.release()
+        }
+        CFNotificationCenterAddObserver(
+            center,
+            box.toOpaque(),
+            { _, observer, _, _, _ in
+                guard let observer else { return }
+                Unmanaged<NotificationSentinelBox>.fromOpaque(observer)
+                    .takeUnretainedValue()
+                    .expectation.fulfill()
+            },
+            name,
+            nil,
+            .deliverImmediately
+        )
+
+        let result = XCTWaiter.wait(for: [received], timeout: timeout)
+        if result != .completed {
+            XCTFail("notification with category '\(category)' not posted within \(timeout)s",
+                    file: file, line: line)
+            return false
+        }
+        return true
+    }
+
+    /// CFNotificationCenter callbacks require an Unmanaged opaque
+    /// pointer to a reference type; this is the heap box we retain
+    /// while waiting and release on tear-down. Distinct from
+    /// `PhotoXSessionUITestCase.SentinelBox` so the two helpers
+    /// remain independently usable in the same test.
+    private class NotificationSentinelBox {
+        let expectation: XCTestExpectation
+        init(expectation: XCTestExpectation) {
+            self.expectation = expectation
+        }
+    }
+
     /// Capture a screenshot of the current frontmost window and
     /// attach it to the active test activity with `.keepAlways`
     /// retention so it survives in the xcresult bundle even on
