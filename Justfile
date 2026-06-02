@@ -120,9 +120,9 @@ dev:
 # Xcode project. Idempotent; safe to re-run after pulling.
 #   just bootstrap            → materialise missing deps
 #   just bootstrap --force    → re-download even if already present
-#   just bootstrap --verify   → check only, don't write
+# just bootstrap --verify   → check only, don't write
 bootstrap *args:
-    ./scripts/bootstrap.sh {{args}}
+    ./scripts/bootstrap.sh {{ args }}
 
 # Print the PostHog ingest key, sourced from $POSTHOG_API_KEY (env)
 # or scripts/release.local.env (gitignored). Empty string when
@@ -172,7 +172,7 @@ test *only="":
     # scheme also has PhotoXUITests under it, but those are slow and
     # go through `just e2e` instead.
     ARGS=(test -scheme PhotoX -configuration Debug -destination 'platform=macOS' -only-testing:PhotoXTests)
-    for filter in {{only}}; do
+    for filter in {{ only }}; do
         ARGS+=(-only-testing:"$filter")
     done
     # CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION=YES: see comment on
@@ -190,12 +190,12 @@ test *only="":
 # hang — e.g. a permission dialog popped or the app deadlocked).
 #   just e2e                                            → full suite
 #   just e2e PhotoXUITests/SmokeTests                   → one class
-#   just e2e PhotoXUITests/RatingTests/test_starRating_writesXMPSidecar → one method
+# just e2e PhotoXUITests/RatingTests/test_starRating_writesXMPSidecar → one method
 e2e *only="":
     #!/usr/bin/env bash
     set -euo pipefail
     ARGS=(test -scheme PhotoX -configuration Debug -destination 'platform=macOS' -only-testing:PhotoXUITests)
-    for filter in {{only}}; do
+    for filter in {{ only }}; do
         ARGS+=(-only-testing:"$filter")
     done
     # CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION=YES: see comment on
@@ -254,8 +254,8 @@ inspect file:
         echo "error: $EXIFTOOL not present — run scripts/bootstrap.sh first" >&2
         exit 1
     fi
-    if [ ! -f "{{file}}" ]; then
-        echo "error: {{file}} not found" >&2
+    if [ ! -f "{{ file }}" ]; then
+        echo "error: {{ file }} not found" >&2
         exit 1
     fi
     "$EXIFTOOL" -G1 -a -s \
@@ -278,10 +278,10 @@ inspect file:
         -Sony:Face4Position -Sony:Face5Position -Sony:Face6Position \
         -Sony:FacesDetected \
         -Composite:FocusDistance -Composite:FocusDistance2 \
-        "{{file}}"
+        "{{ file }}"
     # Stem-matched XMP sidecar (Lightroom-compatible naming).
-    STEM_DIR="$(dirname "{{file}}")"
-    STEM="$(basename "{{file}}")"
+    STEM_DIR="$(dirname "{{ file }}")"
+    STEM="$(basename "{{ file }}")"
     STEM="${STEM%.*}"
     XMP="$STEM_DIR/$STEM.xmp"
     if [ -f "$XMP" ]; then
@@ -296,9 +296,9 @@ inspect file:
 # Cut a release via scripts/release.sh.
 #   just release              → full release (build, sign, DMG, publish)
 #   just release --verify-only → build + tests, no publish
-#   just release --dry-run    → full build + DMG, no commit/push
+# just release --dry-run    → full build + DMG, no commit/push
 release *args:
-    ./scripts/release.sh {{args}}
+    ./scripts/release.sh {{ args }}
 
 # Toggle a fake camera-card mount for testing the background
 # card watcher / Open tab's Cards section. Creates
@@ -417,7 +417,7 @@ fake-card:
 # .xcresult bundle is pulled to build/e2e-results/<timestamp>/ for
 # inspection; the most-recent 5 are kept.
 vm-e2e *only="":
-    ./scripts/vm-remote.sh run {{only}}
+    ./scripts/vm-remote.sh run {{ only }}
 
 # Bring the VM up without running anything: pull image (if needed),
 # clone (if needed), start, provision, sync. Useful at the start of a
