@@ -509,6 +509,11 @@ cmd_run() {
 
     local filters=("$@")
 
+    # Stamp the test-run start (UTC). _collect_logs uses this to
+    # bound `log show` to just the window the tests covered.
+    RUN_START_TS=$(date -u +"%Y-%m-%d %H:%M:%S")
+    export RUN_START_TS
+
     # Auto-skip the dedicated smoke gate when the caller's filter
     # already includes SmokeTests (full suite, or an explicit
     # PhotoXUITests/SmokeTests... filter). Avoids running the same
@@ -582,9 +587,59 @@ cmd_run() {
     log "run completed cleanly"
 }
 
+# Collect macOS unified logs from the VM for the time window the
+# tests ran in, save to ${dest_dir}/logs/photox.log on host. Window
+# is bounded by ${RUN_START_TS} (UTC, set by cmd_run before the
+# first test stage) and "now". The predicate covers both PhotoX's
+# subsystem (`os.Logger(subsystem: "dev.frostman.PhotoX")` — used
+# by CardWatcherSupervisor and any other Logger call sites) and
+# any process whose name contains "PhotoX" (catches NSLog, print,
+# and binaries we haven't audited).
+_collect_logs() {
+    local dest_dir=$1
+    if [[ -z "${RUN_START_TS:-}" ]]; then
+        log "log capture skipped (RUN_START_TS not set)"
+        return 0
+    fi
+    mkdir -p "${dest_dir}/logs"
+
+    # log show's predicate is NSPredicate syntax. Write the full
+    # command to a remote script file via stdin instead of inlining
+    # it in vm_ssh's arg — saves us from triple-level quote escaping
+    # (host bash → ssh → remote bash → log).
+    local script="${dest_dir}/logs/.fetch.sh"
+    cat > "${script}" <<EOF
+#!/bin/bash
+log show --start '${RUN_START_TS}' \\
+    --predicate 'subsystem == "dev.frostman.PhotoX" OR processImagePath CONTAINS "PhotoX"' \\
+    --info --debug
+EOF
+    chmod +x "${script}"
+
+    # Pipe the script in as stdin to a remote bash; capture stdout.
+    if ! vm_ssh "bash -s" < "${script}" \
+            > "${dest_dir}/logs/photox.log" 2>"${dest_dir}/logs/photox.err"; then
+        log "WARN: log show ssh transport failed; see ${dest_dir}/logs/photox.err"
+    fi
+    rm -f "${script}"
+    local bytes
+    bytes=$(wc -c < "${dest_dir}/logs/photox.log" 2>/dev/null | tr -d ' ' || echo 0)
+    if (( bytes > 100 )); then
+        log "captured VM logs: ${dest_dir}/logs/photox.log ($((bytes / 1024)) KiB)"
+        rm -f "${dest_dir}/logs/photox.err"
+    else
+        # Keep the .err file for diagnostics; remove empty .log.
+        if (( bytes == 0 )); then
+            rm -f "${dest_dir}/logs/photox.log"
+        fi
+        log "WARN: log show captured ${bytes} bytes — predicate may have matched nothing"
+    fi
+}
+
 # Pull the .xcresult bundle out of the VM and into the host's
-# build/e2e-results/<ts>/ tree. Extracts screenshots and prints a
-# failure summary if any tests failed. $1 is the in-VM path to the
+# build/e2e-results/<ts>/ tree. Extracts screenshots, prints a
+# failure summary if any tests failed, and captures unified logs
+# from the test run's time window. $1 is the in-VM path to the
 # xcresult; if omitted, scans DerivedData for the newest bundle
 # (fallback for ad-hoc invocations).
 cmd_pull_xcresult() {
@@ -636,72 +691,58 @@ cmd_pull_xcresult() {
         return 0
     fi
 
-    # Extract screenshots + print failure summary.
+    # Extract screenshots, capture VM logs, print failure summary.
     _extract_screenshots "${local_xcresult}" "${dest}/screenshots"
+    _collect_logs "${dest}"
     _print_failure_summary "${local_xcresult}" "${dest}/screenshots"
     log "xcresult ready: ${dest}/"
 }
 
-# Walk the xcresult bundle and copy every image attachment into
-# ${dest_dir}/<test-name>/<n>.<ext>. Uses xcresulttool's modern
-# (Xcode 16+) test-results subcommands.
+# Bulk-export every attachment (screenshots, screen recordings,
+# synthesized events) from the xcresult bundle. Uses xcresulttool's
+# `export attachments` which emits per-attachment files named by
+# Apple's internal UUID, plus a manifest.json mapping them back to
+# test cases + human-readable names. We post-process the manifest
+# to rename files into `${dest_dir}/<test>/<suggested-name>` so the
+# layout is browsable without consulting the manifest.
 _extract_screenshots() {
     local xcresult=$1 dest_dir=$2
     mkdir -p "${dest_dir}"
 
-    # The modern subcommand prints a "tests" tree with attachment
-    # references. Use --legacy if the new format isn't available.
-    local tests_json
-    if ! tests_json=$(xcrun xcresulttool get test-results tests \
-            --path "${xcresult}" 2>/dev/null); then
-        # Fallback to legacy `get` (older Xcode).
-        tests_json=$(xcrun xcresulttool get --path "${xcresult}" --format json 2>/dev/null || true)
-    fi
-
-    if [[ -z "${tests_json}" ]]; then
-        log "WARN: xcresulttool produced no JSON; skipping screenshot extraction"
+    # Stage into a temp scratch dir so the final layout is clean
+    # (manifest.json + UUID-named files aren't useful at the top level).
+    local stage
+    stage=$(mktemp -d -t photox-attach.XXXXXX)
+    if ! xcrun xcresulttool export attachments \
+            --path "${xcresult}" \
+            --output-path "${stage}" >/dev/null 2>&1; then
+        rm -rf "${stage}"
         return 0
     fi
-
-    # Extract all attachments using xcresulttool's export command.
-    # The path layout is intentionally flat per-test for easy `open`.
-    local manifest
-    manifest=$(echo "${tests_json}" | jq -r '
-        [.testNodes[]?.children[]?.children[]?.children[]?
-         | select(.nodeType == "Test Case")
-         | {test: .name, attachments: [.. | objects | select(.payloadId?) | {id: .payloadId, name: (.name // "attachment")}]}
-        ] | .[] | select(.attachments | length > 0)
-        | "\(.test)\t\(.attachments | map(.id + "|" + .name) | join(";"))"' 2>/dev/null || true)
-
-    if [[ -z "${manifest}" ]]; then
-        return 0
-    fi
+    local manifest="${stage}/manifest.json"
+    [[ -f "${manifest}" ]] || { rm -rf "${stage}"; return 0; }
 
     local count=0
-    while IFS=$'\t' read -r test attachments; do
+    # Iterate per-test, per-attachment via jq.
+    while IFS=$'\t' read -r test exported suggested; do
         [[ -z "${test}" ]] && continue
         local test_dir="${dest_dir}/${test//\//_}"
         mkdir -p "${test_dir}"
-        local idx=0
-        IFS=';' read -ra entries <<< "${attachments}"
-        for entry in "${entries[@]}"; do
-            local payload_id="${entry%%|*}"
-            local name="${entry#*|}"
-            local ext="${name##*.}"
-            [[ "${ext}" == "${name}" ]] && ext="png"
-            local out="${test_dir}/${idx}-${name// /_}"
-            if xcrun xcresulttool export object \
-                    --path "${xcresult}" \
-                    --id "${payload_id}" \
-                    --output-path "${out}" \
-                    --type file 2>/dev/null; then
-                count=$((count + 1))
-            fi
-            idx=$((idx + 1))
-        done
-    done <<< "${manifest}"
+        # Sanitize the suggested name; preserve extension if present.
+        local clean_name="${suggested// /_}"
+        clean_name="${clean_name//\//_}"
+        local out="${test_dir}/${clean_name}"
+        if [[ -f "${stage}/${exported}" ]] \
+                && cp "${stage}/${exported}" "${out}" 2>/dev/null; then
+            count=$((count + 1))
+        fi
+    done < <(jq -r '
+        .[] | .testIdentifier as $t
+        | (.attachments // []) | .[]
+        | "\($t)\t\(.exportedFileName)\t\(.suggestedHumanReadableName)"' "${manifest}" 2>/dev/null || true)
+    rm -rf "${stage}"
     if (( count > 0 )); then
-        log "extracted ${count} screenshot(s) → ${dest_dir}/"
+        log "extracted ${count} attachment(s) → ${dest_dir}/"
     fi
 }
 
