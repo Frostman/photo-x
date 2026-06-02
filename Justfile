@@ -27,8 +27,14 @@ dev:
     # cutting a release. GitDescribe stays git-derived so the About
     # panel still reads like a real dev build.
     SHA9=$(git rev-parse --short=9 HEAD)
+    # Dirty trees get a `-dirty-HHMMSS` suffix (local time) so
+    # back-to-back `just dev` rebuilds without a commit still produce
+    # a distinguishable About-panel string and a different Info.plist
+    # GitDescribe. Mirrors scripts/vm-remote.sh's expected_git_describe
+    # so a vm-e2e run started immediately after a `just dev` of the
+    # same tree produces a visibly-related (but not identical) stamp.
     DIRTY=""
-    [ -n "$(git status --porcelain)" ] && DIRTY="-dirty"
+    [ -n "$(git status --porcelain)" ] && DIRTY="-dirty-$(date +%H%M%S)"
     MARKETING="0.0.0"
     BUILD="0"
     DESCRIBE="v0.0.0-dev-${SHA9}${DIRTY}"
