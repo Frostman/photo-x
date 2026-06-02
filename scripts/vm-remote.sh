@@ -701,7 +701,21 @@ cmd_run() {
         # platform target). -resultBundlePath pins the xcresult so
         # cmd_pull_xcresult finds it deterministically.
         local cmd="cd '${VM_ARTIFACTS}' && rm -rf '${xcresult_remote}' && $(_test_env_args) timeout 600 xcodebuild test-without-building -xctestrun '${xctestrun_remote}' -destination 'platform=macOS' -resultBundlePath '${xcresult_remote}'${only_args}"
-        vm_exec_no_stdin bash -c "${cmd}"
+        # Filter xcodebuild's noisy bookend lines:
+        #   - bare "Testing started" (printed twice — once before the
+        #     first Test Suite header and once *after* TEST EXECUTE
+        #     SUCCEEDED, with no useful content either time)
+        #   - [MT] IDETestOperationsObserverDebug timing lines (Xcode
+        #     internal stopwatch, duplicates what our summary table
+        #     already shows)
+        #
+        # `sed` over `grep -v` because sed exits 0 on successful
+        # processing regardless of whether any deletions matched, so
+        # `set -o pipefail` cleanly forwards xcodebuild's real exit
+        # code as the pipe's status. No `|| true` swallowing, no
+        # explicit return needed.
+        vm_exec_no_stdin bash -c "${cmd}" 2>&1 \
+            | sed -E '/^Testing started$/d; /\[MT\] IDETestOperationsObserverDebug:/d'
     }
 
     # Smoke gate first (fast-fail if launch is broken).
