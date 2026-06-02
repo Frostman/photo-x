@@ -839,12 +839,13 @@ cmd_pull_xcresult() {
         return 0
     fi
 
-    # Extract screenshots, capture VM logs, verify the captured logs
-    # show the running PhotoX + PhotoXCardWatcher at the expected
-    # version, print failure summary.
+    # Extract screenshots, capture VM logs, verify runtime version,
+    # print per-test summary table, and (if anything failed) expand
+    # the failure details.
     _extract_screenshots "${local_xcresult}" "${dest}/screenshots"
     _collect_logs "${dest}"
     _verify_runtime_version "${dest}/logs/photox.log"
+    _print_test_summary "${local_xcresult}"
     _print_failure_summary "${local_xcresult}" "${dest}/screenshots"
     log "xcresult ready: ${dest}/"
 }
@@ -944,6 +945,64 @@ _extract_screenshots() {
     if (( count > 0 )); then
         log "extracted ${count} attachment(s) → ${dest_dir}/"
     fi
+}
+
+# Walk the xcresult's test tree and print a one-line-per-test
+# summary table with result + wall-clock + identifier. Always runs
+# (success or failure) so the user gets a quick at-a-glance picture
+# of what ran and how long it took. The deeper `_print_failure_summary`
+# follows with assertion text + screenshot paths for failing rows.
+_print_test_summary() {
+    local xcresult=$1
+
+    local tests_json
+    tests_json=$(xcrun xcresulttool get test-results tests --path "${xcresult}" 2>/dev/null) || return 0
+    [[ -z "${tests_json}" ]] && return 0
+
+    # Walk the tree permissively (`..`) so a future xcresult schema
+    # change doesn't silently swallow the table. Sort by identifier
+    # for stable output.
+    local cases
+    cases=$(echo "${tests_json}" | jq -r '
+        [.. | objects | select(.nodeType? == "Test Case")
+         | {
+             name: (.nodeIdentifier // .name // "<unnamed>"),
+             result: (.result // "Unknown"),
+             duration: (.durationInSeconds // 0)
+           }]
+        | sort_by(.name)
+        | .[]
+        | "\(.result)\t\(.duration)\t\(.name)"
+    ' 2>/dev/null || true)
+
+    [[ -z "${cases}" ]] && return 0
+
+    # awk does the formatting + totals in one pass — keeps the bash
+    # side from juggling floats.
+    echo
+    echo "${cases}" | awk -F'\t' '
+        function label(r) {
+            if (r == "Passed")  return "PASS"
+            if (r == "Failed" || r == "Errored") return "FAIL"
+            if (r == "Skipped") return "SKIP"
+            return r
+        }
+        {
+            total++
+            if ($1 == "Passed")                       passed++
+            else if ($1 == "Failed" || $1 == "Errored") failed++
+            else if ($1 == "Skipped")                 skipped++
+            else                                      other++
+            total_dur += $2
+            rows[NR] = sprintf("%-4s  %6.2fs  %s", label($1), $2, $3)
+        }
+        END {
+            unit = (total == 1 ? "test" : "tests")
+            printf "Test results: %d passed, %d failed, %d skipped — %.2fs total (%d %s)\n\n",
+                   passed+0, failed+0, skipped+0, total_dur+0, total+0, unit
+            for (i = 1; i <= NR; i++) print rows[i]
+        }'
+    echo
 }
 
 # Parse failing tests + assertion text and print a compact summary.
