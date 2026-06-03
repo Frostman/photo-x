@@ -605,15 +605,37 @@ struct WindowRoot: View {
     private func bootstrap(skipAutoLoad: Bool) async {
         // Caller already loaded a shoot into this window (Open in
         // New Window, Dock drop, etc.) — don't second-guess them
-        // with a Sparkle reopen or default-folder auto-load.
+        // with a session/Sparkle/default-folder auto-load.
         if skipAutoLoad { return }
 
-        // Sparkle-driven restart: if the previous run set a pending
-        // reopen path (in the last 10 min), prefer it over the
-        // configured default folder. `consume()` always clears the
-        // keys, fresh or stale.
+        // 1. Multi-window session restore: replay whatever windows
+        //    were open at the previous `applicationWillTerminate`.
+        //    `OpenSessionStore.clear()` runs immediately so a
+        //    crash mid-replay doesn't loop the user back into the
+        //    same set every launch.
+        let session = OpenSessionStore.restore()
+        if !session.isEmpty {
+            OpenSessionStore.clear()
+            // Drain any orphan Sparkle handoff that may also be
+            // sitting around — session is authoritative.
+            PendingReopenStore.clear()
+            await ShootOpener.open(
+                path: session[0],
+                requestedTarget: .targetState(viewerState))
+            for path in session.dropFirst() {
+                WindowRegistry.shared.enqueuePendingShoot(.path(path))
+                WindowRegistry.shared.spawnNewWindow?()
+            }
+            return
+        }
+
+        // 2. Sparkle-driven restart fallback: a single handoff URL
+        //    captured by `UpdaterDelegate.updaterWillRelaunchApplication`.
+        //    Reached only when applicationWillTerminate didn't fire
+        //    during the Sparkle install (so OpenSessionStore is
+        //    empty but PendingReopenStore was set).
         if let reopen = PendingReopenStore.consume() {
-            await ShootOpener.open(path: reopen.path, requestedTarget: .replaceFrontmost)
+            await ShootOpener.open(path: reopen.path, requestedTarget: .targetState(viewerState))
             return
         }
         // If the user has configured a default folder and it exists with
@@ -696,6 +718,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
         // before the process exits; UserDefaults is then synced on
         // the line below so the writes definitely hit disk.
         NotificationCenter.default.post(name: .photoxWillTerminate, object: nil)
+
+        // Capture the set of open shoots so the next launch can
+        // restore them. Walks `WindowRegistry.shared.all` in
+        // insertion order; empty windows (no shoot) are dropped;
+        // card / share paths are kept (the restore path fails
+        // soft via `OpenShootRouter.load`'s "Folder no longer
+        // exists" error if they're unreachable). ⌘W / red-button
+        // closes earlier in the session never see this hook fire,
+        // so a manually-closed window naturally isn't in the
+        // captured list.
+        let openPaths = WindowRegistry.shared.all
+            .compactMap { $0.shoot?.folderURL.path }
+        OpenSessionStore.capture(openPaths)
+
         AppDefaults.shared.synchronize()
         // Best-effort indexer-cache flush for every open window. Most
         // of the time each cache was already flushed by finishIndexing;

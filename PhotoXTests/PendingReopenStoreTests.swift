@@ -44,16 +44,15 @@ final class PendingReopenStoreTests: XCTestCase {
         XCTAssertNil(PendingReopenStore.consume())
     }
 
-    func test_consume_returnsNil_whenStale() {
-        // Plant a stale entry directly: set the path key but back-
-        // date the timestamp past the 10-min window.
+    func test_consume_honorsOldEntries() {
+        // Multi-window session restore (`OpenSessionStore`) covers
+        // the primary "what was open when I quit" path now, so the
+        // single-URL Sparkle handoff no longer expires. A week-old
+        // half-finished install relaunch should still resume the
+        // captured shoot. Plant a path; consume must return it
+        // regardless of the absent / ancient timestamp.
         AppDefaults.shared.set("/tmp/x", forKey: "pendingReopen.path")
-        AppDefaults.shared.set(Date().timeIntervalSince1970 - 700,
-                                forKey: "pendingReopen.timestamp")
-        XCTAssertNil(PendingReopenStore.consume(),
-                     "stale (>10 min) entries must be dropped")
-        // And the stale keys must be cleared so they don't haunt
-        // future calls.
-        XCTAssertNil(AppDefaults.shared.string(forKey: "pendingReopen.path"))
+        XCTAssertEqual(PendingReopenStore.consume()?.path, "/tmp/x",
+                       "old entries must still be honoured — 10-min staleness window is gone")
     }
 }

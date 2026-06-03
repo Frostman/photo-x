@@ -41,25 +41,30 @@ final class WindowRegistry {
     /// `spawnNewWindow?()` to spawn a fresh `WindowGroup` instance.
     var spawnNewWindow: (() -> Void)?
 
-    /// Shoot to claim when the next window registers. Used to
-    /// thread a shoot through SwiftUI's window-spawn machinery —
-    /// callers stash the shoot, call `spawnNewWindow?()`, and the
-    /// just-spawned `WindowRoot` consumes the entry on first
-    /// `.task` run. Single-slot is fine: only one window is in
-    /// flight at a time per user action.
+    /// Shoots to claim, in order, as new windows register. Used
+    /// to thread shoots through SwiftUI's window-spawn machinery —
+    /// callers stash one or more entries, call `spawnNewWindow?()`
+    /// once per stash, and each just-spawned `WindowRoot` consumes
+    /// the FIFO head on first `.task` run.
+    ///
+    /// FIFO (not single-slot) so session restore on launch can
+    /// enqueue N entries at once. User-driven single-spawn paths
+    /// (File → Open in New Window…, Open Recent ⌥-click, Dock-drop,
+    /// `CardURLRouter` rule 3) enqueue one and the next window
+    /// drains one — behavior unchanged for them.
     enum PendingShoot {
         case path(String)
         case scanned(shoot: Shoot, focus: PhotoEntry)
     }
-    private var pendingShoot: PendingShoot?
+    private var pendingShoots: [PendingShoot] = []
 
     func enqueuePendingShoot(_ shoot: PendingShoot) {
-        pendingShoot = shoot
+        pendingShoots.append(shoot)
     }
 
     func consumePendingShoot() -> PendingShoot? {
-        defer { pendingShoot = nil }
-        return pendingShoot
+        guard !pendingShoots.isEmpty else { return nil }
+        return pendingShoots.removeFirst()
     }
 
     /// Register a window↔viewerState mapping. Idempotent if the same
