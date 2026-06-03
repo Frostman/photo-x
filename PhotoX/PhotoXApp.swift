@@ -608,6 +608,28 @@ struct WindowRoot: View {
         // with a session/Sparkle/default-folder auto-load.
         if skipAutoLoad { return }
 
+        // E2E test bootstrap override: when `PHOTOX_UITEST_INITIAL_PATHS`
+        // is set (only honoured under `-photoxUITestMode YES`), open
+        // each `:`-separated path as a window. Skips every other
+        // bootstrap branch — the test is asserting a deterministic
+        // initial window set, not the user's session / Sparkle /
+        // default-folder chain.
+        if LaunchFlags.uiTestMode,
+           let raw = ProcessInfo.processInfo.environment["PHOTOX_UITEST_INITIAL_PATHS"],
+           !raw.isEmpty {
+            let paths = raw.split(separator: ":").map(String.init)
+            if let first = paths.first {
+                await ShootOpener.open(
+                    path: first,
+                    requestedTarget: .targetState(viewerState))
+                for path in paths.dropFirst() {
+                    WindowRegistry.shared.enqueuePendingShoot(.path(path))
+                    WindowRegistry.shared.spawnNewWindow?()
+                }
+            }
+            return
+        }
+
         // 1. Multi-window session restore: replay whatever windows
         //    were open at the previous `applicationWillTerminate`.
         //    `OpenSessionStore.clear()` runs immediately so a

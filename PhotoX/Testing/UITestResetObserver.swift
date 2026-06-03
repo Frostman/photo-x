@@ -112,6 +112,15 @@ enum UITestResetObserver {
     private static func handleCaptureNow() {
         guard let viewerState else { return }
         viewerState.captureLastEntryToStores()
+        // Mirror `AppDelegate.applicationWillTerminate`'s session
+        // capture so test-driven `app.terminate()` (which doesn't
+        // fire that delegate hook) leaves the same artefacts on
+        // disk a real ⌘Q would. Walks every registered window's
+        // ViewerState — not just the one that received the
+        // captureNow notification.
+        let openPaths = WindowRegistry.shared.all
+            .compactMap { $0.shoot?.folderURL.path }
+        OpenSessionStore.capture(openPaths)
         AppDefaults.shared.synchronize()
         postSentinel(captureNowCompletedNotification)
     }
