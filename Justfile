@@ -447,6 +447,20 @@ vm-down:
 vm-shell:
     ./scripts/vm-remote.sh shell
 
+# Open macOS Screen Sharing on the VM's VNC URL. The VM boots with
+# --vnc-experimental (see scripts/vm-remote.sh::_tart_run_suspendable)
+# so VNC is always available without restart. Pairs nicely with
+# `vm-e2e --keep-on-fail` for inspecting the in-VM state right after
+# a test failure.
+vm-screen:
+    ./scripts/vm-remote.sh screen
+
+# Open the latest e2e xcresult bundle in Xcode for interactive
+# failure inspection (test activities, attachments, video, etc.).
+# Faster than navigating to build/e2e-results/latest/ in Finder.
+vm-open-results:
+    open build/e2e-results/latest/last.xcresult
+
 # Wipe test artifacts (~admin/test-artifacts) and DerivedData inside
 # the VM. Forces the next `vm-e2e` to fully re-ship and re-link.
 # Preserves sample/ — that's the slow-to-resync ~3.7 GB fixture.

@@ -102,11 +102,14 @@ run_with_log() {
 }
 
 # `tart list --source oci` entry for $IMAGE — used as the digest
-# proxy (size + accessed timestamp shift when Cirrus rebuilds).
+# proxy. `Accessed` shifts every time `tart list` runs, so we strip
+# it; only the immutable identity fields (Name, Size, Disk) matter
+# for "did upstream change since we cloned the VM."
 image_state() {
     tart list --source oci --format json 2>/dev/null \
         | jq -c --arg img "${IMAGE}" \
-            'map(select(.Name == $img)) | .[0] // empty' \
+            'map(select(.Name == $img)) | .[0] // empty
+             | {Name, Size, Disk}' \
         || true
 }
 
@@ -629,6 +632,51 @@ _test_env_args() {
 # filter (or full suite if no filter). Both stages share the same
 # xctestrun and DerivedData inside the VM.
 cmd_run() {
+    # Track upstream image on every run. The cached state-file +
+    # digest-cmp path in `cmd_ensure_vm` recreates the VM when
+    # upstream changes; when it hasn't, this is a cheap manifest
+    # HEAD. No timeout — a real Xcode bump can be many GB and we
+    # don't want to cut a legitimate download short. Offline modes
+    # (DNS / TCP reset) fail quickly with an error, which the `|| log`
+    # catches so the run proceeds against cached state.
+    cmd_ensure_image \
+        || log "WARN: tart pull failed — using cached image state"
+    cmd_ensure_vm
+
+    # Parse leading flags. Order matters: --rerun-failed populates
+    # `$@` from the prior xcresult before we forward to cmd_ship +
+    # the rest of the run; --keep-on-fail tweaks suspend behaviour.
+    local rerun_failed=0
+    local keep_on_fail=0
+    while [[ "${1:-}" == --* ]]; do
+        case "$1" in
+            --rerun-failed) rerun_failed=1; shift ;;
+            --keep-on-fail) keep_on_fail=1; shift ;;
+            --skip-smoke)   break ;;  # handled below
+            --)             shift; break ;;
+            *)              die usage "unknown flag: $1" ;;
+        esac
+    done
+    if [[ "${PHOTOX_E2E_KEEP_ON_FAIL:-0}" == "1" ]]; then
+        keep_on_fail=1
+    fi
+
+    if (( rerun_failed )); then
+        local rerun_args
+        rerun_args=$(_collect_failing_test_ids \
+            "${E2E_RESULTS_DIR}/latest/last.xcresult")
+        if [[ -z "${rerun_args}" ]]; then
+            log "no recent failures recorded — nothing to re-run"
+            return 0
+        fi
+        log "--rerun-failed picked $(echo "${rerun_args}" | wc -w | tr -d ' ') test(s):"
+        for id in ${rerun_args}; do log "  • ${id}"; done
+        # Replace positional args so the rest of the function sees
+        # them as if the caller typed each identifier explicitly.
+        # shellcheck disable=SC2086 # word-split intentional: one $@ per test id
+        set -- ${rerun_args} "$@"
+    fi
+
     cmd_ship
     _dismiss_system_banners
 
@@ -725,7 +773,7 @@ cmd_run() {
         if (( smoke_rc != 0 )); then
             cmd_pull_xcresult "${xcresult_remote}" || true
             _write_last_run "smoke-failed" "${smoke_rc}"
-            cmd_suspend
+            _maybe_suspend "${smoke_rc}"
             die xcodebuild-failed "smoke gate failed (exit ${smoke_rc}) — caller's tests not run"
         fi
     fi
@@ -741,11 +789,11 @@ cmd_run() {
     cmd_pull_xcresult "${xcresult_remote}" || true
     if (( rc != 0 )); then
         _write_last_run "failed" "${rc}"
-        cmd_suspend
+        _maybe_suspend "${rc}"
         die xcodebuild-failed "test run failed (exit ${rc}) — see ${E2E_RESULTS_DIR}/latest/"
     fi
     _write_last_run "passed" 0
-    cmd_suspend
+    _maybe_suspend 0
     log "run completed cleanly"
 }
 
@@ -1066,6 +1114,42 @@ _write_last_run() {
 EOF
 }
 
+# Read the failing test identifiers (`Class/test_method()`) out of
+# an xcresult bundle. Returns one identifier per line on stdout;
+# empty when nothing failed (or the bundle is missing).
+_collect_failing_test_ids() {
+    local xcresult=$1
+    [[ -d "${xcresult}" ]] || return 0
+    local tests_json
+    tests_json=$(xcrun xcresulttool get test-results tests \
+        --path "${xcresult}" 2>/dev/null) || return 0
+    [[ -z "${tests_json}" ]] && return 0
+    # Same permissive walk shape as `_print_test_summary` so a
+    # future xcresult schema tweak doesn't silently break this.
+    echo "${tests_json}" | jq -r '
+        [.. | objects | select(.nodeType? == "Test Case"
+            and (.result == "Failed" or .result == "Errored"))
+         | (.nodeIdentifier // .name // "")]
+        | map(select(length > 0)) | .[]
+    ' 2>/dev/null || true
+}
+
+# Wrapper around cmd_suspend that honors --keep-on-fail and the
+# pre-existing PHOTOX_E2E_NO_SUSPEND escape hatch. $1 is the rc the
+# tests exited with (0 = pass, non-0 = fail).
+_maybe_suspend() {
+    local rc=$1
+    if [[ "${PHOTOX_E2E_NO_SUSPEND:-0}" == "1" ]]; then
+        log "PHOTOX_E2E_NO_SUSPEND=1 — leaving VM running"
+        return 0
+    fi
+    if (( keep_on_fail )) && (( rc != 0 )); then
+        log "--keep-on-fail and tests failed — leaving VM running for vm-shell / vm-screen"
+        return 0
+    fi
+    cmd_suspend
+}
+
 cmd_suspend() {
     if [[ "${PHOTOX_E2E_NO_SUSPEND:-0}" == "1" ]]; then
         log "PHOTOX_E2E_NO_SUSPEND=1 — leaving VM running"
@@ -1098,6 +1182,41 @@ cmd_shell() {
     ip=$(vm_ip)
     log "ssh ${VM_USER}@${ip} (key auth via ${SSH_KEY}, password fallback: ${VM_PASS})"
     exec ssh "${SSH_OPTS[@]}" "${VM_USER}@${ip}"
+}
+
+# Stop the headless VM and re-launch it with VZ's VNC server
+# exposed, then `open` the VNC URL Tart prints to stdout to launch
+# macOS Screen Sharing. The default boot uses `--no-graphics` to
+# stay invisible; `--vnc-experimental` pops a Screen Sharing window
+# automatically, which is what the user actually wants here — but
+# only on demand. The VM stays in VNC mode until the next
+# `just vm-down`; subsequent `just vm-e2e` cold-boots back to
+# `--no-graphics`.
+cmd_screen() {
+    log "switching VM ${VM_NAME} to VNC mode (one-time restart, ~10 s)…"
+    cmd_down >/dev/null 2>&1 || true
+    rm -f "${VM_PID_FILE}"
+    wc -l < "${VM_RUN_LOG}" 2>/dev/null | tr -d ' ' \
+        > "${VM_RUN_LOG}.cursor" \
+        || echo 0 > "${VM_RUN_LOG}.cursor"
+    nohup tart run --vnc-experimental --no-audio --no-clipboard --suspendable \
+        "${VM_NAME}" >> "${VM_RUN_LOG}" 2>&1 &
+    echo $! > "${VM_PID_FILE}"
+
+    # Poll for the VNC URL Tart prints on startup. 30 s ceiling.
+    local url=""
+    local deadline=$((SECONDS + 30))
+    while (( SECONDS < deadline )); do
+        url=$(grep -oE 'vnc://[^[:space:]]+' "${VM_RUN_LOG}" 2>/dev/null | tail -1)
+        [[ -n "${url}" ]] && break
+        sleep 1
+    done
+    if [[ -z "${url}" ]]; then
+        die screen-no-url "no vnc:// URL appeared in ${VM_RUN_LOG} within 30 s"
+    fi
+    log "VNC: ${url}"
+    open "${url}"
+    log "(VM stays in VNC mode until \`just vm-down\`; \`just vm-e2e\` cold-boots back to no-graphics)"
 }
 
 cmd_clean() {
@@ -1158,6 +1277,7 @@ case "${1:-}" in
     suspend)            shift; cmd_suspend "$@" ;;
     down)               shift; cmd_down "$@" ;;
     shell)              shift; cmd_shell "$@" ;;
+    screen)             shift; cmd_screen "$@" ;;
     clean)              shift; cmd_clean "$@" ;;
     pull)               shift; cmd_pull "$@" ;;
     status)             shift; cmd_status "$@" ;;
@@ -1169,7 +1289,7 @@ case "${1:-}" in
         log "VM ready — \`just vm-e2e\` will ship artifacts and run"
         ;;
     "")
-        die usage "no subcommand given (try one of: up, run, ship, down, shell, clean, pull, status)"
+        die usage "no subcommand given (try one of: up, run, ship, down, shell, screen, clean, pull, status)"
         ;;
     *)
         die usage "unknown subcommand: $1"

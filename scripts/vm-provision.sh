@@ -85,6 +85,20 @@ fi
 
 log "starting (target: ${MARKER})"
 
+# ── GNU coreutils (for `timeout` inside the VM) ─────────────────────────────
+# `cmd_run` wraps the in-VM xcodebuild invocation in `timeout 600`
+# to keep a hung test from holding the slot indefinitely. macOS
+# doesn't ship a `timeout(1)` natively, so install it from coreutils.
+# Cirrus images come with Homebrew preconfigured, so this is fast.
+if ! command -v timeout >/dev/null 2>&1; then
+    if [[ -x /opt/homebrew/bin/brew ]]; then
+        eval "$(/opt/homebrew/bin/brew shellenv)"
+    fi
+    log "installing coreutils (provides timeout(1))"
+    NONINTERACTIVE=1 brew install coreutils >/dev/null 2>&1 || \
+        log "  brew install coreutils failed; timeout(1) won't be available"
+fi
+
 # ── Xcode license + developer mode ──────────────────────────────────────────
 # Both require sudo. The Cirrus image preconfigures admin with
 # passwordless sudo via /etc/sudoers.d/admin (standard for Cirrus CI
