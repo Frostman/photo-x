@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 /// E2E-test-only Darwin notification listener that rewinds
@@ -37,6 +38,47 @@ enum UITestResetObserver {
     /// lastEntry to restore from.
     static let captureNowNotification = "dev.frostman.PhotoX.uitest.captureNow"
     static let captureNowCompletedNotification = "dev.frostman.PhotoX.uitest.captureNowCompleted"
+
+    /// Test hook for the "open in new window" path (the one
+    /// `FileMenuButtons.openWithPanel(inNewWindow:)` and
+    /// `openRecentInNewWindow(path:)` use). The payload path is
+    /// read from `<PHOTOX_UITEST_PAYLOAD_DIR>/openInNewWindow.path`,
+    /// where `PHOTOX_UITEST_PAYLOAD_DIR` is set by the test at
+    /// launch to its own `NSTemporaryDirectory()`. The XCUITest
+    /// runner is sandboxed (can't write `/private/tmp`) but the
+    /// (unsandboxed) app can read into the runner's container.
+    static let openInNewWindowNotification = "dev.frostman.PhotoX.uitest.openInNewWindow"
+    static let openInNewWindowCompletedNotification = "dev.frostman.PhotoX.uitest.openInNewWindowCompleted"
+    static let openInNewWindowPayloadBasename = "openInNewWindow.path"
+
+    /// Resolve the payload directory the test side set at launch,
+    /// or nil if the env var isn't present (production launches).
+    private static var payloadDir: URL? {
+        guard let raw = ProcessInfo.processInfo.environment["PHOTOX_UITEST_PAYLOAD_DIR"],
+              !raw.isEmpty else { return nil }
+        return URL(fileURLWithPath: raw)
+    }
+
+    /// Test hook for the unsaved-XMP guard surfaces (⌘W
+    /// `windowShouldClose` and ⌘Q `applicationShouldTerminate`).
+    /// Appends a sentinel `FailedWrite` to the frontmost
+    /// window's `failedXMPWrites` so the close / quit prompt
+    /// fires deterministically without needing to race a real
+    /// write coordinator batch.
+    static let injectFailedXMPNotification = "dev.frostman.PhotoX.uitest.injectFailedXMPWrite"
+    static let injectFailedXMPCompletedNotification = "dev.frostman.PhotoX.uitest.injectFailedXMPWriteCompleted"
+
+    /// Test hook for "make THIS shoot's window key". Reads the
+    /// shoot path from `<PHOTOX_UITEST_PAYLOAD_DIR>/makeWindowKey.path`
+    /// and calls `makeKeyAndOrderFront` on the matching window.
+    /// Used by `MultiWindowTests.test_keyMonitor_drivesOnlyKeyWindow`
+    /// to deterministically pick which window the next arrow-key
+    /// event lands on — XCUITest's `XCUIElement.click()` on a
+    /// non-key window doesn't reliably promote it to key in our
+    /// SwiftUI WindowGroup setup.
+    static let makeWindowKeyNotification = "dev.frostman.PhotoX.uitest.makeWindowKey"
+    static let makeWindowKeyCompletedNotification = "dev.frostman.PhotoX.uitest.makeWindowKeyCompleted"
+    static let makeWindowKeyPayloadBasename = "makeWindowKey.path"
 
     /// Holds the in-flight reset task so back-to-back postings
     /// don't pile up overlapping reloads. The test side waits for
@@ -83,7 +125,43 @@ enum UITestResetObserver {
             nil,
             .deliverImmediately
         )
-        Log.app.notice("UITestResetObserver: installed (reset + captureNow)")
+        CFNotificationCenterAddObserver(
+            center,
+            UnsafeRawPointer(bitPattern: 0xCAFE1001),
+            { _, _, _, _, _ in
+                Task { @MainActor in
+                    UITestResetObserver.handleOpenInNewWindow()
+                }
+            },
+            openInNewWindowNotification as CFString,
+            nil,
+            .deliverImmediately
+        )
+        CFNotificationCenterAddObserver(
+            center,
+            UnsafeRawPointer(bitPattern: 0xCAFE1002),
+            { _, _, _, _, _ in
+                Task { @MainActor in
+                    UITestResetObserver.handleInjectFailedXMPWrite()
+                }
+            },
+            injectFailedXMPNotification as CFString,
+            nil,
+            .deliverImmediately
+        )
+        CFNotificationCenterAddObserver(
+            center,
+            UnsafeRawPointer(bitPattern: 0xCAFE1003),
+            { _, _, _, _, _ in
+                Task { @MainActor in
+                    UITestResetObserver.handleMakeWindowKey()
+                }
+            },
+            makeWindowKeyNotification as CFString,
+            nil,
+            .deliverImmediately
+        )
+        Log.app.notice("UITestResetObserver: installed (reset + captureNow + openInNewWindow + injectFailedXMPWrite + makeWindowKey)")
     }
 
     private static func handleReset() {
@@ -107,6 +185,90 @@ enum UITestResetObserver {
             }
             postCompletionSentinel()
         }
+    }
+
+    /// Test-only "open in new window" entry point. Reads the
+    /// payload path from `AppDefaults` (since Darwin notifications
+    /// can't carry data), then routes through the same dedup-first
+    /// flow that the user-facing menu / Recent ⌥-click uses.
+    /// Always posts the completion sentinel so the test side can
+    /// proceed deterministically.
+    private static func handleOpenInNewWindow() {
+        defer { postSentinel(openInNewWindowCompletedNotification) }
+        guard let dir = payloadDir else {
+            Log.app.warning("UITestResetObserver: openInNewWindow with no PHOTOX_UITEST_PAYLOAD_DIR")
+            return
+        }
+        let payload = dir.appendingPathComponent(openInNewWindowPayloadBasename)
+        let raw = (try? String(contentsOf: payload, encoding: .utf8)) ?? ""
+        try? FileManager.default.removeItem(at: payload)
+        let path = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !path.isEmpty else {
+            Log.app.warning("UITestResetObserver: openInNewWindow with empty path (file=\(payload.path, privacy: .public))")
+            return
+        }
+        // Dedup first — mirror `FileMenuButtons.openRecentInNewWindow(path:)`.
+        if let existing = WindowRegistry.shared.window(forShootPath: path) {
+            existing.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            if let state = WindowRegistry.shared.viewerState(for: existing) {
+                NotificationCenter.default.post(
+                    name: .photoxSwitchWorkspace,
+                    object: WorkspaceSwitchRequest(mode: .view, target: state))
+            }
+            return
+        }
+        // Otherwise stash + spawn — the new `WindowRoot.task`
+        // consumes the FIFO entry and loads the path.
+        WindowRegistry.shared.enqueuePendingShoot(.path(path))
+        WindowRegistry.shared.spawnNewWindow?()
+    }
+
+    /// Test-only: make the window holding a specific shoot key
+    /// + frontmost. Reads the target path from
+    /// `<PHOTOX_UITEST_PAYLOAD_DIR>/makeWindowKey.path`. Used by
+    /// `test_keyMonitor_drivesOnlyKeyWindow` so we don't have to
+    /// rely on XCUITest's click-to-focus heuristics.
+    private static func handleMakeWindowKey() {
+        defer { postSentinel(makeWindowKeyCompletedNotification) }
+        guard let dir = payloadDir else {
+            Log.app.warning("UITestResetObserver: makeWindowKey with no PHOTOX_UITEST_PAYLOAD_DIR")
+            return
+        }
+        let payload = dir.appendingPathComponent(makeWindowKeyPayloadBasename)
+        let raw = (try? String(contentsOf: payload, encoding: .utf8)) ?? ""
+        try? FileManager.default.removeItem(at: payload)
+        let path = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !path.isEmpty else {
+            Log.app.warning("UITestResetObserver: makeWindowKey with empty path")
+            return
+        }
+        guard let window = WindowRegistry.shared.window(forShootPath: path) else {
+            Log.app.warning("UITestResetObserver: makeWindowKey — no window for path \(path, privacy: .public)")
+            return
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    /// Test-only injection: appends a sentinel `FailedWrite` to
+    /// the frontmost window's `failedXMPWrites` so the close /
+    /// quit prompt fires deterministically. The intent value is
+    /// irrelevant for the prompt — it only checks "is anything
+    /// in the map?" via `hasUnsavedXMPWork`.
+    private static func handleInjectFailedXMPWrite() {
+        defer { postSentinel(injectFailedXMPCompletedNotification) }
+        guard let state = WindowRegistry.shared.frontmostViewerState else {
+            Log.app.warning("UITestResetObserver: injectFailedXMP with no frontmost state")
+            return
+        }
+        let sentinel = XMPWriteCoordinator.FailedWrite(
+            stem: "uitest-sentinel",
+            intent: .setRating(5),
+            attempts: 1,
+            lastError: "uitest-injected failure",
+            timestamp: Date())
+        state.failedXMPWrites[sentinel.stem] = sentinel
     }
 
     private static func handleCaptureNow() {

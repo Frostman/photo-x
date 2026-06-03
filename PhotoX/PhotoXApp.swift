@@ -673,7 +673,12 @@ struct WindowRoot: View {
             let focus = savedStem
                 .flatMap { stem in shoot.entries.first { $0.stem == stem } }
                 ?? firstFocus
-            await ShootOpener.open(shoot: shoot, focus: focus, requestedTarget: .replaceFrontmost)
+            // `.targetState(viewerState)` (not `.replaceFrontmost`):
+            // WindowRoot.task can fire before WindowAccessor.updateNSView
+            // has registered this window in WindowRegistry. `.replaceFrontmost`
+            // would then resolve to nil → `.noTarget` → empty window.
+            // We already have the right ViewerState in hand here.
+            await ShootOpener.open(shoot: shoot, focus: focus, requestedTarget: .targetState(viewerState))
         }
     }
 }

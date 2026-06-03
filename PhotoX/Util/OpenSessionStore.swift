@@ -32,11 +32,15 @@ enum OpenSessionStore {
         }
     }
 
-    /// Read the persisted set. Returns `[]` when nothing is
-    /// stored (fresh install, upgrade from a pre-multiwindow
-    /// version, or a clean-quit-with-no-shoots-open last session).
+    /// Read the persisted set, dropping any entry whose path no
+    /// longer exists on disk. Returns `[]` when nothing is stored
+    /// or when every stored path has vanished (cards ejected,
+    /// fixtures cleaned up between test runs, folders deleted by
+    /// the user between sessions). Empty triggers fallback to the
+    /// Sparkle / default-folder chain in `WindowRoot.bootstrap`.
     static func restore() -> [String] {
-        AppDefaults.shared.stringArray(forKey: pathsKey) ?? []
+        let raw = AppDefaults.shared.stringArray(forKey: pathsKey) ?? []
+        return raw.filter { FileManager.default.fileExists(atPath: $0) }
     }
 
     /// Wipe the key. Called from `WindowRoot.bootstrap` right

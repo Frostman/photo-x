@@ -123,54 +123,7 @@ final class RelaunchTests: PhotoXFreshLaunchUITestCase {
         return prefix.isEmpty ? nil : String(prefix)
     }
 
-    /// Post the `captureNow` Darwin notification and wait for the
-    /// app's completion sentinel. After completion, the in-app
-    /// `captureLastEntryToStores` + `AppDefaults.synchronize` have
-    /// both landed, so the relaunch can read a populated
-    /// FavoriteShoots/RecentShoots lastEntry mapping.
-    private func postCaptureNowAndWait() throws {
-        let completed = expectation(description: "uitest.captureNowCompleted")
-        let center = CFNotificationCenterGetDarwinNotifyCenter()
-        let completedName = "dev.frostman.PhotoX.uitest.captureNowCompleted" as CFString
-        let box = Unmanaged.passRetained(SentinelBox(expectation: completed))
-        defer {
-            CFNotificationCenterRemoveObserver(center,
-                                                box.toOpaque(),
-                                                CFNotificationName(completedName),
-                                                nil)
-            box.release()
-        }
-        CFNotificationCenterAddObserver(
-            center,
-            box.toOpaque(),
-            { _, observer, _, _, _ in
-                guard let observer else { return }
-                Unmanaged<SentinelBox>.fromOpaque(observer)
-                    .takeUnretainedValue()
-                    .expectation.fulfill()
-            },
-            completedName,
-            nil,
-            .deliverImmediately
-        )
-        let captureName = "dev.frostman.PhotoX.uitest.captureNow" as CFString
-        CFNotificationCenterPostNotification(
-            center,
-            CFNotificationName(captureName),
-            nil,
-            nil,
-            true
-        )
-        wait(for: [completed], timeout: 5)
-    }
-
-    /// Mirrors the reference box used by PhotoXSessionUITestCase
-    /// (CFNotificationCenter observer registration is pointer-based;
-    /// closure capture isn't enough).
-    private class SentinelBox {
-        let expectation: XCTestExpectation
-        init(expectation: XCTestExpectation) {
-            self.expectation = expectation
-        }
-    }
+    // `postCaptureNowAndWait` lives on `PhotoXUITestCase` via the
+    // `DarwinNotifyAndWait.swift` extension (shared with
+    // `SessionRestoreTests` and `MultiWindowTests`).
 }

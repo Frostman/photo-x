@@ -153,50 +153,7 @@ final class SessionRestoreTests: PhotoXUITestCase {
         (0 ..< app.windows.count).map { app.windows.element(boundBy: $0).title }
     }
 
-    /// Same shape as `RelaunchTests.postCaptureNowAndWait`. Posts
-    /// the `captureNow` Darwin notification and blocks until the
-    /// app's `captureNowCompleted` sentinel confirms the on-disk
-    /// writes have flushed.
-    private func postCaptureNowAndWait() throws {
-        let completed = expectation(description: "uitest.captureNowCompleted")
-        let center = CFNotificationCenterGetDarwinNotifyCenter()
-        let completedName = "dev.frostman.PhotoX.uitest.captureNowCompleted" as CFString
-        let box = Unmanaged.passRetained(SentinelBox(expectation: completed))
-        defer {
-            CFNotificationCenterRemoveObserver(center,
-                                                box.toOpaque(),
-                                                CFNotificationName(completedName),
-                                                nil)
-            box.release()
-        }
-        CFNotificationCenterAddObserver(
-            center,
-            box.toOpaque(),
-            { _, observer, _, _, _ in
-                guard let observer else { return }
-                Unmanaged<SentinelBox>.fromOpaque(observer)
-                    .takeUnretainedValue()
-                    .expectation.fulfill()
-            },
-            completedName,
-            nil,
-            .deliverImmediately
-        )
-        let captureName = "dev.frostman.PhotoX.uitest.captureNow" as CFString
-        CFNotificationCenterPostNotification(
-            center,
-            CFNotificationName(captureName),
-            nil,
-            nil,
-            true
-        )
-        wait(for: [completed], timeout: 5)
-    }
-
-    private class SentinelBox {
-        let expectation: XCTestExpectation
-        init(expectation: XCTestExpectation) {
-            self.expectation = expectation
-        }
-    }
+    // `postCaptureNowAndWait` lives on `PhotoXUITestCase` via the
+    // `DarwinNotifyAndWait.swift` extension (shared with
+    // `RelaunchTests` and `MultiWindowTests`).
 }
