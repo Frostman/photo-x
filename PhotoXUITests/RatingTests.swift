@@ -28,7 +28,15 @@ final class RatingTests: PhotoXSessionUITestCase {
 
     func test_colorLabel_setViaShiftKey() throws {
         waitForShootLoaded()
-        let stem = try XCTUnwrap(sortedPairStems().first)
+        // Navigate one entry forward off DSC00060 — the fixture's
+        // DSC00060.xmp ships with `<xmp:Label>Green</xmp:Label>`
+        // pre-set from Lightroom, so ⇧3 (toggleLabel("Green")) would
+        // REMOVE the label instead of adding it, and the predicate
+        // below would fail by never seeing `xmp:Label` re-appear.
+        // The second pair (DSC02115) ships without a label, so the
+        // toggle reliably adds one.
+        navigateForward(by: 1)
+        let stem = currentStem()
 
         // ⇧3 → "#" → Green label (1=Red, 2=Yellow, 3=Green,
         // 4=Blue, 5=Purple). macOS converts shift+3 to "#" at the
