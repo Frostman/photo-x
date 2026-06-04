@@ -543,6 +543,21 @@ _patch_xctestrun_env() {
     # upstream (some Xcode versions may emit a UI-only xctestrun).
     plutil -remove PhotoXTests "${patched}" 2>/dev/null || true
 
+    # --record: switch the test target's automatic-attachment
+    # lifetimes from `deleteOnSuccess` (the host build default) to
+    # `keepAlways`. The xctestrun already has
+    # `PreferredScreenCaptureFormat = screenRecording`, so this
+    # makes the automatic screen recording persist for every test,
+    # not just failures. Useful for "show me what each test does"
+    # review passes; not on by default because the recordings
+    # balloon xcresult size by ~hundreds of MB on a full suite.
+    if [[ "${PHOTOX_E2E_RECORD_ALL:-0}" == "1" ]]; then
+        plutil -replace "${target}.UserAttachmentLifetime" \
+            -string "keepAlways" "${patched}" 2>/dev/null || true
+        plutil -replace "${target}.SystemAttachmentLifetime" \
+            -string "keepAlways" "${patched}" 2>/dev/null || true
+    fi
+
     printf '%s' "${patched}"
 }
 
@@ -706,19 +721,27 @@ cmd_run() {
 
     # Parse leading flags. Order matters: --rerun-failed populates
     # `$@` from the prior xcresult before we forward to cmd_ship +
-    # the rest of the run; --keep-on-fail tweaks suspend behaviour.
+    # the rest of the run; --keep-on-fail tweaks suspend behaviour;
+    # --record bumps the xctestrun's attachment lifetime so the
+    # automatic screen recording (xctestrun already sets
+    # `PreferredScreenCaptureFormat = screenRecording`) is retained
+    # for EVERY test, not just failures.
     local rerun_failed=0
     local keep_on_fail=0
     while [[ "${1:-}" == --* ]]; do
         case "$1" in
             --rerun-failed) rerun_failed=1; shift ;;
             --keep-on-fail) keep_on_fail=1; shift ;;
+            --record)       export PHOTOX_E2E_RECORD_ALL=1; shift ;;
             --)             shift; break ;;
             *)              die usage "unknown flag: $1" ;;
         esac
     done
     if [[ "${PHOTOX_E2E_KEEP_ON_FAIL:-0}" == "1" ]]; then
         keep_on_fail=1
+    fi
+    if [[ "${PHOTOX_E2E_RECORD_ALL:-0}" == "1" ]]; then
+        log "--record: xctestrun lifetimes will be patched to keepAlways (recordings retained for every test)"
     fi
 
     if (( rerun_failed )); then

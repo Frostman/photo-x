@@ -442,6 +442,16 @@ fake-card:
 # matches `just e2e` exactly. On failure, the latest .xcresult bundle
 # is pulled to build/e2e-results/<timestamp>/ for inspection; the
 # most-recent 5 are kept.
+#
+# Flags (passed through to scripts/vm-remote.sh):
+#   --rerun-failed   replay only the tests that failed last run
+#   --keep-on-fail   leave the VM running on failure for vm-shell/vm-screen
+#   --record         keep the automatic screen recording for EVERY test
+#                    (not just failures). Useful for reviewing what each
+#                    test is doing. Bumps xcresult size by ~MBs per test.
+#
+#   just vm-e2e --record SmokeTests        → record video of one test
+#   just vm-e2e --keep-on-fail RatingTests → debug a failing test in the VM
 vm-e2e *only="":
     ./scripts/vm-remote.sh run {{ only }}
 

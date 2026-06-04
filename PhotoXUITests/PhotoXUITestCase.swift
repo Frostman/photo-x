@@ -49,6 +49,26 @@ class PhotoXUITestCase: XCTestCase {
     /// fail; any `.xmp` that isn't well-formed XML → fail.
     var manifest: [String: FileFingerprint] = [:]
 
+    /// Install `PhotoXUITestObserver` exactly once per process. The
+    /// observer attaches a screenshot + accessibility-tree dump to
+    /// any failing test's xcresult node, fired on the assertion
+    /// itself (not in tearDown) so the app is still alive when the
+    /// AX query runs. Reading this static var triggers the closure
+    /// the first time; subsequent reads are no-ops (Swift static
+    /// init is `dispatch_once` under the hood).
+    private static let _installFailureObserver: Void = {
+        XCTestObservationCenter.shared.addTestObserver(PhotoXUITestObserver.shared)
+        return ()
+    }()
+
+    /// Class-level setUp fires once per concrete subclass; the
+    /// static-init guard above ensures the observer is registered
+    /// at most one time even across multiple test classes.
+    override class func setUp() {
+        super.setUp()
+        _ = _installFailureObserver
+    }
+
     // MARK: fixture cloning
 
     /// Source-tree path of the `sample/` folder. Walks up from the
@@ -614,5 +634,56 @@ class PhotoXUITestCase: XCTestCase {
         let el = app.staticTexts["exif.row.\(key).value"]
         guard el.exists else { return nil }
         return (el.value as? String) ?? el.label
+    }
+}
+
+/// XCTestObservation that attaches a key-window screenshot and the
+/// app's full accessibility-tree dump to any failing test's xcresult
+/// node. Fired by XCTest on the assertion itself (not via tearDown),
+/// so the app is still alive at attachment time even when the test
+/// terminates it immediately afterwards.
+///
+/// Installed once per process by `PhotoXUITestCase.setUp` (class
+/// method). Zero overhead on passing tests — the observer's only
+/// non-trivial method is `didFailWithDescription`, which never fires
+/// for green runs.
+///
+/// To inspect on a failed run:
+///   - `failure-screenshot` attachment in the xcresult shows what the
+///     UI looked like at the moment of failure.
+///   - `failure-ax-tree.txt` is the output of `app.debugDescription`
+///     — the same hierarchical dump XCUITest emits for `Find:` lines
+///     in test logs. Useful when a predicate-based wait timed out and
+///     you need to know whether the expected element was anywhere in
+///     the tree (and under what title / identifier).
+final class PhotoXUITestObserver: NSObject, XCTestObservation {
+    static let shared = PhotoXUITestObserver()
+
+    func testCase(_ testCase: XCTestCase,
+                  didFailWithDescription description: String,
+                  inFile filePath: String?,
+                  atLine lineNumber: Int) {
+        guard let uiTest = testCase as? PhotoXUITestCase,
+              let app = uiTest.app else {
+            return
+        }
+        // Screenshot of the key window at the moment of failure.
+        // XCUIScreenshot is hardware-encoded on Apple Silicon — the
+        // cost is negligible compared to the value at debug time.
+        let screenshot = app.screenshot()
+        let screenAttachment = XCTAttachment(screenshot: screenshot)
+        screenAttachment.name = "failure-screenshot"
+        screenAttachment.lifetime = .keepAlways
+        testCase.add(screenAttachment)
+
+        // Accessibility-tree dump. Walks `app.descendants(matching:
+        // .any)` internally; expensive (~500ms–2s on a multi-window
+        // app) but only runs on the failure path. The output is the
+        // same indented tree XCUITest shows in `Find:` log lines.
+        let dump = app.debugDescription
+        let dumpAttachment = XCTAttachment(string: dump)
+        dumpAttachment.name = "failure-ax-tree.txt"
+        dumpAttachment.lifetime = .keepAlways
+        testCase.add(dumpAttachment)
     }
 }
