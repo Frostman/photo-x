@@ -179,58 +179,24 @@ class PhotoXSessionUITestCase: PhotoXUITestCase {
 
     // MARK: - reset via Darwin notification
 
+    /// Drive the in-process `UITestResetObserver` reset hook and
+    /// wait for its `resetCompleted` sentinel. 5 s is 2× the typical
+    /// 2–4 s reset+reopen+index cycle — tight enough to fail fast
+    /// on a hung observer, loose enough to ride out a slow indexing
+    /// pass. The previous 15 s ceiling masked stuck cycles for too
+    /// long.
+    ///
+    /// No `promoteToKey` + `waitForShootLoaded` here on purpose.
+    /// Every test method's first line calls `waitForShootLoaded`
+    /// (which polls the pill AND clicks the canvas to anchor
+    /// focus). Doing both before the test ran cost ~2–3 s per
+    /// reset × 14 resets ≈ 30–40 s of pure dead time.
     private func resetAppState() throws {
-        let completed = expectation(description: "uitest.resetCompleted")
-        let center = CFNotificationCenterGetDarwinNotifyCenter()
-        let completedName = "dev.frostman.PhotoX.uitest.resetCompleted" as CFString
-
-        let box = Unmanaged.passRetained(SentinelBox(expectation: completed))
-        defer {
-            CFNotificationCenterRemoveObserver(center,
-                                                box.toOpaque(),
-                                                CFNotificationName(completedName),
-                                                nil)
-            box.release()
-        }
-        CFNotificationCenterAddObserver(
-            center,
-            box.toOpaque(),
-            { _, observer, _, _, _ in
-                guard let observer else { return }
-                Unmanaged<SentinelBox>.fromOpaque(observer)
-                    .takeUnretainedValue()
-                    .expectation.fulfill()
-            },
-            completedName,
-            nil,
-            .deliverImmediately
+        try postDarwinNotificationAndWait(
+            request:    "dev.frostman.PhotoX.uitest.reset",
+            completion: "dev.frostman.PhotoX.uitest.resetCompleted",
+            timeout:    5
         )
-
-        let resetName = "dev.frostman.PhotoX.uitest.reset" as CFString
-        CFNotificationCenterPostNotification(
-            center,
-            CFNotificationName(resetName),
-            nil,
-            nil,
-            true
-        )
-        // 5 s is 2× the typical 2–4 s reset+reopen+index cycle —
-        // tight enough to fail fast on a hung observer, loose
-        // enough to ride out a slow indexing pass. The previous
-        // 15 s ceiling masked stuck cycles for too long.
-        wait(for: [completed], timeout: 5)
-        // No promoteToKey + waitForShootLoaded here on purpose.
-        // Every test method's first line calls waitForShootLoaded
-        // (which polls the pill AND clicks the canvas to anchor
-        // focus). Doing both before the test ran cost ~2–3 s per
-        // reset × 14 resets ≈ 30–40 s of pure dead time.
-    }
-
-    private class SentinelBox {
-        let expectation: XCTestExpectation
-        init(expectation: XCTestExpectation) {
-            self.expectation = expectation
-        }
     }
 
     // MARK: - bundle-end observer
