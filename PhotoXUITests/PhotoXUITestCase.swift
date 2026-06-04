@@ -69,6 +69,46 @@ class PhotoXUITestCase: XCTestCase {
         _ = _installFailureObserver
     }
 
+    /// Attach any PhotoX-family crash reports that landed in
+    /// `~/Library/Logs/DiagnosticReports/` during this test. macOS
+    /// writes a `.ips` (or `.crash`) for every process abort with
+    /// a symbolicated stack — the kind of forensic that's gold
+    /// when a test reports "app isn't running" but the assertion
+    /// message gives no idea why. Bounded by `testRun?.startDate`
+    /// so we don't repeatedly attach the same old crash to every
+    /// subsequent test. Subclasses' own tearDownWithError calls
+    /// `super` at the end, so this fires after their cleanup.
+    override func tearDownWithError() throws {
+        attachAppCrashLogsSinceTestStart()
+        try super.tearDownWithError()
+    }
+
+    private func attachAppCrashLogsSinceTestStart() {
+        let startDate = testRun?.startDate ?? Date(timeIntervalSinceNow: -600)
+        let diagDir = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent("Library/Logs/DiagnosticReports")
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: diagDir,
+            includingPropertiesForKeys: [.creationDateKey]
+        ) else { return }
+        for url in entries {
+            let name = url.lastPathComponent
+            // Catches PhotoX_*.ips, PhotoX-*.ips, PhotoXCardWatcher_*.ips,
+            // PhotoXUITests-Runner_*.ips, etc. — anything PhotoX-related.
+            guard name.hasPrefix("PhotoX") else { continue }
+            guard let attrs = try? url.resourceValues(forKeys: [.creationDateKey]),
+                  let created = attrs.creationDate,
+                  created > startDate else {
+                continue
+            }
+            guard let data = try? Data(contentsOf: url) else { continue }
+            let attachment = XCTAttachment(data: data)
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+    }
+
     // MARK: fixture cloning
 
     /// Source-tree path of the `sample/` folder. Walks up from the

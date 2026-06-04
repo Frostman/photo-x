@@ -725,14 +725,19 @@ cmd_run() {
     # --record bumps the xctestrun's attachment lifetime so the
     # automatic screen recording (xctestrun already sets
     # `PreferredScreenCaptureFormat = screenRecording`) is retained
-    # for EVERY test, not just failures.
+    # for EVERY test, not just failures; --cold-boot stops the VM
+    # before this run so cmd_ensure_running cold-boots instead of
+    # resuming from suspend (diagnostic escape hatch when the
+    # suspended state is suspect — the happy path is suspend-resume).
     local rerun_failed=0
     local keep_on_fail=0
+    local cold_boot=0
     while [[ "${1:-}" == --* ]]; do
         case "$1" in
             --rerun-failed) rerun_failed=1; shift ;;
             --keep-on-fail) keep_on_fail=1; shift ;;
             --record)       export PHOTOX_E2E_RECORD_ALL=1; shift ;;
+            --cold-boot)    cold_boot=1; shift ;;
             --)             shift; break ;;
             *)              die usage "unknown flag: $1" ;;
         esac
@@ -742,6 +747,22 @@ cmd_run() {
     fi
     if [[ "${PHOTOX_E2E_RECORD_ALL:-0}" == "1" ]]; then
         log "--record: xctestrun lifetimes will be patched to keepAlways (recordings retained for every test)"
+    fi
+    if (( cold_boot )); then
+        log "--cold-boot: forcing tart stop so the next ensure_running cold-boots instead of resuming"
+        # Kill the tart-run process (if any) and tell tart to stop.
+        # Both are idempotent — already-stopped is the no-op case.
+        if [[ -f "${VM_PID_FILE}" ]]; then
+            local pid
+            pid=$(cat "${VM_PID_FILE}" 2>/dev/null || echo 0)
+            kill "${pid}" 2>/dev/null || true
+            rm -f "${VM_PID_FILE}"
+        fi
+        tart stop "${VM_NAME}" 2>/dev/null || true
+        # Give the kernel a moment to release any aux-storage flock
+        # before cmd_ensure_running fires _tart_run_suspendable — same
+        # rationale as the cmd_suspend settle in B1.
+        sleep 1
     fi
 
     if (( rerun_failed )); then

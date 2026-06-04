@@ -449,9 +449,13 @@ fake-card:
 #   --record         keep the automatic screen recording for EVERY test
 #                    (not just failures). Useful for reviewing what each
 #                    test is doing. Bumps xcresult size by ~MBs per test.
+#   --cold-boot      stop the VM first so this run cold-boots instead of
+#                    resuming from suspend. Diagnostic escape hatch when
+#                    you suspect the suspended state is corrupt.
 #
 #   just vm-e2e --record SmokeTests        → record video of one test
 #   just vm-e2e --keep-on-fail RatingTests → debug a failing test in the VM
+#   just vm-e2e --cold-boot                → fresh VM start for this run
 vm-e2e *only="":
     ./scripts/vm-remote.sh run {{ only }}
 
@@ -486,22 +490,43 @@ vm-e2e-stability N="5" *only="":
         # post-iteration snapshot can detect whether this iteration
         # actually produced a new xcresult or just left the symlink
         # pointing at the previous run (the VM-layer failure case —
-        # we'd otherwise double-count the previous result).
+        # we'd otherwise double-count the previous result). Also
+        # snapshot build/vm/run.log's line count so the per-iteration
+        # tart-side run-log slice (B5) is bounded to lines this
+        # iteration appended — see post-iteration capture below.
         PRE_LATEST=$(readlink build/e2e-results/latest 2>/dev/null || true)
+        PRE_RUNLOG_LINES=$(wc -l < build/vm/run.log 2>/dev/null | tr -d ' ' || echo 0)
         # `|| true` so one failed iteration doesn't abort the matrix.
         ./scripts/vm-remote.sh run {{ only }} 2>&1 | tee -a "${SESS_LOG}" || true
         POST_LATEST=$(readlink build/e2e-results/latest 2>/dev/null || true)
+        POST_RUNLOG_LINES=$(wc -l < build/vm/run.log 2>/dev/null | tr -d ' ' || echo 0)
         RUN_LABEL=$(printf 'run-%02d' "${i}")
+        # Always materialise the run-NN/ dir so the per-iteration
+        # forensic surface is consistent: it holds at minimum a
+        # tart-side run.log slice + (when produced) the xcresult.
+        # VM-layer failures (no xcresult) thus still leave the
+        # run.log behind for inspection.
+        mkdir -p "${SESSION_DIR}/${RUN_LABEL}"
+        # Tart-side run.log delta: snapshot-restore lines, VZ errors
+        # (Code=2 / Code=12), guest-agent boot messages. Only useful
+        # when something went wrong at the VM layer, but free to
+        # capture and pairs with the xcresult for full forensics.
+        NEW_RUNLOG_LINES=$((POST_RUNLOG_LINES - PRE_RUNLOG_LINES))
+        if (( NEW_RUNLOG_LINES > 0 )); then
+            tail -n "${NEW_RUNLOG_LINES}" build/vm/run.log \
+                > "${SESSION_DIR}/${RUN_LABEL}/tart-run.log" 2>/dev/null || true
+        fi
         if [[ -n "${POST_LATEST}" && "${POST_LATEST}" != "${PRE_LATEST}" ]]; then
-            # Snapshot this iteration's xcresult into the session dir
-            # so cmd_pull_xcresult's 5-most-recent retention cap can't
-            # prune earlier runs out from under the report. cp -RH
-            # follows the `latest` symlink.
-            cp -RH build/e2e-results/latest "${SESSION_DIR}/${RUN_LABEL}" 2>/dev/null \
-                || printf '  (snapshot failed for %s)\n' "${RUN_LABEL}" \
+            # Copy LATEST's contents into the already-created run-NN/
+            # dir (trailing `/.` so cp puts files directly there
+            # instead of nesting a `latest/` subdir). The xcresult
+            # report script walks `find -name last.xcresult` and
+            # finds it at any depth.
+            cp -RH build/e2e-results/latest/. "${SESSION_DIR}/${RUN_LABEL}/" 2>/dev/null \
+                || printf '  (xcresult snapshot failed for %s)\n' "${RUN_LABEL}" \
                     | tee -a "${SESS_LOG}"
         else
-            printf '  (no new xcresult for %s — VM-layer failure or pre-test abort)\n' \
+            printf '  (no new xcresult for %s — VM-layer failure or pre-test abort; tart-run.log is the only forensic artifact)\n' \
                 "${RUN_LABEL}" | tee -a "${SESS_LOG}"
         fi
     done
