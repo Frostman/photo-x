@@ -642,6 +642,25 @@ class PhotoXUITestCase: XCTestCase {
         guard el.exists else { return nil }
         return (el.value as? String) ?? el.label
     }
+
+    /// Spin-wait until `app.windows.count == expected`. XCUITest has
+    /// no clean "count equals" predicate for the windows collection,
+    /// so we poll on a short cadence. Used by MultiWindowTests and
+    /// SessionRestoreTests; lives here so the two test classes share
+    /// the implementation.
+    func waitForWindowCount(_ expected: Int, timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if app.windows.count == expected { return true }
+            usleep(100_000)
+        }
+        return app.windows.count == expected
+    }
+
+    /// Titles of every top-level window in current-AX-tree order.
+    func currentWindowTitles() -> [String] {
+        (0 ..< app.windows.count).map { app.windows.element(boundBy: $0).title }
+    }
 }
 
 /// XCTestObservation that attaches a key-window screenshot and the

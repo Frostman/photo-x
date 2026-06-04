@@ -137,21 +137,8 @@ final class SessionRestoreTests: PhotoXUITestCase {
 
     // MARK: - Helpers
 
-    /// Spin-wait until `app.windows.count == expected`. XCUITest's
-    /// own predicate-wait doesn't have a clean "count equals" form
-    /// for the windows collection, so we poll on a short cadence.
-    private func waitForWindowCount(_ expected: Int, timeout: TimeInterval) -> Bool {
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            if app.windows.count == expected { return true }
-            usleep(100_000)
-        }
-        return app.windows.count == expected
-    }
-
-    private func currentWindowTitles() -> [String] {
-        (0 ..< app.windows.count).map { app.windows.element(boundBy: $0).title }
-    }
+    // waitForWindowCount and currentWindowTitles live on
+    // PhotoXUITestCase (shared with MultiWindowTests).
 
     // `postCaptureNowAndWait` lives on `PhotoXUITestCase` via the
     // `DarwinNotifyAndWait.swift` extension (shared with

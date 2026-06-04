@@ -272,18 +272,8 @@ final class MultiWindowTests: PhotoXUITestCase {
 
     // MARK: - Helpers
 
-    private func waitForWindowCount(_ expected: Int, timeout: TimeInterval) -> Bool {
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            if app.windows.count == expected { return true }
-            usleep(100_000)
-        }
-        return app.windows.count == expected
-    }
-
-    private func currentWindowTitles() -> [String] {
-        (0 ..< app.windows.count).map { app.windows.element(boundBy: $0).title }
-    }
+    // waitForWindowCount and currentWindowTitles live on
+    // PhotoXUITestCase (shared with SessionRestoreTests).
 
     /// NSPredicate-based lookup mirrors `SessionRestoreTests`,
     /// which reliably resolves windows by title-bar substring.

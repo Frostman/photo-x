@@ -291,14 +291,23 @@ final class UndoTests: PhotoXSessionUITestCase {
             waitForDisplayedPairReady()
             let candidateStem = currentStem()
             pressKey("G")
-            Thread.sleep(forTimeInterval: 0.5)
-            // Any sibling whose semantic state changed = burst
-            // member. Skip the keeper itself.
+            // Poll until any sibling's XMP changes (burst found)
+            // or 0.5 s elapses (no burst at this entry). Typical
+            // XMPWriteCoordinator latency is 100–200 ms, so most
+            // iterations break out well before the deadline — over
+            // a 20-entry scan that saves a few seconds vs the old
+            // blind sleep.
+            let pollDeadline = Date(timeIntervalSinceNow: 0.5)
             var touched: [String] = []
-            for stem in try sortedPairStems() where stem != candidateStem {
-                if currentXMP(forPairNamed: stem) != beforeAll[stem] {
-                    touched.append(stem)
+            while Date() < pollDeadline {
+                touched = []
+                for stem in try sortedPairStems() where stem != candidateStem {
+                    if currentXMP(forPairNamed: stem) != beforeAll[stem] {
+                        touched.append(stem)
+                    }
                 }
+                if !touched.isEmpty { break }
+                Thread.sleep(forTimeInterval: 0.05)
             }
             if !touched.isEmpty {
                 // Found one. Undo the discovery G; wait until
