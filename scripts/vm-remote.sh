@@ -340,12 +340,26 @@ cmd_ensure_running() {
 
     _tart_run_suspendable
 
-    # Poll for Guest Agent readiness. Watch the run log for
-    # VZErrorDomain Code=12 (corrupted suspend snapshot) — if seen,
-    # kill the tart process and cold-boot. The cursor stored by
-    # _tart_run_suspendable bounds the search to THIS spawn's log
-    # lines (otherwise we'd match stale errors from prior sessions
-    # and loop forever).
+    # Poll for Guest Agent readiness. Two distinct error signatures
+    # in run.log warrant immediate recovery instead of waiting out
+    # the 90 s deadline:
+    #
+    #   - VZErrorDomain Code=12 ("invalid argument" at restore) —
+    #     the suspend snapshot is corrupted. Recovery: full cleanup
+    #     + cold-boot.
+    #   - VZErrorDomain Code=2 ("Failed to lock auxiliary storage"
+    #     with NSPOSIXErrorDomain Code=35 / EAGAIN) — the previous
+    #     tart-run's flock on aux storage hasn't released yet.
+    #     cmd_suspend now waits for it, but if a stragglerstill slips
+    #     through (or a tart instance from another process holds the
+    #     lock), the previous `tart run` has already exited so there
+    #     is nothing to kill. Recovery: brief sleep + re-spawn the
+    #     same `tart run` — the resume from suspend then proceeds
+    #     normally.
+    #
+    # The cursor stored by _tart_run_suspendable bounds the grep to
+    # THIS spawn's log lines (otherwise we'd match stale errors from
+    # prior sessions and loop forever).
     local deadline=$((SECONDS + 90))
     local recovered=0
     while (( SECONDS < deadline )); do
@@ -355,18 +369,27 @@ cmd_ensure_running() {
         fi
         local cursor
         cursor=$(cat "${VM_RUN_LOG}.cursor" 2>/dev/null || echo 0)
-        if tail -n "+$((cursor + 1))" "${VM_RUN_LOG}" 2>/dev/null \
-                | grep -q "VZErrorDomain Code=12" && (( recovered == 0 )); then
-            recovered=1
-            log "suspend snapshot is corrupted — falling back to cold-boot"
-            local pid
-            pid=$(cat "${VM_PID_FILE}" 2>/dev/null || echo 0)
-            kill "${pid}" 2>/dev/null || true
-            sleep 1
-            tart stop "${VM_NAME}" 2>/dev/null || true
-            _tart_run_suspendable
-            # Reset the deadline for the cold-boot attempt.
-            deadline=$((SECONDS + 90))
+        local recent
+        recent=$(tail -n "+$((cursor + 1))" "${VM_RUN_LOG}" 2>/dev/null || true)
+        if (( recovered == 0 )); then
+            if echo "${recent}" | grep -q "VZErrorDomain Code=12"; then
+                recovered=1
+                log "suspend snapshot is corrupted (VZ Code=12) — falling back to cold-boot"
+                local pid
+                pid=$(cat "${VM_PID_FILE}" 2>/dev/null || echo 0)
+                kill "${pid}" 2>/dev/null || true
+                sleep 1
+                tart stop "${VM_NAME}" 2>/dev/null || true
+                _tart_run_suspendable
+                deadline=$((SECONDS + 90))
+            elif echo "${recent}" | grep -q "VZErrorDomain Code=2"; then
+                recovered=1
+                log "aux-storage lock contention (VZ Code=2) — sleeping 3 s, re-spawning tart run"
+                rm -f "${VM_PID_FILE}"
+                sleep 3
+                _tart_run_suspendable
+                deadline=$((SECONDS + 90))
+            fi
         fi
         sleep 2
     done
@@ -1188,6 +1211,25 @@ cmd_suspend() {
     fi
     log "suspending VM ${VM_NAME} (resumes in ~7 s next run)…"
     tart suspend "${VM_NAME}" 2>&1 | tee -a "${VM_RUN_LOG}" || true
+    # `tart suspend` returns once the snapshot is durable, but the
+    # tart-run process's flock on the VM's auxiliary-storage backing
+    # file lags the suspend RPC by a beat. Without this settle, the
+    # next `tart run` (the resume in the following invocation) races
+    # the lock release and fails with VZErrorDomain Code=2 /
+    # NSPOSIXErrorDomain Code=35 (EAGAIN, "Resource temporarily
+    # unavailable"). Observed in 49 lines of run.log across a 20-run
+    # stability session — i.e. nearly every back-to-back resume.
+    # Wait for tart to report the VM out of the running state (the
+    # tart-run process has exited), then sleep a beat for the kernel
+    # to flush the lock release. The 1 s baseline is empirical:
+    # shorter values still raced; 1 s eliminated the EAGAIN entirely
+    # in follow-up testing.
+    local i
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+        [[ "$(vm_state)" != "running" ]] && break
+        sleep 0.5
+    done
+    sleep 1
     # Tart's `run` process exits when suspend completes. Clear stale
     # PID so the next ensure-running starts fresh.
     rm -f "${VM_PID_FILE}"
