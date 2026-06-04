@@ -513,12 +513,31 @@ struct WindowRoot: View {
                 // observer — `WindowAccessor.updateNSView` fires too
                 // early in SwiftUI's setup; SwiftUI overrides our
                 // delegate afterward.
-                // Maximize every spawned window to the screen's
-                // visible frame — culling benefits from the largest
-                // possible canvas. Skip under XCUITest so tests see
-                // a predictable default frame.
-                if !LaunchFlags.uiTestMode,
-                   let screen = window.screen ?? NSScreen.main {
+                if LaunchFlags.uiTestMode {
+                    // Deterministically separate windows in test mode
+                    // so MultiWindowTests' pill-to-window correlation
+                    // (which intersects pill.frame.origin with each
+                    // window's frame; see `MultiWindowTests.pillIndex`)
+                    // can't pick up another window's pill. SwiftUI's
+                    // default WindowGroup placement stacks new windows
+                    // with only a small offset — both frames overlap,
+                    // so windowA's pill origin lands inside windowB's
+                    // frame and pillIndex(B) returns A's value. We
+                    // stride windows by their registration order
+                    // along the X axis using a step wide enough to
+                    // clear a full window frame (1000 px > 900 px
+                    // default width).
+                    let n = WindowRegistry.shared.all.count - 1
+                    let stride: CGFloat = 1000
+                    window.setFrame(
+                        NSRect(x: 50 + CGFloat(max(n, 0)) * stride,
+                               y: 50,
+                               width: 900,
+                               height: 640),
+                        display: true)
+                } else if let screen = window.screen ?? NSScreen.main {
+                    // Maximize in production — culling benefits from
+                    // the largest possible canvas.
                     window.setFrame(screen.visibleFrame, display: true)
                 }
             })

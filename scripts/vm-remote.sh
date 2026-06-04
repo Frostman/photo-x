@@ -370,7 +370,31 @@ cmd_ensure_running() {
         fi
         sleep 2
     done
-    die vm-unreachable "VM started but tart-guest-agent never responded (90 s) — check ${VM_RUN_LOG}"
+    # First 90 s timed out without a VZError-12 marker. Observed
+    # in practice: back-to-back stability runs hit a silent
+    # tart-guest-agent unresponsiveness on resume-from-suspend,
+    # roughly every other invocation, with no log signature to
+    # trigger the recovery path above. Try one cold-boot before
+    # dying — that's cheap (~20-30 s when it works) and converts
+    # a hard fail into a recoverable hiccup.
+    if (( recovered == 0 )); then
+        log "agent unresponsive after 90 s — falling back to cold-boot"
+        local pid2
+        pid2=$(cat "${VM_PID_FILE}" 2>/dev/null || echo 0)
+        kill "${pid2}" 2>/dev/null || true
+        sleep 1
+        tart stop "${VM_NAME}" 2>/dev/null || true
+        _tart_run_suspendable
+        deadline=$((SECONDS + 120))
+        while (( SECONDS < deadline )); do
+            if tart ip --resolver agent --wait 2 "${VM_NAME}" >/dev/null 2>&1; then
+                log "VM ${VM_NAME} is up (after cold-boot recovery)"
+                return 0
+            fi
+            sleep 2
+        done
+    fi
+    die vm-unreachable "VM started but tart-guest-agent never responded — check ${VM_RUN_LOG}"
 }
 
 cmd_ensure_provisioned() {
@@ -458,8 +482,16 @@ _find_xctestrun() {
 # Patch the xctestrun's per-target EnvironmentVariables so the
 # prebuilt test bundle's `PhotoXUITestCase.repoSampleURL` resolves
 # to the VM's local fixture path instead of the host's compile-time
-# #file walk. Uses plutil to mutate the plist in place. Returns the
-# (possibly-rewritten) path to use for shipping.
+# #file walk, and drop the PhotoXTests (unit) target entirely.
+#
+# Why strip PhotoXTests: it's an IsAppHostedTestBundle with RunOrder=0,
+# so xcodebuild test-without-building tries to load it before
+# PhotoXUITests. The bundle never successfully injects in the VM
+# (xcresults show PhotoXTests.xctest is never opened — even on warm
+# runs the test summary only lists PhotoXUITests entries), and the
+# attempt costs a ~5 min xctest bundle-load timeout on cold/long-
+# suspended VMs (10:05 wall → 4:51 once dropped). Unit tests still
+# run on the host via `just test`. See build/vm/runner-attach-diag.md.
 _patch_xctestrun_env() {
     local src=$1
     local patched
@@ -467,8 +499,7 @@ _patch_xctestrun_env() {
     cp "${src}" "${patched}"
 
     # The xctestrun's top-level keys are the BlueprintNames of the
-    # test targets. We only need PhotoXUITests to see the env var
-    # (PhotoXTests is a unit-test target that doesn't touch sample/).
+    # test targets. We only need PhotoXUITests to see the env var.
     local target=PhotoXUITests
     local env_path="${target}.EnvironmentVariables.PHOTOX_FIXTURE_SOURCE_DIR"
     local value="${VM_FIXTURES}/sample"
@@ -483,6 +514,12 @@ _patch_xctestrun_env() {
         fi
         plutil -insert "${env_path}" -string "${value}" "${patched}"
     fi
+
+    # Drop PhotoXTests so xcodebuild won't attempt the doomed unit-
+    # test phase. Safe to no-op if the key was already removed
+    # upstream (some Xcode versions may emit a UI-only xctestrun).
+    plutil -remove PhotoXTests "${patched}" 2>/dev/null || true
+
     printf '%s' "${patched}"
 }
 
@@ -628,9 +665,10 @@ _test_env_args() {
     printf 'PHOTOX_FIXTURE_SOURCE_DIR=%s/sample' "${VM_FIXTURES}"
 }
 
-# Two-stage test runner: optional smoke gate, then the caller's
-# filter (or full suite if no filter). Both stages share the same
-# xctestrun and DerivedData inside the VM.
+# In-VM test runner. Runs the caller's filter(s), or the full UI
+# suite if none. PhotoXTests (unit) is stripped from the patched
+# xctestrun upstream (see `_patch_xctestrun_env`), so even the
+# unfiltered case only touches PhotoXUITests.
 cmd_run() {
     # Track upstream image on every run. The cached state-file +
     # digest-cmp path in `cmd_ensure_vm` recreates the VM when
@@ -652,7 +690,6 @@ cmd_run() {
         case "$1" in
             --rerun-failed) rerun_failed=1; shift ;;
             --keep-on-fail) keep_on_fail=1; shift ;;
-            --skip-smoke)   break ;;  # handled below
             --)             shift; break ;;
             *)              die usage "unknown flag: $1" ;;
         esac
@@ -680,23 +717,14 @@ cmd_run() {
     cmd_ship
     _dismiss_system_banners
 
-    local skip_smoke=0
-    if [[ "${PHOTOX_E2E_SKIP_SMOKE:-0}" == "1" ]]; then
-        skip_smoke=1
-    fi
-    # Allow the caller to pass --skip-smoke as the first arg.
-    if [[ "${1:-}" == "--skip-smoke" ]]; then
-        skip_smoke=1
-        shift
-    fi
-
     # Normalize each filter to a fully-qualified xcodebuild path so
     # callers can use shorthand. xcodebuild rejects a bare class name
     # without the bundle prefix ("SmokeTests" → "isn't a member of
     # the specified test plan or scheme"), and typing PhotoXUITests/
     # on every invocation is tedium for no benefit. The PhotoXUITests
     # bundle is the only XCUITest target in the scheme, so the prefix
-    # is unambiguous.
+    # is unambiguous. Multiple filters form a union — e.g.
+    # `just vm-e2e RatingTests UndoTests` runs both classes.
     local filters=()
     for arg in "$@"; do
         case "${arg}" in
@@ -710,22 +738,6 @@ cmd_run() {
     RUN_START_TS=$(date -u +"%Y-%m-%d %H:%M:%S")
     export RUN_START_TS
 
-    # Auto-skip the dedicated smoke gate when the caller's filter
-    # already includes SmokeTests (full suite, or an explicit
-    # PhotoXUITests/SmokeTests... filter). Avoids running the same
-    # test twice on the hot iteration path.
-    if (( skip_smoke == 0 )); then
-        if [[ ${#filters[@]} -eq 0 ]]; then
-            skip_smoke=1
-        else
-            for f in "${filters[@]}"; do
-                if [[ "${f}" == *SmokeTests* ]]; then
-                    skip_smoke=1
-                    break
-                fi
-            done
-        fi
-    fi
     local xctestrun_name
     xctestrun_name=$(basename "$(_find_xctestrun)")
     local xctestrun_remote="${VM_ARTIFACTS}/${xctestrun_name}"
@@ -766,19 +778,7 @@ cmd_run() {
             | sed -E '/^Testing started$/d; /\[MT\] IDETestOperationsObserverDebug:/d'
     }
 
-    # Smoke gate first (fast-fail if launch is broken).
-    if (( skip_smoke == 0 )); then
-        local smoke_rc=0
-        _run_stage "PhotoXUITests/SmokeTests" "smoke gate (PhotoXUITests/SmokeTests)" || smoke_rc=$?
-        if (( smoke_rc != 0 )); then
-            cmd_pull_xcresult "${xcresult_remote}" || true
-            _write_last_run "smoke-failed" "${smoke_rc}"
-            _maybe_suspend "${smoke_rc}"
-            die xcodebuild-failed "smoke gate failed (exit ${smoke_rc}) — caller's tests not run"
-        fi
-    fi
-
-    # Caller's filter (or full suite).
+    # Caller's filter (or full UI suite if none).
     local rc=0
     if [[ ${#filters[@]} -eq 0 ]]; then
         _run_stage "" "full suite" || rc=$?
@@ -800,11 +800,28 @@ cmd_run() {
 # Collect macOS unified logs from the VM for the time window the
 # tests ran in, save to ${dest_dir}/logs/photox.log on host. Window
 # is bounded by ${RUN_START_TS} (UTC, set by cmd_run before the
-# first test stage) and "now". The predicate covers both PhotoX's
-# subsystem (`os.Logger(subsystem: "dev.frostman.PhotoX")` — used
-# by CardWatcherSupervisor and any other Logger call sites) and
-# any process whose name contains "PhotoX" (catches NSLog, print,
-# and binaries we haven't audited).
+# first test stage) and "now".
+#
+# Predicate is the OR of our two product subsystems:
+# - `dev.frostman.PhotoX` — main app (Log.app, PerfTracker,
+#   CardWatcherSupervisor, etc.).
+# - `dev.frostman.PhotoX.CardWatcher` — the helper binary at
+#   PhotoXCardWatcher/main.swift.
+# Both lines that `_verify_runtime_version` greps for live under
+# these subsystems (the main app's `PhotoX launching:
+# GitDescribe=` and the helper's `startup. version=`).
+#
+# We deliberately do NOT use `BEGINSWITH "dev.frostman.PhotoX"` —
+# that prefix also matches `dev.frostman.PhotoXUITests.xctrunner`
+# (the UI runner) and would re-introduce a few hundred KB of
+# runner noise we just got rid of. Likewise, we don't match on
+# `processImagePath`: the earlier `processImagePath CONTAINS
+# "PhotoX"` predicate produced 26 MB logs because
+# XCTAutomationSupport is injected into the host PhotoX process
+# and emits ~48k lines per full-suite run.
+# `--info` keeps boot/teardown markers; `--debug` is dropped on
+# the hot path since debug-level output for a passing test is
+# rarely actionable.
 _collect_logs() {
     local dest_dir=$1
     if [[ -z "${RUN_START_TS:-}" ]]; then
@@ -821,8 +838,8 @@ _collect_logs() {
     cat > "${script}" <<EOF
 #!/bin/bash
 log show --start '${RUN_START_TS}' \\
-    --predicate 'subsystem == "dev.frostman.PhotoX" OR processImagePath CONTAINS "PhotoX"' \\
-    --info --debug
+    --predicate 'subsystem == "dev.frostman.PhotoX" OR subsystem == "dev.frostman.PhotoX.CardWatcher"' \\
+    --info
 EOF
     chmod +x "${script}"
 
@@ -904,11 +921,22 @@ cmd_pull_xcresult() {
     # Extract screenshots, capture VM logs, verify runtime version,
     # print per-test summary table, and (if anything failed) expand
     # the failure details.
+    #
+    # `_collect_logs` runs `log show` over ssh inside the VM — the
+    # slowest post-test step. It only writes its output file; it
+    # doesn't read the xcresult, so we can overlap it with the
+    # local xcresult work (`_extract_screenshots`, summaries).
+    # `_verify_runtime_version` reads the captured log, so wait for
+    # the background job before that step. The brace-grouped
+    # subshell keeps the trailing `wait` scoped — no orphan PID
+    # if the user ^C's mid-run.
+    _collect_logs "${dest}" &
+    local logs_pid=$!
     _extract_screenshots "${local_xcresult}" "${dest}/screenshots"
-    _collect_logs "${dest}"
-    _verify_runtime_version "${dest}/logs/photox.log"
     _print_test_summary "${local_xcresult}"
     _print_failure_summary "${local_xcresult}" "${dest}/screenshots"
+    wait "${logs_pid}" 2>/dev/null || true
+    _verify_runtime_version "${dest}/logs/photox.log"
     log "xcresult ready: ${dest}/"
 }
 

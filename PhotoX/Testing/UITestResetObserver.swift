@@ -230,9 +230,9 @@ enum UITestResetObserver {
     /// `test_keyMonitor_drivesOnlyKeyWindow` so we don't have to
     /// rely on XCUITest's click-to-focus heuristics.
     private static func handleMakeWindowKey() {
-        defer { postSentinel(makeWindowKeyCompletedNotification) }
         guard let dir = payloadDir else {
             Log.app.warning("UITestResetObserver: makeWindowKey with no PHOTOX_UITEST_PAYLOAD_DIR")
+            postSentinel(makeWindowKeyCompletedNotification)
             return
         }
         let payload = dir.appendingPathComponent(makeWindowKeyPayloadBasename)
@@ -241,14 +241,37 @@ enum UITestResetObserver {
         let path = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !path.isEmpty else {
             Log.app.warning("UITestResetObserver: makeWindowKey with empty path")
+            postSentinel(makeWindowKeyCompletedNotification)
             return
         }
         guard let window = WindowRegistry.shared.window(forShootPath: path) else {
             Log.app.warning("UITestResetObserver: makeWindowKey — no window for path \(path, privacy: .public)")
+            postSentinel(makeWindowKeyCompletedNotification)
             return
         }
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
+
+        // makeKeyAndOrderFront returns immediately but AppKit
+        // completes the NSApp.keyWindow update on a subsequent
+        // main-runloop tick. The test that immediately follows
+        // (test_keyMonitor_drivesOnlyKeyWindow) needs the promotion
+        // to have landed before the arrow-key event fires —
+        // otherwise both windows' local monitors are armed at the
+        // moment of the press and both advance. Spin the runloop
+        // briefly so the sentinel only fires once NSApp.keyWindow
+        // really points at us. 2 s ceiling so a stuck promotion
+        // surfaces as a test failure rather than a hang.
+        let deadline = Date(timeIntervalSinceNow: 2.0)
+        while NSApp.keyWindow !== window && Date() < deadline {
+            RunLoop.main.run(
+                mode: .default,
+                before: Date(timeIntervalSinceNow: 0.02))
+        }
+        if NSApp.keyWindow !== window {
+            Log.app.warning("UITestResetObserver: makeWindowKey deadline — NSApp.keyWindow never matched target window for \(path, privacy: .public)")
+        }
+        postSentinel(makeWindowKeyCompletedNotification)
     }
 
     /// Test-only injection: appends a sentinel `FailedWrite` to

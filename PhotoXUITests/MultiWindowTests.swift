@@ -154,20 +154,26 @@ final class MultiWindowTests: PhotoXUITestCase {
         // Deterministically promote A to keyWindow via the
         // test-only Darwin hook. XCUITest's `click()` on a
         // non-key SwiftUI window doesn't reliably make it key —
-        // observed during this test's earlier iterations.
+        // observed during this test's earlier iterations. The
+        // hook drains the main runloop until `NSApp.keyWindow ===
+        // window` before posting its completion sentinel, so no
+        // extra settle is required here.
         try postMakeWindowKeyAndWait(path: fixtureA.path)
-        // makeKeyAndOrderFront returns immediately but macOS finishes
-        // promoting the window async — the AppKit "key window" state
-        // update lands on the next runloop tick or two. Without this
-        // settle the test passed in isolation but flaked in the full
-        // suite (the arrow event raced the promotion, both monitors
-        // fired, both windows advanced).
-        usleep(500_000)
 
         // Press right arrow once. Only A should advance, because
         // the app's local key monitor is gated on
         // `NSApp.keyWindow === viewerState.window`.
-        pressKey(.rightArrow)
+        //
+        // IMPORTANT: target windowA's element explicitly. Both
+        // `pressKey()` (which uses `app.windows.firstMatch.typeKey`)
+        // and `app.typeKey(...)` implicitly activate firstMatch
+        // before posting, and in multi-window scenarios firstMatch
+        // is windowB roughly 1 in 5 times (AX-tree order isn't keyed
+        // by which window is active), which silently overrides the
+        // Darwin promotion we just did. Naming the target window
+        // directly is the only invocation that doesn't retarget.
+        window(titleContains: fixtureA.lastPathComponent)
+            .typeKey(.rightArrow, modifierFlags: [])
 
         // Give SwiftUI a beat to settle, then read both indices.
         // Small fixed delay is fine — both pills update on the

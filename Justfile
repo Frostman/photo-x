@@ -189,22 +189,37 @@ test *only="":
 # a temp dir. 10-min hard cap (anything longer is almost certainly a
 # hang — e.g. a permission dialog popped or the app deadlocked).
 #
-# `PhotoXUITests/` prefix is auto-added when missing, so the shorthand
-# and fully-qualified forms are both fine.
-#   just e2e                                          → full suite
+# `PhotoXUITests/` prefix is auto-added when missing. Multiple
+# filters form a union, so you can run several classes/methods in
+# one invocation.
+#   just e2e                                          → full UI suite
 #   just e2e SmokeTests                               → one class (shorthand)
 #   just e2e PhotoXUITests/SmokeTests                 → one class (explicit)
 #   just e2e RatingTests/test_starRating_writesXMPSidecar → one method
+#   just e2e RatingTests UndoTests                    → two classes
 e2e *only="":
     #!/usr/bin/env bash
     set -euo pipefail
-    ARGS=(test -scheme PhotoX -configuration Debug -destination 'platform=macOS' -only-testing:PhotoXUITests)
+    ARGS=(test -scheme PhotoX -configuration Debug -destination 'platform=macOS')
+    # Collect user filters first; -only-testing is additive in
+    # xcodebuild, so emitting the bundle-wide PhotoXUITests filter
+    # alongside narrow ones (RatingTests, UndoTests, …) would force
+    # the union back up to the whole bundle. Apply the bundle-wide
+    # filter only when no user filters are passed — that keeps unit
+    # tests out of the e2e recipe (they live in PhotoXTests/ and run
+    # via `just test`).
+    FILTERS=()
     for filter in {{ only }}; do
         case "$filter" in
-            PhotoXUITests/*|PhotoXUITests) ARGS+=(-only-testing:"$filter") ;;
-            *)                             ARGS+=(-only-testing:"PhotoXUITests/$filter") ;;
+            PhotoXUITests/*|PhotoXUITests) FILTERS+=("$filter") ;;
+            *)                             FILTERS+=("PhotoXUITests/$filter") ;;
         esac
     done
+    if [[ ${#FILTERS[@]} -eq 0 ]]; then
+        ARGS+=(-only-testing:PhotoXUITests)
+    else
+        for f in "${FILTERS[@]}"; do ARGS+=(-only-testing:"$f"); done
+    fi
     # CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION=YES: see comment on
     # the `build` recipe — needed for vm-e2e where tar-stream sync
     # perturbs source mtimes.
@@ -412,21 +427,60 @@ fake-card:
 
 # Run the XCUITest e2e suite (or a slice of it) inside the Tart VM.
 # Idempotent: pulls image, creates/starts/provisions VM, syncs source,
-# runs `just e2e {{only}}`, streams output back. First invocation is
-# slow (~5–10 min cold pull + provision); subsequent runs are sync +
-# xcodebuild only.
+# runs xcodebuild test-without-building, streams output back. First
+# invocation is slow (~5–10 min cold pull + provision); subsequent
+# runs are sync + xcodebuild only.
 #
-#   just vm-e2e                                             → full suite
+#   just vm-e2e                                             → full UI suite
 #   just vm-e2e SmokeTests                                  → one class (shorthand)
 #   just vm-e2e PhotoXUITests/SmokeTests                    → one class (explicit)
 #   just vm-e2e RatingTests/test_starRating_writesXMPSidecar → one method
+#   just vm-e2e RatingTests UndoTests                       → two classes
 #
-# `PhotoXUITests/` prefix is auto-added when missing (in vm-remote.sh's
-# cmd_run normalization). Filter syntax matches `just e2e` exactly. On
-# failure, the latest .xcresult bundle is pulled to build/e2e-results/
-# <timestamp>/ for inspection; the most-recent 5 are kept.
+# `PhotoXUITests/` prefix is auto-added when missing. Multiple filters
+# form a union (xcodebuild's -only-testing is additive). Filter syntax
+# matches `just e2e` exactly. On failure, the latest .xcresult bundle
+# is pulled to build/e2e-results/<timestamp>/ for inspection; the
+# most-recent 5 are kept.
 vm-e2e *only="":
     ./scripts/vm-remote.sh run {{ only }}
+
+# Run the suite N times to build a flake matrix. Always proceeds
+# even when an iteration fails — the point is to measure failure
+# rates. After the loop, `scripts/vm-stability-report.sh` walks the
+# xcresults produced during the session and writes a markdown table
+# to build/vm/stability/report.md. p50/p95 are computed over passing
+# durations; rows whose every failure had duration 0 are flagged as
+# `⚠ runner-hang` (the synthetic xcresult row that means the test
+# runner couldn't attach to the host app).
+#
+#   just vm-e2e-stability             → 5 runs, full suite (default)
+#   just vm-e2e-stability 20          → 20 runs, full suite
+#   just vm-e2e-stability 10 RatingTests → 10 runs of one class
+vm-e2e-stability N="5" *only="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    N={{N}}
+    # Use local-time stamps to match the xcresult dirs that
+    # cmd_pull_xcresult writes (build/e2e-results/<local-ts>/),
+    # otherwise the report-script's lexicographic filter misses
+    # them all (UTC > recent local timestamps on this side of the
+    # world). Format matches cmd_pull_xcresult:833 exactly.
+    SESSION_TS=$(date +%Y%m%dT%H%M%S)
+    OUT=build/vm/stability
+    mkdir -p "${OUT}"
+    SESS_LOG="${OUT}/session-${SESSION_TS}.log"
+    printf '=== stability session %s · N=%d · filter=%s ===\n' \
+        "${SESSION_TS}" "${N}" "{{ only }}" | tee -a "${SESS_LOG}"
+    just vm-up 2>&1 | tee -a "${SESS_LOG}"
+    for i in $(seq 1 "${N}"); do
+        printf '\n=== run %d/%d started at %s ===\n' \
+            "${i}" "${N}" "$(date +%FT%T%z)" | tee -a "${SESS_LOG}"
+        # `|| true` so one failed iteration doesn't abort the matrix.
+        ./scripts/vm-remote.sh run {{ only }} 2>&1 | tee -a "${SESS_LOG}" || true
+    done
+    printf '\n=== report ===\n' | tee -a "${SESS_LOG}"
+    ./scripts/vm-stability-report.sh "${SESSION_TS}" | tee "${OUT}/report.md"
 
 # Bring the VM up without running anything: pull image (if needed),
 # clone (if needed), start, provision, sync. Useful at the start of a
