@@ -340,7 +340,7 @@ just vm-e2e-stability 10 RatingTests  # 10 iterations of one class
 # Design note on why vm-e2e strips the PhotoXTests target from
 # the patched xctestrun (it never injects in the VM and used to
 # burn 5 min per cold-suspend run waiting on the timeout):
-#   build/vm/runner-attach-diag.md
+#   docs/runner-attach-diag.md
 
 # Dump every EXIF / Sony / Composite tag PhotoX reads for one
 # photo, plus its .xmp sidecar if present. Handy when comparing

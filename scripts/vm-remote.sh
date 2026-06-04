@@ -491,7 +491,7 @@ _find_xctestrun() {
 # runs the test summary only lists PhotoXUITests entries), and the
 # attempt costs a ~5 min xctest bundle-load timeout on cold/long-
 # suspended VMs (10:05 wall → 4:51 once dropped). Unit tests still
-# run on the host via `just test`. See build/vm/runner-attach-diag.md.
+# run on the host via `just test`. See docs/runner-attach-diag.md.
 _patch_xctestrun_env() {
     local src=$1
     local patched
