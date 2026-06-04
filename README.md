@@ -311,9 +311,36 @@ just build
 # Unit tests (60 s hard timeout).
 just test
 
-# End-to-end XCUITest suite (clones sample/ into a temp dir
-# per test, sandboxes the indexer cache, ~3 min wall time).
+# End-to-end XCUITest suite on the host. Clones sample/ into a
+# temp dir per test, sandboxes the indexer cache, ~3 min wall.
+# Filters accept one or more shorthand or fully-qualified names
+# (multiple form a union — runs every matching test):
 just e2e
+just e2e SmokeTests
+just e2e RatingTests UndoTests
+just e2e RatingTests/test_reject_writesNegativeOneRating
+
+# Same suite, but inside a hermetic Tart VM (clean macOS image,
+# no host TCC prompts, deterministic between machines). First
+# invocation is slow (~5–10 min image pull + provision); warm
+# runs are ~4:30 for the full suite and ~35–40 s for a single
+# test. Same filter syntax as `just e2e`.
+just vm-e2e
+just vm-e2e SmokeTests
+just vm-e2e RatingTests UndoTests
+
+# Run the suite N times in the VM and produce a flake matrix
+# (build/vm/stability/report.md) with per-test pass/fail/p50/p95
+# and a ⚠ marker on test-runner-attach hangs. Each iteration's
+# xcresult is snapshotted into build/vm/stability/<session>/.
+just vm-e2e-stability             # default N=5, full suite
+just vm-e2e-stability 20          # 20 iterations
+just vm-e2e-stability 10 RatingTests  # 10 iterations of one class
+
+# Design note on why vm-e2e strips the PhotoXTests target from
+# the patched xctestrun (it never injects in the VM and used to
+# burn 5 min per cold-suspend run waiting on the timeout):
+#   build/vm/runner-attach-diag.md
 
 # Dump every EXIF / Sony / Composite tag PhotoX reads for one
 # photo, plus its .xmp sidecar if present. Handy when comparing

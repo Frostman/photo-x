@@ -461,14 +461,10 @@ vm-e2e-stability N="5" *only="":
     #!/usr/bin/env bash
     set -euo pipefail
     N={{N}}
-    # Use local-time stamps to match the xcresult dirs that
-    # cmd_pull_xcresult writes (build/e2e-results/<local-ts>/),
-    # otherwise the report-script's lexicographic filter misses
-    # them all (UTC > recent local timestamps on this side of the
-    # world). Format matches cmd_pull_xcresult:833 exactly.
     SESSION_TS=$(date +%Y%m%dT%H%M%S)
     OUT=build/vm/stability
-    mkdir -p "${OUT}"
+    SESSION_DIR="${OUT}/${SESSION_TS}"
+    mkdir -p "${SESSION_DIR}"
     SESS_LOG="${OUT}/session-${SESSION_TS}.log"
     printf '=== stability session %s · N=%d · filter=%s ===\n' \
         "${SESSION_TS}" "${N}" "{{ only }}" | tee -a "${SESS_LOG}"
@@ -476,11 +472,31 @@ vm-e2e-stability N="5" *only="":
     for i in $(seq 1 "${N}"); do
         printf '\n=== run %d/%d started at %s ===\n' \
             "${i}" "${N}" "$(date +%FT%T%z)" | tee -a "${SESS_LOG}"
+        # Capture the `latest` target BEFORE the iteration so the
+        # post-iteration snapshot can detect whether this iteration
+        # actually produced a new xcresult or just left the symlink
+        # pointing at the previous run (the VM-layer failure case —
+        # we'd otherwise double-count the previous result).
+        PRE_LATEST=$(readlink build/e2e-results/latest 2>/dev/null || true)
         # `|| true` so one failed iteration doesn't abort the matrix.
         ./scripts/vm-remote.sh run {{ only }} 2>&1 | tee -a "${SESS_LOG}" || true
+        POST_LATEST=$(readlink build/e2e-results/latest 2>/dev/null || true)
+        RUN_LABEL=$(printf 'run-%02d' "${i}")
+        if [[ -n "${POST_LATEST}" && "${POST_LATEST}" != "${PRE_LATEST}" ]]; then
+            # Snapshot this iteration's xcresult into the session dir
+            # so cmd_pull_xcresult's 5-most-recent retention cap can't
+            # prune earlier runs out from under the report. cp -RH
+            # follows the `latest` symlink.
+            cp -RH build/e2e-results/latest "${SESSION_DIR}/${RUN_LABEL}" 2>/dev/null \
+                || printf '  (snapshot failed for %s)\n' "${RUN_LABEL}" \
+                    | tee -a "${SESS_LOG}"
+        else
+            printf '  (no new xcresult for %s — VM-layer failure or pre-test abort)\n' \
+                "${RUN_LABEL}" | tee -a "${SESS_LOG}"
+        fi
     done
     printf '\n=== report ===\n' | tee -a "${SESS_LOG}"
-    ./scripts/vm-stability-report.sh "${SESSION_TS}" | tee "${OUT}/report.md"
+    ./scripts/vm-stability-report.sh "${SESSION_DIR}" | tee "${OUT}/report.md"
 
 # Bring the VM up without running anything: pull image (if needed),
 # clone (if needed), start, provision, sync. Useful at the start of a

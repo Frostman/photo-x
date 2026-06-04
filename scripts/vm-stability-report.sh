@@ -1,13 +1,21 @@
 #!/usr/bin/env bash
 # Build a flake matrix from a stability run.
 #
-# Walks build/e2e-results/<ts>/last.xcresult bundles whose timestamp
-# is ≥ the argument, aggregates per-test results across them, and
-# emits a markdown table on stdout. Designed for `just vm-e2e-stability`
-# to consume (it tees this into build/vm/stability/report.md).
+# Aggregates per-test results across one or more xcresult bundles
+# and emits a markdown table on stdout. Designed for
+# `just vm-e2e-stability` to consume (it tees this into
+# build/vm/stability/report.md).
 #
-# Arg: minimum xcresult timestamp in the same compact form xcresult
-# dirs use (YYYYMMDDTHHMMSS). Empty / missing arg means "all".
+# Two ways to specify which bundles to walk:
+# - **Session directory** (preferred). Pass a path to a dir laid
+#   out as `<session>/run-NN/<...>/last.xcresult` (matching what
+#   `just vm-e2e-stability` snapshots into each iteration). The
+#   script walks every `last.xcresult` it finds inside.
+# - **Timestamp cutoff** (legacy / ad-hoc). Pass a compact
+#   YYYYMMDDTHHMMSS string and the script walks bundles inside
+#   `build/e2e-results/` whose name sorts ≥ the cutoff.
+#
+# Empty / missing arg means "every bundle in build/e2e-results/".
 #
 # Output columns: test | runs | pass | fail | p50 | p95 | sample failure
 #
@@ -20,23 +28,33 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 RESULTS_ROOT="build/e2e-results"
-MIN_TS="${1:-}"
+ARG="${1:-}"
 
 # Collect candidate xcresult bundles.
 declare -a XCRESULTS=()
-for dir in "${RESULTS_ROOT}"/*/; do
-    base=$(basename "${dir%/}")
-    # Skip the symlink and anything older than MIN_TS.
-    [[ "${base}" == "latest" ]] && continue
-    [[ -n "${MIN_TS}" && "${base}" < "${MIN_TS}" ]] && continue
-    [[ -d "${dir}last.xcresult" ]] || continue
-    XCRESULTS+=("${dir}last.xcresult")
-done
+SOURCE_LABEL=""
+if [[ -d "${ARG}" ]]; then
+    # Session-dir mode. find handles arbitrary nesting (run-NN/<ts>/last.xcresult).
+    SOURCE_LABEL="${ARG}"
+    while IFS= read -r -d '' xc; do
+        XCRESULTS+=("${xc}")
+    done < <(find "${ARG}" -type d -name last.xcresult -print0 2>/dev/null | sort -z)
+else
+    # Legacy timestamp-cutoff mode against build/e2e-results/.
+    SOURCE_LABEL="${RESULTS_ROOT} (cutoff: ${ARG:-(any)})"
+    for dir in "${RESULTS_ROOT}"/*/; do
+        base=$(basename "${dir%/}")
+        [[ "${base}" == "latest" ]] && continue
+        [[ -n "${ARG}" && "${base}" < "${ARG}" ]] && continue
+        [[ -d "${dir}last.xcresult" ]] || continue
+        XCRESULTS+=("${dir}last.xcresult")
+    done
+fi
 
 if [[ ${#XCRESULTS[@]} -eq 0 ]]; then
     echo "# vm-e2e stability report"
     echo
-    echo "_no xcresult bundles found at or after \`${MIN_TS:-(any)}\`_"
+    echo "_no xcresult bundles found at \`${SOURCE_LABEL}\`_"
     exit 0
 fi
 
@@ -70,7 +88,7 @@ RUNS=${#XCRESULTS[@]}
 
 echo "# vm-e2e stability report"
 echo
-echo "Session start cutoff: \`${MIN_TS:-(any)}\` · runs walked: **${RUNS}**"
+echo "Source: \`${SOURCE_LABEL}\` · runs walked: **${RUNS}**"
 echo
 echo "| test | runs | pass | fail | p50 | p95 | first failure |"
 echo "|---|---:|---:|---:|---:|---:|---|"
