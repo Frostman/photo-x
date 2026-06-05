@@ -123,6 +123,17 @@ enum UITestResetObserver {
     static let setExportProjectNameCompletedNotification = "dev.frostman.PhotoX.uitest.setExportProjectNameCompleted"
     static let setExportProjectNamePayloadBasename = "setExportProjectName.name"
 
+    /// Read-only debug snapshot of `state.overlays`. The three
+    /// toggles (`A` AF-points, `C` clipping, `F` focus-peaking) are
+    /// rendered into the Metal canvas, not the AX tree, so XCUITest
+    /// can't observe them visually. On receipt the observer writes
+    /// `{"afPoints": true, "clipping": false, "focusPeaking": false}`
+    /// JSON to `<PHOTOX_UITEST_PAYLOAD_DIR>/readOverlays.json` and
+    /// fires the completion sentinel.
+    static let readOverlaysNotification = "dev.frostman.PhotoX.uitest.readOverlays"
+    static let readOverlaysCompletedNotification = "dev.frostman.PhotoX.uitest.readOverlaysCompleted"
+    static let readOverlaysPayloadBasename = "readOverlays.json"
+
     /// Holds the in-flight reset task so back-to-back postings
     /// don't pile up overlapping reloads. The test side waits for
     /// the completion sentinel before posting the next reset, so
@@ -240,7 +251,19 @@ enum UITestResetObserver {
             nil,
             .deliverImmediately
         )
-        Log.app.notice("UITestResetObserver: installed (reset + captureNow + openInNewWindow + injectFailedXMPWrite + makeWindowKey + addExportDestination + runExportSingleDestination + setExportProjectName)")
+        CFNotificationCenterAddObserver(
+            center,
+            UnsafeRawPointer(bitPattern: 0xCAFE1007),
+            { _, _, _, _, _ in
+                Task { @MainActor in
+                    UITestResetObserver.handleReadOverlays()
+                }
+            },
+            readOverlaysNotification as CFString,
+            nil,
+            .deliverImmediately
+        )
+        Log.app.notice("UITestResetObserver: installed (reset + captureNow + openInNewWindow + injectFailedXMPWrite + makeWindowKey + addExportDestination + runExportSingleDestination + setExportProjectName + readOverlays)")
     }
 
     private static func handleReset() {
@@ -505,6 +528,25 @@ enum UITestResetObserver {
         try? FileManager.default.removeItem(at: payload)
         let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         ExportSettings.shared.setProjectName(name)
+    }
+
+    private static func handleReadOverlays() {
+        defer { postSentinel(readOverlaysCompletedNotification) }
+        guard let viewerState else { return }
+        guard let dir = payloadDir else {
+            Log.app.warning("UITestResetObserver: readOverlays with no PHOTOX_UITEST_PAYLOAD_DIR")
+            return
+        }
+        let payload = dir.appendingPathComponent(readOverlaysPayloadBasename)
+        let snapshot: [String: Bool] = [
+            "afPoints":     viewerState.overlays.afPoints,
+            "clipping":     viewerState.overlays.clipping,
+            "focusPeaking": viewerState.overlays.focusPeaking,
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: snapshot,
+                                                  options: [.sortedKeys]) {
+            try? data.write(to: payload)
+        }
     }
 
     /// Production-side helper called by `ExportRunner.logBatchCompletion`

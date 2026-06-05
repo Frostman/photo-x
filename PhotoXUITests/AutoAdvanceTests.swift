@@ -13,32 +13,28 @@ import XCTest
 /// every test starts from default Settings (both toggles off).
 final class AutoAdvanceTests: PhotoXFreshLaunchUITestCase {
 
-    /// The app's scratch UserDefaults suite
-    /// (`dev.frostman.PhotoX.uitest`) persists across `app.terminate()`
-    /// because `PhotoXFreshLaunchUITestCase` passes
-    /// `-photoxUITestPreserveDefaults YES`, AND across `just vm-e2e`
-    /// invocations (the VM's scratch lives in the user library).
-    /// Wipe touched keys both pre- and post-test so each test starts
-    /// + ends with a clean slate — including a stale state from a
-    /// prior vm-e2e invocation that crashed before its own cleanup.
-    /// Also wipe `sidebarVisibleByDefault` because flipping it
-    /// (from a prior `SettingsPersistenceTests`) would hide the
-    /// sidebar at launch and break `test_autoAdvance_sidebar_…`.
+    /// Wipe the keys this class mutates both pre- AND post-test
+    /// so each test starts + ends with a clean slate, regardless of
+    /// what a prior test (or a prior `just vm-e2e` invocation) left
+    /// behind. `sidebarVisibleByDefault` is included because flipping
+    /// it (from a prior `SettingsPersistenceTests`) hides the sidebar
+    /// at launch and breaks the sidebar-star-click test. See
+    /// `PhotoXUITestCase.wipeScratchUserDefaults` for why scratch
+    /// state survives `app.terminate()` + vm-e2e boundaries.
+    private static let touchedKeys = [
+        "settings.autoAdvanceAfterRating",
+        "settings.autoAdvanceAfterSidebarRating",
+        "settings.sidebarVisibleByDefault",
+    ]
+
     override func setUpWithError() throws {
-        wipeScratchKeys()
+        Self.wipeScratchUserDefaults(keys: Self.touchedKeys)
         try super.setUpWithError()
     }
 
     override func tearDownWithError() throws {
-        wipeScratchKeys()
+        Self.wipeScratchUserDefaults(keys: Self.touchedKeys)
         try super.tearDownWithError()
-    }
-
-    private func wipeScratchKeys() {
-        let suite = UserDefaults(suiteName: "dev.frostman.PhotoX.uitest")
-        suite?.removeObject(forKey: "settings.autoAdvanceAfterRating")
-        suite?.removeObject(forKey: "settings.autoAdvanceAfterSidebarRating")
-        suite?.removeObject(forKey: "settings.sidebarVisibleByDefault")
     }
 
     private var settingsWindow: XCUIElement {
@@ -93,13 +89,25 @@ final class AutoAdvanceTests: PhotoXFreshLaunchUITestCase {
     /// when they invoke `state.setRating(...)`.
     func test_autoAdvance_sidebar_advancesAfterStarClick() throws {
         _ = waitForShootLoaded()
+        // Belt + suspenders: the setUp's UserDefaults wipe of
+        // `settings.sidebarVisibleByDefault` should leave the
+        // sidebar visible at launch, but cross-process scratch sync
+        // through cfprefsd has been observed to lag — verified
+        // empirically by full-suite runs where the sidebar landed
+        // hidden despite a clean pre-test wipe. The `B` key toggles
+        // `state.sidebarVisible` at runtime (independent of the
+        // persisted default), so this ensures the sidebar is
+        // reachable regardless of what the cached scratch holds.
+        if !app.scrollViews["sidebar.container"].exists {
+            pressKey("B")
+        }
         let initial = currentStem()
 
         openSettingsAndEnable("settings.toggle.autoAdvanceSidebar")
 
         let star = app.buttons["decisions.star.1"]
         XCTAssertTrue(star.waitForExistence(timeout: 3),
-                      "sidebar 1-star button missing even after `B` toggle — sidebar might not be reachable")
+                      "sidebar 1-star button missing")
         star.click()
 
         let pill = app.staticTexts["canvas.stemPill.stem"]

@@ -472,6 +472,19 @@ _stamp_bundles() {
 # the binary's About panel still reads like a real dev build.
 cmd_host_build() {
     cmd_ensure_provisioned
+    # Regenerate the .xcodeproj from project.yml so newly-added
+    # source files (especially in PhotoXUITests/) land in the
+    # build. xcodegen is idempotent + fast (~0.5 s) so re-running
+    # every build is cheap, and forgetting it has bitten us before
+    # — `just vm-e2e <NewTestClass>` ran 0 tests because the file
+    # wasn't in the test target yet.
+    if ! command -v xcodegen >/dev/null 2>&1; then
+        die xcodegen-missing "xcodegen not on PATH — install via \`brew install xcodegen\`"
+    fi
+    log "regenerating xcodeproj from project.yml…"
+    if ! xcodegen 2>&1 | tee -a "${VM_RUN_LOG}" | grep -E '^(⚙️|✅|❌|Error|Warning)' >&2; then
+        :  # grep returns 1 when no banner lines match; ignore
+    fi
     # Prime EXPECTED_GIT_DESCRIBE in the parent shell. Otherwise the
     # first call happens inside `$(git_describe_args)` (a subshell)
     # for the xcodebuild override, the cache lives only in that
@@ -1000,8 +1013,15 @@ cmd_pull_xcresult() {
     _collect_logs "${dest}" &
     local logs_pid=$!
     _extract_screenshots "${local_xcresult}" "${dest}/screenshots"
-    _print_test_summary "${local_xcresult}"
-    _print_failure_summary "${local_xcresult}" "${dest}/screenshots"
+    # Persist the test summary + failure list to a file alongside
+    # the xcresult so the next reader (Claude, a script, etc.) can
+    # `cat results/<run>/summary.txt` instead of re-running xcrun
+    # xcresulttool. tee keeps the existing stdout behaviour intact.
+    local summary_file="${dest}/summary.txt"
+    {
+        _print_test_summary "${local_xcresult}"
+        _print_failure_summary "${local_xcresult}" "${dest}/screenshots"
+    } | tee "${summary_file}"
     wait "${logs_pid}" 2>/dev/null || true
     _verify_runtime_version "${dest}/logs/photox.log"
     log "xcresult ready: ${dest}/"

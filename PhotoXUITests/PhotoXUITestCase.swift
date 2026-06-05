@@ -352,6 +352,26 @@ class PhotoXUITestCase: XCTestCase {
 
     // MARK: helpers used by tests
 
+    /// Wipe specific keys from the in-test scratch UserDefaults
+    /// suite (`dev.frostman.PhotoX.uitest`). Use in `setUp` +
+    /// `tearDown` of any test that mutates Settings so the change
+    /// doesn't leak into subsequent tests OR into the next
+    /// `just vm-e2e` invocation. The scratch suite persists at the
+    /// user-library level and across `app.terminate()` (because
+    /// `PhotoXFreshLaunchUITestCase` sets
+    /// `-photoxUITestPreserveDefaults YES`), so per-test cleanup
+    /// has to be explicit.
+    ///
+    /// Mirrors the suite name in `PhotoX/Util/AppDefaults.swift`'s
+    /// `testScratchSuite`. Pass key names that match
+    /// `SettingsKey.*` raw strings (see SettingsView.swift).
+    static func wipeScratchUserDefaults(keys: [String]) {
+        guard let suite = UserDefaults(suiteName: "dev.frostman.PhotoX.uitest") else {
+            return
+        }
+        for key in keys { suite.removeObject(forKey: key) }
+    }
+
     /// Stems of all entries in the fixture, sorted. Mirrors
     /// `EntryFinder.entries(in:)` exactly: a stem counts if it has
     /// any preview (HIF/HEIF/HEIC or JPG/JPEG) — ARW alone is

@@ -18,26 +18,24 @@ import XCTest
 /// 5. Relaunches; asserts the new value is honoured.
 final class SettingsPersistenceTests: PhotoXFreshLaunchUITestCase {
 
-    /// Both pre- AND post-test wipe of the scratch UserDefaults
-    /// keys this class touches. Pre-test guards against stale state
-    /// from a prior vm-e2e invocation that crashed before tearDown;
-    /// post-test cleans up for subsequent tests in the bundle. Key
-    /// names mirror `SettingsKey.{sidebarVisible,autoAdvance}` in
+    /// Wipe the keys this class mutates pre- AND post-test for
+    /// cross-test isolation. See `PhotoXUITestCase.wipeScratchUserDefaults`
+    /// for why scratch state needs explicit cleanup. Key names
+    /// mirror `SettingsKey.{sidebarVisible,autoAdvance}` in
     /// SettingsView.swift.
+    private static let touchedKeys = [
+        "settings.sidebarVisibleByDefault",
+        "settings.autoAdvanceAfterRating",
+    ]
+
     override func setUpWithError() throws {
-        wipeScratchKeys()
+        Self.wipeScratchUserDefaults(keys: Self.touchedKeys)
         try super.setUpWithError()
     }
 
     override func tearDownWithError() throws {
-        wipeScratchKeys()
+        Self.wipeScratchUserDefaults(keys: Self.touchedKeys)
         try super.tearDownWithError()
-    }
-
-    private func wipeScratchKeys() {
-        let suite = UserDefaults(suiteName: "dev.frostman.PhotoX.uitest")
-        suite?.removeObject(forKey: "settings.sidebarVisibleByDefault")
-        suite?.removeObject(forKey: "settings.autoAdvanceAfterRating")
     }
 
     private func openSettings() {
