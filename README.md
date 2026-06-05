@@ -308,8 +308,20 @@ just dev
 # Compile-only check (no relaunch).
 just build
 
-# Unit tests (60 s hard timeout).
+# Unit tests on the host (60 s hard timeout). Launches PhotoX.app
+# as the test host, which can interrupt an open dev session — use
+# `just vm-test` below if that's disruptive.
 just test
+
+# Same unit suite inside the hermetic Tart VM (own WindowServer,
+# never touches your host PhotoX). ~15 s warm for the full suite;
+# filter syntax matches `just test`. Results land in
+# build/test-results-vm/<run>/ with the same summary.txt format as
+# vm-e2e. First invocation shares the vm-e2e cold-pull cost; warm
+# runs are sync + build + run.
+just vm-test
+just vm-test TIFFEXIFParserTests
+just vm-test ExportRunnerStateTests OverwriteDecisionTests
 
 # End-to-end XCUITest suite on the host. Clones sample/ into a
 # temp dir per test, sandboxes the indexer cache, ~3 min wall.
@@ -443,7 +455,8 @@ surfaces a short attribution panel inline.
 
 Open an issue first to flag what you're planning — keeps both of us
 from wasting effort if the change isn't a fit. Code style follows
-the existing files; `just test` should be green before you push.
+the existing files; `just vm-test` (or `just test`) should be
+green before you push.
 
 ## License
 
