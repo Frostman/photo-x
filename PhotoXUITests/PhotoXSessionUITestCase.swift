@@ -80,6 +80,11 @@ class PhotoXSessionUITestCase: PhotoXUITestCase {
                 "-photoxDisableSparkle", "YES",
                 "-photoxUITestMode",     "YES",
             ]
+            // Payload directory the app reads cross-process payloads
+            // from (addExportDestination.json, makeWindowKey.path,
+            // etc.). The XCUITest runner is sandboxed and can only
+            // write to its own NSTemporaryDirectory.
+            app.launchEnvironment["PHOTOX_UITEST_PAYLOAD_DIR"] = NSTemporaryDirectory()
             app.launch()
             PhotoXUITestCase.promoteToKey(app)
             sharedApp = app
@@ -108,6 +113,9 @@ class PhotoXSessionUITestCase: PhotoXUITestCase {
             "-photoxDisableSparkle", "YES",
             "-photoxUITestMode",     "YES",
         ]
+        // See the matching comment in the relaunch branch above —
+        // payload directory the app reads cross-process payloads from.
+        app.launchEnvironment["PHOTOX_UITEST_PAYLOAD_DIR"] = NSTemporaryDirectory()
         app.launch()
         PhotoXUITestCase.promoteToKey(app)
         sharedApp = app

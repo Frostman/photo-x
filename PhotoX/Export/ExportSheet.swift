@@ -106,6 +106,7 @@ struct ExportPaneView: View {
             }
             .keyboardShortcut(.defaultAction)
             .disabled(!canRun || runner.isRunning)
+            .accessibilityIdentifier("export.runAll")
         }
         .padding(16)
         // Anchored on the whole footer (rather than the Export-all
@@ -145,6 +146,7 @@ struct ExportPaneView: View {
                 .textFieldStyle(.roundedBorder)
                 .focused(focus, equals: .exportProjectName)
                 .disabled(runner.isRunning)
+                .accessibilityIdentifier("export.projectName")
             Toggle(isOn: $settings.readOnceWriteMany) {
                 Label("Read each file once, write to all destinations",
                       systemImage: "arrow.triangle.branch")
@@ -172,6 +174,7 @@ struct ExportPaneView: View {
                 .controlSize(.small)
                 .disabled(runner.isRunning)
                 .helpAnchor(.exportDestinations)
+                .accessibilityIdentifier("export.addDestination")
             }
 
             if settings.destinations.isEmpty {

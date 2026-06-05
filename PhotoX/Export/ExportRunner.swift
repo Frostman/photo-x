@@ -546,6 +546,13 @@ final class ExportRunner {
         case .failed:    "failed"
         }
         Log.app.notice("Export \(word, privacy: .public): \(summaries.count, privacy: .public) destinations, \(copied, privacy: .public) copied, \(skipped, privacy: .public) skipped, \(deleted, privacy: .public) deleted, \(errors, privacy: .public) errors, \(formattedDuration(elapsed), privacy: .public)")
+
+        // Notify the XCUITest side that a batch has finished. The
+        // helper writes the outcome string to a payload file and
+        // posts the `exportCompleted` Darwin notification. It's a
+        // no-op outside `-photoxUITestMode YES` launches — see
+        // `UITestResetObserver.postExportCompleted`.
+        UITestResetObserver.postExportCompleted(outcome: word)
     }
 
     /// Inspect `perDestination` for the destinations in this batch and roll

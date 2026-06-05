@@ -80,6 +80,49 @@ enum UITestResetObserver {
     static let makeWindowKeyCompletedNotification = "dev.frostman.PhotoX.uitest.makeWindowKeyCompleted"
     static let makeWindowKeyPayloadBasename = "makeWindowKey.path"
 
+    /// Test hook for `ExportTests` to add an export destination
+    /// without driving the NSOpenPanel that the normal `Add
+    /// destination` button uses (XCUITest can't reach the open
+    /// panel reliably). Payload at
+    /// `<PHOTOX_UITEST_PAYLOAD_DIR>/addExportDestination.json` —
+    /// `{"path": "/tmp/...", "allowNonEmpty": false}` (the latter
+    /// is optional). Calls `ExportSettings.shared.add(path:)` then
+    /// applies the optional `allowNonEmpty` mutation via `update`.
+    static let addExportDestinationNotification = "dev.frostman.PhotoX.uitest.addExportDestination"
+    static let addExportDestinationCompletedNotification = "dev.frostman.PhotoX.uitest.addExportDestinationCompleted"
+    static let addExportDestinationPayloadBasename = "addExportDestination.json"
+
+    /// Test hook for `ExportTests/test_exportSingleDestination_partialBatch`
+    /// — runs `ExportRunner.startOne` for the destination at the
+    /// supplied 0-based index in `ExportSettings.shared.destinations`.
+    /// Payload at
+    /// `<PHOTOX_UITEST_PAYLOAD_DIR>/runExportSingleDestination.index`
+    /// is the index as a plain ASCII integer.
+    static let runExportSingleDestinationNotification = "dev.frostman.PhotoX.uitest.runExportSingleDestination"
+    static let runExportSingleDestinationCompletedNotification = "dev.frostman.PhotoX.uitest.runExportSingleDestinationCompleted"
+    static let runExportSingleDestinationPayloadBasename = "runExportSingleDestination.index"
+
+    /// One-way sentinel fired by `ExportRunner.logBatchCompletion`
+    /// when a batch (one-or-N destinations) finishes for any reason
+    /// — `done`, `cancelled`, `failed`. Outcome string is written
+    /// to `<PHOTOX_UITEST_PAYLOAD_DIR>/exportCompleted.outcome` so
+    /// the test side can read it after waiting for the sentinel.
+    /// No request notification — tests just listen.
+    static let exportCompletedNotification = "dev.frostman.PhotoX.uitest.exportCompleted"
+    static let exportCompletedPayloadBasename = "exportCompleted.outcome"
+
+    /// Test hook for setting the export project name. Bypasses the
+    /// `export.projectName` TextField — XCUITest's `typeText` on a
+    /// SwiftUI TextField with `@FocusState`-managed focus is brittle
+    /// (observed "Neither element nor any descendant has keyboard
+    /// focus" even after Tab + click); this hook calls
+    /// `ExportSettings.shared.setProjectName(_:)` directly. Payload
+    /// is the bare name on the first line of
+    /// `<PHOTOX_UITEST_PAYLOAD_DIR>/setExportProjectName.name`.
+    static let setExportProjectNameNotification = "dev.frostman.PhotoX.uitest.setExportProjectName"
+    static let setExportProjectNameCompletedNotification = "dev.frostman.PhotoX.uitest.setExportProjectNameCompleted"
+    static let setExportProjectNamePayloadBasename = "setExportProjectName.name"
+
     /// Holds the in-flight reset task so back-to-back postings
     /// don't pile up overlapping reloads. The test side waits for
     /// the completion sentinel before posting the next reset, so
@@ -161,7 +204,43 @@ enum UITestResetObserver {
             nil,
             .deliverImmediately
         )
-        Log.app.notice("UITestResetObserver: installed (reset + captureNow + openInNewWindow + injectFailedXMPWrite + makeWindowKey)")
+        CFNotificationCenterAddObserver(
+            center,
+            UnsafeRawPointer(bitPattern: 0xCAFE1004),
+            { _, _, _, _, _ in
+                Task { @MainActor in
+                    UITestResetObserver.handleAddExportDestination()
+                }
+            },
+            addExportDestinationNotification as CFString,
+            nil,
+            .deliverImmediately
+        )
+        CFNotificationCenterAddObserver(
+            center,
+            UnsafeRawPointer(bitPattern: 0xCAFE1005),
+            { _, _, _, _, _ in
+                Task { @MainActor in
+                    UITestResetObserver.handleRunExportSingleDestination()
+                }
+            },
+            runExportSingleDestinationNotification as CFString,
+            nil,
+            .deliverImmediately
+        )
+        CFNotificationCenterAddObserver(
+            center,
+            UnsafeRawPointer(bitPattern: 0xCAFE1006),
+            { _, _, _, _, _ in
+                Task { @MainActor in
+                    UITestResetObserver.handleSetExportProjectName()
+                }
+            },
+            setExportProjectNameNotification as CFString,
+            nil,
+            .deliverImmediately
+        )
+        Log.app.notice("UITestResetObserver: installed (reset + captureNow + openInNewWindow + injectFailedXMPWrite + makeWindowKey + addExportDestination + runExportSingleDestination + setExportProjectName)")
     }
 
     private static func handleReset() {
@@ -170,6 +249,17 @@ enum UITestResetObserver {
         // parallel. The new task subsumes the old.
         currentResetTask?.cancel()
         currentResetTask = Task { @MainActor in
+            // Wipe export config so every session-test starts with
+            // no destinations and an empty project name. Without
+            // this, a previous test's `add(path:)` leaks into the
+            // next test's setup. ExportSettings.shared persists to
+            // UserDefaults, but the JSON-encoded destinations array
+            // is in-memory and cleared by removing each one.
+            for dest in ExportSettings.shared.destinations {
+                ExportSettings.shared.remove(id: dest.id)
+            }
+            ExportSettings.shared.setProjectName("")
+
             await viewerState.resetForUITest()
             // Re-bootstrap from PHOTOX_SAMPLE_DIR. Deliberately NOT
             // the launch-path's savedStem-first lookup: the
@@ -308,6 +398,112 @@ enum UITestResetObserver {
         OpenSessionStore.capture(openPaths)
         AppDefaults.shared.synchronize()
         postSentinel(captureNowCompletedNotification)
+    }
+
+    /// Test-only: add a destination to `ExportSettings.shared`
+    /// without going through the `pickDestinationFolder()` NSOpenPanel
+    /// flow. Reads a JSON payload with a `path` and optional
+    /// `allowNonEmpty`. After `add(path:)` succeeds, applies the
+    /// optional flag via `update(id:_:)` so test 3 in ExportTests
+    /// can exercise the overwrite-allowed path.
+    private static func handleAddExportDestination() {
+        defer { postSentinel(addExportDestinationCompletedNotification) }
+        guard let dir = payloadDir else {
+            Log.app.warning("UITestResetObserver: addExportDestination with no PHOTOX_UITEST_PAYLOAD_DIR")
+            return
+        }
+        let payload = dir.appendingPathComponent(addExportDestinationPayloadBasename)
+        let data = (try? Data(contentsOf: payload)) ?? Data()
+        try? FileManager.default.removeItem(at: payload)
+        struct AddPayload: Decodable {
+            let path: String
+            var allowNonEmpty: Bool? = nil
+        }
+        guard let info = try? JSONDecoder().decode(AddPayload.self, from: data),
+              !info.path.isEmpty else {
+            Log.app.warning("UITestResetObserver: addExportDestination payload missing or invalid")
+            return
+        }
+        let result = ExportSettings.shared.add(path: info.path)
+        guard case .ok = result else {
+            Log.app.warning("UITestResetObserver: addExportDestination rejected (\(String(describing: result), privacy: .public))")
+            return
+        }
+        if info.allowNonEmpty == true,
+           let dest = ExportSettings.shared.destinations.last(where: { $0.path == info.path }) {
+            ExportSettings.shared.update(id: dest.id) { $0.allowNonEmpty = true }
+        }
+    }
+
+    /// Test-only: run `ExportRunner.startOne` for the destination at
+    /// the supplied 0-based index in `ExportSettings.shared.destinations`.
+    /// Avoids needing per-row AX identifiers on `ExportDestinationRow`'s
+    /// inline Run button — the test just specifies which destination to
+    /// fire. Completion is signalled separately by `exportCompleted`.
+    private static func handleRunExportSingleDestination() {
+        defer { postSentinel(runExportSingleDestinationCompletedNotification) }
+        guard let dir = payloadDir else {
+            Log.app.warning("UITestResetObserver: runExportSingleDestination with no PHOTOX_UITEST_PAYLOAD_DIR")
+            return
+        }
+        let payload = dir.appendingPathComponent(runExportSingleDestinationPayloadBasename)
+        let raw = (try? String(contentsOf: payload, encoding: .utf8)) ?? ""
+        try? FileManager.default.removeItem(at: payload)
+        guard let index = Int(raw.trimmingCharacters(in: .whitespacesAndNewlines)),
+              index >= 0,
+              index < ExportSettings.shared.destinations.count else {
+            Log.app.warning("UITestResetObserver: runExportSingleDestination — invalid index '\(raw, privacy: .public)'")
+            return
+        }
+        guard let viewerState, let shoot = viewerState.shoot else {
+            Log.app.warning("UITestResetObserver: runExportSingleDestination — no viewerState / shoot")
+            return
+        }
+        let dest = ExportSettings.shared.destinations[index]
+        let projectName = ExportSettings.shared.projectName
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        viewerState.exportRunner.startOne(
+            dest.id,
+            entries: shoot.entries,
+            entryXMPs: viewerState.entryXMPs,
+            projectName: projectName,
+            destination: dest)
+    }
+
+    /// Test-only: set `ExportSettings.shared.projectName` from a
+    /// plain-text payload file. Bypasses the `export.projectName`
+    /// TextField — `XCUIElement.typeText` on a SwiftUI TextField
+    /// has been observed to fail with "Neither element nor any
+    /// descendant has keyboard focus" even after Tab/click, in
+    /// our `@FocusState`-driven Export pane. Tests can drive this
+    /// directly without exercising the field's focus semantics.
+    private static func handleSetExportProjectName() {
+        defer { postSentinel(setExportProjectNameCompletedNotification) }
+        guard let dir = payloadDir else {
+            Log.app.warning("UITestResetObserver: setExportProjectName with no PHOTOX_UITEST_PAYLOAD_DIR")
+            return
+        }
+        let payload = dir.appendingPathComponent(setExportProjectNamePayloadBasename)
+        let raw = (try? String(contentsOf: payload, encoding: .utf8)) ?? ""
+        try? FileManager.default.removeItem(at: payload)
+        let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        ExportSettings.shared.setProjectName(name)
+    }
+
+    /// Production-side helper called by `ExportRunner.logBatchCompletion`
+    /// at the canonical batch-completion point. Writes the outcome
+    /// string to `<payloadDir>/exportCompleted.outcome` and posts the
+    /// `exportCompleted` Darwin notification so the test side can
+    /// deterministically wait + then read the outcome. Gated on
+    /// `LaunchFlags.uiTestMode` so production launches don't write to
+    /// a payload directory that doesn't exist for them.
+    static func postExportCompleted(outcome: String) {
+        guard LaunchFlags.uiTestMode else { return }
+        if let dir = payloadDir {
+            let payload = dir.appendingPathComponent(exportCompletedPayloadBasename)
+            try? outcome.data(using: .utf8)?.write(to: payload)
+        }
+        postSentinel(exportCompletedNotification)
     }
 
     private static func postCompletionSentinel() {
