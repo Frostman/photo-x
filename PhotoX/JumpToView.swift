@@ -30,6 +30,15 @@ struct JumpToView: View {
             card
         }
         .transition(.opacity)
+        // `.contain` keeps every child (TextField, suggestion
+        // buttons, Cancel/Jump buttons) independently accessible to
+        // VoiceOver and XCUITest while still creating a single AX
+        // element for the ZStack — without this,
+        // `.accessibilityIdentifier` propagates to every leaf and
+        // both `app.otherElements["jumpTo.overlay"]` and
+        // `app.textFields["jumpTo.query"]` find the wrong element
+        // (or none). See the matching note in HelpAnnotationOverlay.
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("jumpTo.overlay")
     }
 

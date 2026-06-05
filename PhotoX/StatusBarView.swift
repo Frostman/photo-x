@@ -141,6 +141,12 @@ struct StatusBarView: View {
               ? "Collapse bursts in filmstrip (\(effective ? "on" : "off")) — the burst you're inside stays expanded"
               : "Collapse bursts disabled while indexing — burst membership is still being detected")
         .accessibilityIdentifier("statusbar.collapseBursts")
+        // Surfaces the effective on/off state to XCUITest — the SF
+        // Symbol AX label ("Album") is static across the
+        // `rectangle.stack` / `rectangle.stack.fill` swap, so the
+        // visual toggle isn't observable via `.label`. Tests assert
+        // on `value` directly.
+        .accessibilityValue(effective ? "1" : "0")
         .opacity(availableForSort ? 1 : 0)
         .disabled(!available)
         .allowsHitTesting(available)
@@ -154,6 +160,7 @@ struct StatusBarView: View {
                 } label: {
                     Label(label(for: mode), systemImage: mode.systemImage)
                 }
+                .accessibilityIdentifier("statusbar.sortMenu.item.\(mode.rawValue)")
             }
         } label: {
             Label(state.sortMode.displayName, systemImage: state.sortMode.systemImage)
@@ -163,6 +170,7 @@ struct StatusBarView: View {
         .menuStyle(.borderlessButton)
         .fixedSize()
         .help("Sort order for the filmstrip and ←/→ navigation")
+        .accessibilityIdentifier("statusbar.sortMenu")
     }
 
     private func label(for mode: SortMode) -> String {
@@ -197,6 +205,7 @@ struct StatusBarView: View {
                 Text("\(shown) shown")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("statusbar.shownCount")
             }
         }
     }
@@ -225,6 +234,7 @@ struct StatusBarView: View {
                         starLabel(for: stars)
                     }
                     .help("Show / hide \(stars)-star frames")
+                    .accessibilityIdentifier("statusbar.filter.star.\(stars)")
                 }
             }
 
@@ -232,11 +242,13 @@ struct StatusBarView: View {
                 Image(systemName: "xmark.circle.fill")
             }
             .help("Show / hide rejected frames")
+            .accessibilityIdentifier("statusbar.filter.showRejected")
 
             Toggle(isOn: $state.showUnrated) {
                 Image(systemName: "circle")
             }
             .help("Show / hide unrated frames")
+            .accessibilityIdentifier("statusbar.filter.showUnrated")
         }
         .toggleStyle(.button)
         .controlSize(.small)
