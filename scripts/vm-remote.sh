@@ -78,10 +78,17 @@ HOST_PRODUCTS="${HOST_DD}/Build/Products"
 HOST_PRODUCTS_DEBUG="${HOST_PRODUCTS}/Debug"
 # Last-run summary read by vm-status.
 LAST_RUN_FILE="${VM_STATE_DIR}/last-run.json"
-# xcresult landing zone on host (after pull).
+# xcresult landing zone on host (after pull). Parallel dirs by mode so
+# `just vm-e2e` and `just vm-test` don't trample each other's "latest"
+# symlink or compete for the 5-run retention cap.
 E2E_RESULTS_DIR=build/e2e-results
+TEST_RESULTS_DIR=build/test-results-vm
+# Active results dir for the current dispatcher run. _run_mode resets
+# this per call; defaulting to E2E_RESULTS_DIR keeps ad-hoc subcommands
+# like `pull-xcresult` pointing at the same place they always did.
+RESULTS_DIR="${E2E_RESULTS_DIR}"
 
-mkdir -p "${VM_STATE_DIR}" "${E2E_RESULTS_DIR}"
+mkdir -p "${VM_STATE_DIR}" "${E2E_RESULTS_DIR}" "${TEST_RESULTS_DIR}"
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -515,28 +522,36 @@ _find_xctestrun() {
     ls -1t "${HOST_PRODUCTS}"/*.xctestrun 2>/dev/null | head -1
 }
 
-# Patch the xctestrun's per-target EnvironmentVariables so the
-# prebuilt test bundle's `PhotoXUITestCase.repoSampleURL` resolves
-# to the VM's local fixture path instead of the host's compile-time
-# #file walk, and drop the PhotoXTests (unit) target entirely.
+# Patch the xctestrun for in-VM execution. $1 is the mode (ui | unit),
+# $2 is the source xctestrun. Operation:
+#   - inject PHOTOX_FIXTURE_SOURCE_DIR on the kept target so
+#     PhotoXUITestCase.repoSampleURL (and any sample-touching unit
+#     test) resolves to the VM's local fixture path instead of the
+#     host's compile-time #file walk
+#   - drop the OTHER test target so xcodebuild test-without-building
+#     doesn't attempt to load it
 #
-# Why strip PhotoXTests: it's an IsAppHostedTestBundle with RunOrder=0,
-# so xcodebuild test-without-building tries to load it before
-# PhotoXUITests. The bundle never successfully injects in the VM
-# (xcresults show PhotoXTests.xctest is never opened — even on warm
-# runs the test summary only lists PhotoXUITests entries), and the
-# attempt costs a ~5 min xctest bundle-load timeout on cold/long-
-# suspended VMs (10:05 wall → 4:51 once dropped). Unit tests still
-# run on the host via `just test`. See docs/runner-attach-diag.md.
+# Why strip the other target: each target adds an xctest bundle-load
+# phase even when no tests from it are selected. For UI mode, dropping
+# PhotoXTests cut wall time from 10:05 to 4:51 (it's an
+# IsAppHostedTestBundle with RunOrder=0 that never successfully
+# injects in the VM — see docs/runner-attach-diag.md). For unit mode
+# the symmetric drop of PhotoXUITests avoids spinning up the UI runner
+# app for tests that don't need it.
 _patch_xctestrun_env() {
-    local src=$1
+    local mode=$1 src=$2
     local patched
     patched="$(dirname "${src}")/.patched-$(basename "${src}")"
     cp "${src}" "${patched}"
 
     # The xctestrun's top-level keys are the BlueprintNames of the
-    # test targets. We only need PhotoXUITests to see the env var.
-    local target=PhotoXUITests
+    # test targets. Pick the kept/dropped pair from the mode.
+    local target dropped
+    case "${mode}" in
+        ui)   target=PhotoXUITests; dropped=PhotoXTests ;;
+        unit) target=PhotoXTests;   dropped=PhotoXUITests ;;
+        *)    die usage "_patch_xctestrun_env: unknown mode '${mode}'" ;;
+    esac
     local env_path="${target}.EnvironmentVariables.PHOTOX_FIXTURE_SOURCE_DIR"
     local value="${VM_FIXTURES}/sample"
 
@@ -551,20 +566,19 @@ _patch_xctestrun_env() {
         plutil -insert "${env_path}" -string "${value}" "${patched}"
     fi
 
-    # Drop PhotoXTests so xcodebuild won't attempt the doomed unit-
-    # test phase. Safe to no-op if the key was already removed
-    # upstream (some Xcode versions may emit a UI-only xctestrun).
-    plutil -remove PhotoXTests "${patched}" 2>/dev/null || true
+    # Drop the other target so xcodebuild won't attempt its bundle-
+    # load phase. Safe to no-op if the key was already removed
+    # upstream (some Xcode versions may emit a single-target xctestrun).
+    plutil -remove "${dropped}" "${patched}" 2>/dev/null || true
 
     # --record: switch the test target's automatic-attachment
     # lifetimes from `deleteOnSuccess` (the host build default) to
     # `keepAlways`. The xctestrun already has
     # `PreferredScreenCaptureFormat = screenRecording`, so this
     # makes the automatic screen recording persist for every test,
-    # not just failures. Useful for "show me what each test does"
-    # review passes; not on by default because the recordings
-    # balloon xcresult size by ~hundreds of MB on a full suite.
-    if [[ "${PHOTOX_E2E_RECORD_ALL:-0}" == "1" ]]; then
+    # not just failures. UI-mode only: unit tests don't drive the
+    # screen, so a recording would just be a static window capture.
+    if [[ "${mode}" == "ui" && "${PHOTOX_E2E_RECORD_ALL:-0}" == "1" ]]; then
         plutil -replace "${target}.UserAttachmentLifetime" \
             -string "keepAlways" "${patched}" 2>/dev/null || true
         plutil -replace "${target}.SystemAttachmentLifetime" \
@@ -574,11 +588,14 @@ _patch_xctestrun_env() {
     printf '%s' "${patched}"
 }
 
-# Ship artifacts (PhotoX.app, PhotoXUITests-Runner.app, .xctestrun)
-# from the host's isolated DerivedData into the VM's
-# ~admin/test-artifacts/. ssh-rsync delta-transfers, so a small
-# code change typically sends just the relinked binary segments.
+# Ship artifacts (PhotoX.app, PhotoXUITests-Runner.app, embedded
+# PhotoXTests.xctest inside PhotoX.app, .xctestrun) from the host's
+# isolated DerivedData into the VM's ~admin/test-artifacts/. $1 is
+# the mode (ui | unit) — picks which target the patched xctestrun
+# keeps. ssh-rsync delta-transfers, so a small code change typically
+# sends just the relinked binary segments.
 _ship_artifacts() {
+    local mode=$1
     local xctestrun_src
     xctestrun_src=$(_find_xctestrun)
     [[ -n "${xctestrun_src}" ]] || die ship-failed "no .xctestrun produced — host build did not emit a test plan"
@@ -601,14 +618,14 @@ _ship_artifacts() {
         vm_rsync_to "${app}/" "${VM_ARTIFACTS}/Debug/$(basename "${app}")/" \
             || die ship-failed "rsync of $(basename "${app}") failed"
     done
-    # Patch the xctestrun to inject PHOTOX_FIXTURE_SOURCE_DIR, then
-    # ship the patched copy under the original filename (so
-    # test-without-building uses the patched one).
+    # Patch the xctestrun to keep the requested target and inject
+    # PHOTOX_FIXTURE_SOURCE_DIR, then ship the patched copy under the
+    # original filename (so test-without-building uses the patched one).
     local xctestrun_patched
-    xctestrun_patched=$(_patch_xctestrun_env "${xctestrun_src}")
+    xctestrun_patched=$(_patch_xctestrun_env "${mode}" "${xctestrun_src}")
     vm_rsync_to "${xctestrun_patched}" "${VM_ARTIFACTS}/$(basename "${xctestrun_src}")" \
         || die ship-failed "rsync of $(basename "${xctestrun_src}") failed"
-    log "shipped: ${#apps[@]} bundle(s) + $(basename "${xctestrun_src}")"
+    log "shipped: ${#apps[@]} bundle(s) + $(basename "${xctestrun_src}") (mode=${mode})"
 }
 
 # Sample fixture sync. Only re-rsync when host sample/ mtime changes
@@ -702,9 +719,13 @@ _dismiss_system_banners() {
 }
 
 # Headline ship: build on host, ship artifacts, ship fixtures, verify.
+# $1 is the mode (ui | unit). Defaults to ui so the `ship` subcommand
+# stays backward-compatible for ad-hoc shipping (which is rare — almost
+# all callers go through cmd_run / cmd_run_unit).
 cmd_ship() {
+    local mode=${1:-ui}
     cmd_host_build
-    _ship_artifacts
+    _ship_artifacts "${mode}"
     _ship_fixtures
     _verify_shipment
 }
@@ -716,11 +737,39 @@ _test_env_args() {
     printf 'PHOTOX_FIXTURE_SOURCE_DIR=%s/sample' "${VM_FIXTURES}"
 }
 
-# In-VM test runner. Runs the caller's filter(s), or the full UI
-# suite if none. PhotoXTests (unit) is stripped from the patched
-# xctestrun upstream (see `_patch_xctestrun_env`), so even the
-# unfiltered case only touches PhotoXUITests.
-cmd_run() {
+# In-VM test runner. $1 is the mode (ui | unit); $@ tail is the
+# caller's filters / flags. Runs the caller's filter(s), or the full
+# suite of the requested target if none. The other target is stripped
+# from the patched xctestrun upstream (see `_patch_xctestrun_env`), so
+# even the unfiltered case only touches the requested target.
+#
+# ACTIVE_MODE is exported so post-run helpers (_write_last_run, the
+# `die` message at the end) can mention the mode without piping it
+# through every signature.
+_run_mode() {
+    local mode=$1; shift
+    local target results_dir test_timeout filter_label
+    case "${mode}" in
+        ui)
+            target=PhotoXUITests
+            results_dir="${E2E_RESULTS_DIR}"
+            test_timeout=600
+            filter_label="UI"
+            ;;
+        unit)
+            target=PhotoXTests
+            results_dir="${TEST_RESULTS_DIR}"
+            # Host's `just test` caps at 60 s; same cap here keeps the
+            # contract identical — a hang in a unit test is almost
+            # certainly a stuck subprocess, not legitimate work.
+            test_timeout=60
+            filter_label="unit"
+            ;;
+        *) die usage "_run_mode: unknown mode '${mode}'" ;;
+    esac
+    RESULTS_DIR="${results_dir}"
+    ACTIVE_MODE="${mode}"
+
     # Track upstream image on every run. The cached state-file +
     # digest-cmp path in `cmd_ensure_vm` recreates the VM when
     # upstream changes; when it hasn't, this is a cheap manifest
@@ -738,10 +787,11 @@ cmd_run() {
     # --record bumps the xctestrun's attachment lifetime so the
     # automatic screen recording (xctestrun already sets
     # `PreferredScreenCaptureFormat = screenRecording`) is retained
-    # for EVERY test, not just failures; --cold-boot stops the VM
-    # before this run so cmd_ensure_running cold-boots instead of
-    # resuming from suspend (diagnostic escape hatch when the
-    # suspended state is suspect — the happy path is suspend-resume).
+    # for EVERY test, not just failures (ui mode only — unit tests
+    # don't drive the screen); --cold-boot stops the VM before this
+    # run so cmd_ensure_running cold-boots instead of resuming from
+    # suspend (diagnostic escape hatch when the suspended state is
+    # suspect — the happy path is suspend-resume).
     local rerun_failed=0
     local keep_on_fail=0
     local cold_boot=0
@@ -758,7 +808,7 @@ cmd_run() {
     if [[ "${PHOTOX_E2E_KEEP_ON_FAIL:-0}" == "1" ]]; then
         keep_on_fail=1
     fi
-    if [[ "${PHOTOX_E2E_RECORD_ALL:-0}" == "1" ]]; then
+    if [[ "${mode}" == "ui" && "${PHOTOX_E2E_RECORD_ALL:-0}" == "1" ]]; then
         log "--record: xctestrun lifetimes will be patched to keepAlways (recordings retained for every test)"
     fi
     if (( cold_boot )); then
@@ -781,7 +831,7 @@ cmd_run() {
     if (( rerun_failed )); then
         local rerun_args
         rerun_args=$(_collect_failing_test_ids \
-            "${E2E_RESULTS_DIR}/latest/last.xcresult")
+            "${results_dir}/latest/last.xcresult")
         if [[ -z "${rerun_args}" ]]; then
             log "no recent failures recorded — nothing to re-run"
             return 0
@@ -794,22 +844,21 @@ cmd_run() {
         set -- ${rerun_args} "$@"
     fi
 
-    cmd_ship
+    cmd_ship "${mode}"
     _dismiss_system_banners
 
     # Normalize each filter to a fully-qualified xcodebuild path so
     # callers can use shorthand. xcodebuild rejects a bare class name
     # without the bundle prefix ("SmokeTests" → "isn't a member of
-    # the specified test plan or scheme"), and typing PhotoXUITests/
-    # on every invocation is tedium for no benefit. The PhotoXUITests
-    # bundle is the only XCUITest target in the scheme, so the prefix
-    # is unambiguous. Multiple filters form a union — e.g.
-    # `just vm-e2e RatingTests UndoTests` runs both classes.
+    # the specified test plan or scheme"), and typing the bundle name
+    # on every invocation is tedium for no benefit. Only one target
+    # per mode is in the patched xctestrun (the other was dropped),
+    # so the prefix is unambiguous. Multiple filters form a union.
     local filters=()
     for arg in "$@"; do
         case "${arg}" in
-            PhotoXUITests/*|PhotoXUITests) filters+=("${arg}") ;;
-            *)                             filters+=("PhotoXUITests/${arg}") ;;
+            "${target}"/*|"${target}") filters+=("${arg}") ;;
+            *)                         filters+=("${target}/${arg}") ;;
         esac
     done
 
@@ -831,16 +880,16 @@ cmd_run() {
     # of -only-testing args (space-separated), $2 is a label.
     _run_stage() {
         local only_list=$1 label=$2
-        log "in-VM: ${label}"
+        log "in-VM (${filter_label}): ${label}"
         local only_args=""
         for arg in ${only_list}; do
             only_args+=" -only-testing:${arg}"
         done
-        # 600 s test cap matches host's `just e2e`. test-without-building
-        # requires -destination (it builds nothing but still needs a
-        # platform target). -resultBundlePath pins the xcresult so
-        # cmd_pull_xcresult finds it deterministically.
-        local cmd="cd '${VM_ARTIFACTS}' && rm -rf '${xcresult_remote}' && $(_test_env_args) timeout 600 xcodebuild test-without-building -xctestrun '${xctestrun_remote}' -destination 'platform=macOS' -resultBundlePath '${xcresult_remote}'${only_args}"
+        # test-without-building requires -destination (it builds
+        # nothing but still needs a platform target). -resultBundlePath
+        # pins the xcresult so cmd_pull_xcresult finds it
+        # deterministically.
+        local cmd="cd '${VM_ARTIFACTS}' && rm -rf '${xcresult_remote}' && $(_test_env_args) timeout ${test_timeout} xcodebuild test-without-building -xctestrun '${xctestrun_remote}' -destination 'platform=macOS' -resultBundlePath '${xcresult_remote}'${only_args}"
         # Filter xcodebuild's noisy bookend lines:
         #   - bare "Testing started" (printed twice — once before the
         #     first Test Suite header and once *after* TEST EXECUTE
@@ -858,7 +907,7 @@ cmd_run() {
             | sed -E '/^Testing started$/d; /\[MT\] IDETestOperationsObserverDebug:/d'
     }
 
-    # Caller's filter (or full UI suite if none).
+    # Caller's filter (or full suite if none).
     local rc=0
     if [[ ${#filters[@]} -eq 0 ]]; then
         _run_stage "" "full suite" || rc=$?
@@ -870,12 +919,18 @@ cmd_run() {
     if (( rc != 0 )); then
         _write_last_run "failed" "${rc}"
         _maybe_suspend "${rc}"
-        die xcodebuild-failed "test run failed (exit ${rc}) — see ${E2E_RESULTS_DIR}/latest/"
+        die xcodebuild-failed "test run failed (exit ${rc}) — see ${results_dir}/latest/"
     fi
     _write_last_run "passed" 0
     _maybe_suspend 0
     log "run completed cleanly"
 }
+
+# Thin dispatchers — the Justfile recipes route here via the script's
+# main dispatch block. cmd_run keeps its historical name for vm-e2e
+# (and any external callers); cmd_run_unit is the new vm-test entry.
+cmd_run()      { _run_mode ui   "$@"; }
+cmd_run_unit() { _run_mode unit "$@"; }
 
 # Collect macOS unified logs from the VM for the time window the
 # tests ran in, save to ${dest_dir}/logs/photox.log on host. Window
@@ -944,15 +999,16 @@ EOF
 }
 
 # Pull the .xcresult bundle out of the VM and into the host's
-# build/e2e-results/<ts>/ tree. Extracts screenshots, prints a
-# failure summary if any tests failed, and captures unified logs
-# from the test run's time window. $1 is the in-VM path to the
-# xcresult; if omitted, scans DerivedData for the newest bundle
-# (fallback for ad-hoc invocations).
+# ${RESULTS_DIR}/<ts>/ tree (e2e-results or test-results-vm depending
+# on which mode _run_mode set). Extracts screenshots, prints a failure
+# summary if any tests failed, and captures unified logs from the test
+# run's time window. $1 is the in-VM path to the xcresult; if omitted,
+# scans DerivedData for the newest bundle (fallback for ad-hoc
+# invocations).
 cmd_pull_xcresult() {
     local stamp
     stamp=$(date +%Y%m%dT%H%M%S)
-    local dest="${E2E_RESULTS_DIR}/${stamp}"
+    local dest="${RESULTS_DIR}/${stamp}"
     mkdir -p "${dest}"
 
     local xcresult_path
@@ -980,11 +1036,11 @@ cmd_pull_xcresult() {
     fi
 
     # Update the "latest" symlink for easy access.
-    ln -sfn "${stamp}" "${E2E_RESULTS_DIR}/latest"
+    ln -sfn "${stamp}" "${RESULTS_DIR}/latest"
 
     # Cap retention at the most-recent 5.
     # shellcheck disable=SC2012
-    ls -1dt "${E2E_RESULTS_DIR}"/*/ 2>/dev/null \
+    ls -1dt "${RESULTS_DIR}"/*/ 2>/dev/null \
         | grep -v '/latest/' \
         | tail -n +6 \
         | xargs -I{} rm -rf "{}" 2>/dev/null || true
@@ -1215,7 +1271,10 @@ _print_failure_summary() {
         "\n      screenshots: \($shots)/\(.name | gsub("/"; "_"))/"' 2>/dev/null || true
 }
 
-# Write a tiny JSON file the vm-status recipe reads.
+# Write a tiny JSON file the vm-status recipe reads. `mode` and
+# `last_xcresult` reflect whichever run most recently completed —
+# vm-status shows them so the user can tell at a glance which mode
+# they last ran (and where to look for the result bundle).
 _write_last_run() {
     local outcome=$1 exit_code=$2
     cat > "${LAST_RUN_FILE}" <<EOF
@@ -1223,8 +1282,9 @@ _write_last_run() {
   "outcome": "${outcome}",
   "exit_code": ${exit_code},
   "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "mode": "${ACTIVE_MODE:-ui}",
   "host_dd": "${HOST_DD}",
-  "last_xcresult": "${E2E_RESULTS_DIR}/latest"
+  "last_xcresult": "${RESULTS_DIR}/latest"
 }
 EOF
 }
@@ -1390,7 +1450,7 @@ cmd_status() {
 
     if [[ -f "${LAST_RUN_FILE}" ]]; then
         echo "Last run:"
-        jq -r '"  outcome: \(.outcome)\n  exit:    \(.exit_code)\n  when:    \(.timestamp)\n  result:  \(.last_xcresult)"' \
+        jq -r '"  outcome: \(.outcome)\n  mode:    \(.mode // "ui")\n  exit:    \(.exit_code)\n  when:    \(.timestamp)\n  result:  \(.last_xcresult)"' \
             "${LAST_RUN_FILE}" 2>/dev/null || cat "${LAST_RUN_FILE}"
     else
         echo "Last run: (no record yet)"
@@ -1407,6 +1467,7 @@ case "${1:-}" in
     host-build)         shift; cmd_host_build "$@" ;;
     ship)               shift; cmd_ship "$@" ;;
     run)                shift; cmd_run "$@" ;;
+    run-unit)           shift; cmd_run_unit "$@" ;;
     pull-xcresult)      shift; cmd_pull_xcresult "$@" ;;
     suspend)            shift; cmd_suspend "$@" ;;
     down)               shift; cmd_down "$@" ;;
@@ -1420,10 +1481,10 @@ case "${1:-}" in
         cmd_ensure_vm
         cmd_ensure_running
         cmd_ensure_provisioned
-        log "VM ready — \`just vm-e2e\` will ship artifacts and run"
+        log "VM ready — \`just vm-e2e\` / \`just vm-test\` will ship artifacts and run"
         ;;
     "")
-        die usage "no subcommand given (try one of: up, run, ship, down, shell, screen, clean, pull, status)"
+        die usage "no subcommand given (try one of: up, run, run-unit, ship, down, shell, screen, clean, pull, status)"
         ;;
     *)
         die usage "unknown subcommand: $1"

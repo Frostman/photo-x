@@ -459,6 +459,35 @@ fake-card:
 vm-e2e *only="":
     ./scripts/vm-remote.sh run {{ only }}
 
+# Run the unit suite inside the Tart VM. Same lifecycle as vm-e2e —
+# the VM has its own WindowServer, so unlike `just test` it doesn't
+# launch PhotoX.app on the host as the test host and interrupt your
+# dev session. Warm boot resumes ~7 s, then sync + build + test.
+#
+#   just vm-test                                              → full unit suite
+#   just vm-test TIFFEXIFParserTests                          → one class (shorthand)
+#   just vm-test PhotoXTests/TIFFEXIFParserTests              → one class (explicit)
+#   just vm-test PhotoXTests/TIFFEXIFParserTests/test_X       → one method
+#   just vm-test ExportRunnerStateTests OverwriteDecisionTests → two classes
+#
+# `PhotoXTests/` prefix is auto-added when missing. Multiple filters
+# form a union (xcodebuild's -only-testing is additive). Filter syntax
+# matches `just test` exactly. On failure, the latest .xcresult bundle
+# is pulled to build/test-results-vm/<timestamp>/ for inspection; the
+# most-recent 5 are kept.
+#
+# Flags (passed through to scripts/vm-remote.sh):
+#   --rerun-failed   replay only the tests that failed last run
+#   --keep-on-fail   leave the VM running on failure for vm-shell
+#   --cold-boot      stop the VM first so this run cold-boots instead of
+#                    resuming from suspend. Diagnostic escape hatch when
+#                    you suspect the suspended state is corrupt.
+#
+# --record is intentionally omitted — unit tests don't drive the
+# screen, so a recording is just a static capture.
+vm-test *only="":
+    ./scripts/vm-remote.sh run-unit {{ only }}
+
 # Run the suite N times to build a flake matrix. Always proceeds
 # even when an iteration fails — the point is to measure failure
 # rates. After the loop, `scripts/vm-stability-report.sh` walks the
