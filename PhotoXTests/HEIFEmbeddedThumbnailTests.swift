@@ -192,8 +192,7 @@ final class HEIFEmbeddedThumbnailTests: XCTestCase {
     // MARK: - integration against the real sample HIF
 
     func test_extract_realSonyHIF_returnsValidJPEGThumbnail() throws {
-        let url = URL(fileURLWithPath:
-            "/Users/frostman/workspace/personal/photo-x/sample/DSC04207.HIF")
+        let url = RepoSample.url.appendingPathComponent("DSC04207.HIF")
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw XCTSkip("sample HIF not available; skipping integration test")
         }
@@ -223,8 +222,7 @@ final class HEIFEmbeddedThumbnailTests: XCTestCase {
     }
 
     func test_extract_realSonyHIF_returnsValidExifBytes() throws {
-        let url = URL(fileURLWithPath:
-            "/Users/frostman/workspace/personal/photo-x/sample/DSC04207.HIF")
+        let url = RepoSample.url.appendingPathComponent("DSC04207.HIF")
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw XCTSkip("sample HIF not available")
         }
@@ -246,8 +244,7 @@ final class HEIFEmbeddedThumbnailTests: XCTestCase {
     }
 
     func test_extract_realSonyPortraitHIF_returnsCorrectOrientation() throws {
-        let url = URL(fileURLWithPath:
-            "/Users/frostman/workspace/personal/photo-x/sample/DSC08866.HIF")
+        let url = RepoSample.url.appendingPathComponent("DSC08866.HIF")
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw XCTSkip("portrait sample HIF not available; skipping")
         }

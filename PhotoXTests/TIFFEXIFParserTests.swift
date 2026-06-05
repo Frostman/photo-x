@@ -184,8 +184,7 @@ final class TIFFEXIFParserTests: XCTestCase {
     // MARK: - integration: real Sony HIF via HEIFEmbeddedThumbnail
 
     func test_extractedExifBytes_parseToValidExifSummary() throws {
-        let url = URL(fileURLWithPath:
-            "/Users/frostman/workspace/personal/photo-x/sample/DSC04207.HIF")
+        let url = RepoSample.url.appendingPathComponent("DSC04207.HIF")
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw XCTSkip("sample HIF not available")
         }
@@ -232,8 +231,7 @@ final class TIFFEXIFParserTests: XCTestCase {
     /// canonical oracle (exiftool). Skipped if the sample folder or
     /// exiftool isn't available in the dev environment.
     func test_parityWithExiftool_acrossSampleHIFs() throws {
-        let sampleDir = URL(fileURLWithPath:
-            "/Users/frostman/workspace/personal/photo-x/sample")
+        let sampleDir = RepoSample.url
         let hifs: [URL]
         do {
             hifs = try FileManager.default

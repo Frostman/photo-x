@@ -16,8 +16,7 @@ import XCTest
 /// the dev environment (CI without bundled fixtures, etc.).
 final class BasicExifPipelineParityTests: XCTestCase {
 
-    private static let sampleDir = URL(fileURLWithPath:
-        "/Users/frostman/workspace/personal/photo-x/sample")
+    private static let sampleDir = RepoSample.url
 
     /// Extensions that the basic-EXIF pipeline actually processes.
     /// Matches the dispatch in `ThumbnailLoader.extractEmbedded`.
