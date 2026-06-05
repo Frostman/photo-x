@@ -247,7 +247,9 @@ struct SettingsView: View {
 
             Section("Layout") {
                 Toggle("Show sidebar by default", isOn: $sidebarVisible)
+                    .accessibilityIdentifier("settings.toggle.sidebarVisible")
                 Toggle("Show filmstrip by default", isOn: $filmstripVisible)
+                    .accessibilityIdentifier("settings.toggle.filmstripVisible")
             }
 
             Section("Overlays") {
@@ -258,13 +260,16 @@ struct SettingsView: View {
             Section("Image variant") {
                 Toggle("Auto-swap HIF/JPG → RAW when zoomed past 100 %", isOn: $autoSwapToRAW)
                     .help("One-way swap on the upward crossing only. Manual Z still toggles either direction.")
+                    .accessibilityIdentifier("settings.toggle.autoSwapToRAW")
             }
 
             Section("Workflow") {
                 Toggle("Auto-advance after keyboard rating", isOn: $autoAdvance)
                     .help("When you use a keyboard shortcut (1–5, R) to set a star or reject, jump to the next pair. Clearing a rating does not advance. Colour labels (Shift+1–5) never auto-advance.")
+                    .accessibilityIdentifier("settings.toggle.autoAdvance")
                 Toggle("Auto-advance after sidebar rating", isOn: $autoAdvanceSidebar)
                     .help("When you click a star or the Reject button in the sidebar Decisions panel, jump to the next pair. Colour-label clicks never auto-advance.")
+                    .accessibilityIdentifier("settings.toggle.autoAdvanceSidebar")
                 Picker("G rejects in burst", selection: $gRejectScopeRaw) {
                     ForEach(GRejectScope.allCases) { scope in
                         Text(scope.displayName).tag(scope.rawValue)
