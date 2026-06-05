@@ -323,8 +323,11 @@ just e2e RatingTests/test_reject_writesNegativeOneRating
 # Same suite, but inside a hermetic Tart VM (clean macOS image,
 # no host TCC prompts, deterministic between machines). First
 # invocation is slow (~5–10 min image pull + provision); warm
-# runs are ~4:30 for the full suite and ~35–40 s for a single
-# test. Same filter syntax as `just e2e`.
+# runs are ~7 min for the full bundle and ~30–60 s for a single
+# class. Same filter syntax as `just e2e`. After each run, the
+# per-test PASS/FAIL table + failure block is also persisted to
+# `build/e2e-results/<run>/summary.txt` next to the xcresult, so
+# results are greppable without re-shelling `xcrun xcresulttool`.
 just vm-e2e
 just vm-e2e SmokeTests
 just vm-e2e RatingTests UndoTests
@@ -333,6 +336,7 @@ just vm-e2e RatingTests UndoTests
 # (build/vm/stability/report.md) with per-test pass/fail/p50/p95
 # and a ⚠ marker on test-runner-attach hangs. Each iteration's
 # xcresult is snapshotted into build/vm/stability/<session>/.
+# Current baseline: 20 × 53 tests = 1060/1060, zero flakes (2026-06-05).
 just vm-e2e-stability             # default N=5, full suite
 just vm-e2e-stability 20          # 20 iterations
 just vm-e2e-stability 10 RatingTests  # 10 iterations of one class
