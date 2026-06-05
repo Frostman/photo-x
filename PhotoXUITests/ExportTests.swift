@@ -201,15 +201,17 @@ final class ExportTests: PhotoXSessionUITestCase {
         let projectField = app.textFields["export.projectName"]
         XCTAssertTrue(projectField.waitForExistence(timeout: 5),
                       "Export tab didn't open within 5 s")
-        // First entry into the Export tab in a fresh-defaults
-        // session auto-shows the annotated help overlay (see
-        // ContentView.swift:55-66 — `helpLastSeen[<mode>] <
-        // helpVersion` triggers it). That overlay sits above the
-        // pane and intercepts the first click. Press Escape to
-        // dismiss it before the test interacts with the UI.
-        // Idempotent: handleKeyDown's Escape path only fires when
-        // `showHelp || showAnnotationHelp` is true; otherwise it's
-        // a no-op.
+        // Defensive — the auto-show is suppressed under
+        // `-photoxUITestMode YES` (see the gate in
+        // ContentView.swift's `onChange(of: mode)`), so on a
+        // session-only test bundle this is a no-op:
+        // handleKeyDown's Escape path only fires when
+        // `showHelp || showAnnotationHelp` is true. Kept because
+        // removing it caused ExportTests to regress (⌘3 stopped
+        // switching tabs) in a way I haven't fully root-caused
+        // yet — restoring the Escape brought the suite back to
+        // green. TODO(2026-06-04): investigate the actual cause
+        // and remove this if it really is redundant.
         pressKey(.escape)
     }
 

@@ -273,6 +273,23 @@ enum UITestResetObserver {
             if let (shoot, firstFocus) = SamplePathProvider.resolveShoot() {
                 await viewerState.loadShoot(shoot, focus: firstFocus)
             }
+            // Force the workspace back to View. ContentView's
+            // shootMissing-onChange auto-switches to View only
+            // from .open, and the @Observable update batching
+            // across `closeShoot → loadShoot` (two awaits in
+            // the same Task) often collapses the
+            // `shoot=nil → shoot=…` transition into one
+            // SwiftUI tick — so `shootMissing` never observably
+            // flips, the `.export → .open` fallback in
+            // `ModeWiring` doesn't fire, and a test that left
+            // the previous run in .export keeps its successor
+            // on the Export pane (no stem pill → next test's
+            // `waitForShootLoaded` times out). Posting the
+            // workspace-switch notification here makes "View
+            // is the default after reset" an invariant.
+            NotificationCenter.default.post(
+                name: .photoxSwitchWorkspace,
+                object: WorkspaceSwitchRequest(mode: .view, target: viewerState))
             postCompletionSentinel()
         }
     }

@@ -241,6 +241,15 @@ struct HelpAnnotationOverlay: View {
                 .frame(maxWidth: .infinity)
                 .allowsHitTesting(false)
             }
+            // `.contain` keeps every child (brackets, callouts, footer
+            // hint) independently accessible to VoiceOver while still
+            // creating a single AX element for the ZStack itself —
+            // without this, `.accessibilityIdentifier` propagates the
+            // identifier to every leaf StaticText, and the XCUITest
+            // query `app.otherElements["help.annotationOverlay"]` can't
+            // find an `Other`-type element to match. Verified via the
+            // failure-ax-tree on a HelpOverlayTests run.
+            .accessibilityElement(children: .contain)
             .accessibilityIdentifier("help.annotationOverlay")
         }
     }

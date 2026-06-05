@@ -127,13 +127,40 @@ struct PhotoXApp: App {
                 // added.
                 ForEach(workspaceTabs) { tab in
                     Button("Switch to \(tab.title)") {
-                        guard let target = focusedState else { return }
-                        NotificationCenter.default.post(
-                            name: .photoxSwitchWorkspace,
-                            object: WorkspaceSwitchRequest(mode: tab.mode, target: target))
+                        if let target = focusedState {
+                            NotificationCenter.default.post(
+                                name: .photoxSwitchWorkspace,
+                                object: WorkspaceSwitchRequest(mode: tab.mode, target: target))
+                        } else if LaunchFlags.uiTestMode,
+                                  let target = WindowRegistry.shared.frontmostViewerState {
+                            // E2E fallback. Under XCUITest, the first
+                            // few ⌘1/2/3 presses fire BEFORE SwiftUI
+                            // has finished publishing
+                            // `.focusedValue(\.viewerState, …)` up the
+                            // focused-scene chain — `focusedState` is
+                            // nil, the menu item would otherwise be
+                            // `.disabled` (see modifier below), and
+                            // the shortcut silently no-ops. Verified
+                            // via a per-fire log line: the first
+                            // ExportTests `pressKey("3", .command)`
+                            // showed `focused=false`; subsequent ones
+                            // had `focused=true`. The user-visible
+                            // path is unaffected because production
+                            // never trips this branch
+                            // (`LaunchFlags.uiTestMode` is false). The
+                            // launch-time annotated-help auto-show
+                            // used to incidentally cover for this by
+                            // forcing an extra view-tree update at
+                            // exactly the right moment — see the
+                            // `project-help-overlay-consumes-first-
+                            // click` memory.
+                            NotificationCenter.default.post(
+                                name: .photoxSwitchWorkspace,
+                                object: WorkspaceSwitchRequest(mode: tab.mode, target: target))
+                        }
                     }
                     .keyboardShortcut(tab.shortcut, modifiers: .command)
-                    .disabled(focusedState == nil)
+                    .disabled(focusedState == nil && !LaunchFlags.uiTestMode)
                 }
             }
             // Help → "Keyboard Shortcuts" — pulls up the flat
