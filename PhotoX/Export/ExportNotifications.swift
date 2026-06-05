@@ -31,7 +31,7 @@ enum ExportNotifications {
     /// noisy and didn't add value once the toolbar pill / sheet show
     /// progress per row.
     static func postAllComplete(
-        summaries: [(ExportSettings.Destination, ExportRunner.Summary)]
+        summaries: [(ExportPreset.Destination, ExportRunner.Summary)]
     ) {
         // Don't bother notifying if the user is already looking at PhotoX —
         // the pill and sheet show completion just as well, and a banner on

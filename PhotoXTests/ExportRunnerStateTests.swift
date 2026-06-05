@@ -37,13 +37,13 @@ final class ExportRunnerStateTests: XCTestCase {
     }
 
     private func dest(at url: URL,
-                      overwrite: ExportSettings.OverwritePolicy = .skipUnchangedElseOverwrite
-    ) -> ExportSettings.Destination {
+                      overwrite: ExportPreset.OverwritePolicy = .skipUnchangedElseOverwrite
+    ) -> ExportPreset.Destination {
         // `allowNonEmpty: true` so this suite's re-run tests
         // (test_summary_recordsCopiedAndSkippedOnRerun, …)
         // aren't blocked by the new "Destination not empty"
         // gate.
-        ExportSettings.Destination(path: url.path,
+        ExportPreset.Destination(path: url.path,
                                    overwrite: overwrite,
                                    allowNonEmpty: true,
                                    removeOrphans: false)

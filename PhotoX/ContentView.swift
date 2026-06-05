@@ -190,14 +190,11 @@ struct ContentView: View {
                     }
                 }
             case .export:
-                // The pane's state lives in `ExportSettings.shared`
-                // (process-wide default-store) + `state.exportRunner`
-                // (per-window), so a re-mount loses nothing. Focus is
-                // driven
-                // by the shared `$focus` binding via
-                // ModeWiring's mode-change handler, not via
-                // an `onAppear` trick — that's why the .id(mode)
-                // remount workaround is no longer needed.
+                // The pane's state lives on `state.exportConfig`
+                // (per-shoot) + `state.exportRunner` (per-window),
+                // so a re-mount loses nothing. Focus is driven by
+                // the shared `$focus` binding via ModeWiring's
+                // mode-change handler.
                 ExportPaneView(state: state, focus: $focus)
             }
 

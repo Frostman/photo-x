@@ -20,7 +20,7 @@ final class ExportNotificationsTests: XCTestCase {
         private let lock = NSLock()
         private(set) var allComplete: [[(UUID, ExportRunner.Summary)]] = []
 
-        func recordAll(_ summaries: [(ExportSettings.Destination, ExportRunner.Summary)]) {
+        func recordAll(_ summaries: [(ExportPreset.Destination, ExportRunner.Summary)]) {
             lock.lock(); defer { lock.unlock() }
             allComplete.append(summaries.map { ($0.0.id, $0.1) })
         }
@@ -62,7 +62,7 @@ final class ExportNotificationsTests: XCTestCase {
 
     func test_startOne_postsOneSummaryNotification() async throws {
         let p = try makePair()
-        let d = ExportSettings.Destination(path: dest1.path)
+        let d = ExportPreset.Destination(path: dest1.path)
         let recorder = Recorder()
         runner.startOne(d.id, entries: [p], entryXMPs: [:],
                         projectName: "P", destination: d,
@@ -77,9 +77,9 @@ final class ExportNotificationsTests: XCTestCase {
 
     func test_startAll_emitsExactlyOneSummary_regardlessOfDestCount() async throws {
         let p = try makePair()
-        let d1 = ExportSettings.Destination(path: dest1.path)
-        let d2 = ExportSettings.Destination(path: dest2.path)
-        let d3 = ExportSettings.Destination(path: dest3.path)
+        let d1 = ExportPreset.Destination(path: dest1.path)
+        let d2 = ExportPreset.Destination(path: dest2.path)
+        let d3 = ExportPreset.Destination(path: dest3.path)
         let recorder = Recorder()
         runner.startAll(entries: [p], entryXMPs: [:],
                         projectName: "P", destinations: [d1, d2, d3],
@@ -94,8 +94,8 @@ final class ExportNotificationsTests: XCTestCase {
 
     func test_startAll_sharedRead_sameOneSummaryContract() async throws {
         let p = try makePair()
-        let d1 = ExportSettings.Destination(path: dest1.path)
-        let d2 = ExportSettings.Destination(path: dest2.path)
+        let d1 = ExportPreset.Destination(path: dest1.path)
+        let d2 = ExportPreset.Destination(path: dest2.path)
         let recorder = Recorder()
         runner.startAll(entries: [p], entryXMPs: [:],
                         projectName: "P", destinations: [d1, d2],

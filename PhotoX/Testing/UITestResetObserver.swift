@@ -134,6 +134,113 @@ enum UITestResetObserver {
     static let readOverlaysCompletedNotification = "dev.frostman.PhotoX.uitest.readOverlaysCompleted"
     static let readOverlaysPayloadBasename = "readOverlays.json"
 
+    // MARK: - Export v2 preset/config hooks
+    //
+    // Mutations target the primary `viewerState.exportConfig` and
+    // `ExportPresetsLibrary.shared` (the per-window snapshot read-out
+    // is the only hook that resolves a different ViewerState by
+    // shoot path; see `readExportConfigSnapshotForWindow`).
+    //
+    // Naming convention mirrors the existing export hooks: a request
+    // notification, a `<Request>Completed` sentinel, and (where
+    // payload is needed) a basename for the file under
+    // `PHOTOX_UITEST_PAYLOAD_DIR`.
+
+    /// Apply a preset to the current shoot. Payload: the preset name.
+    static let applyExportPresetNotification = "dev.frostman.PhotoX.uitest.applyExportPreset"
+    static let applyExportPresetCompletedNotification = "dev.frostman.PhotoX.uitest.applyExportPresetCompleted"
+    static let applyExportPresetPayloadBasename = "applyExportPreset.name"
+
+    /// Drop preset linkage (destinations remain).
+    static let clearExportPresetNotification = "dev.frostman.PhotoX.uitest.clearExportPreset"
+    static let clearExportPresetCompletedNotification = "dev.frostman.PhotoX.uitest.clearExportPresetCompleted"
+
+    /// Save the working config as a new preset. Payload: name.
+    static let saveExportPresetAsNotification = "dev.frostman.PhotoX.uitest.saveExportPresetAs"
+    static let saveExportPresetAsCompletedNotification = "dev.frostman.PhotoX.uitest.saveExportPresetAsCompleted"
+    static let saveExportPresetAsPayloadBasename = "saveExportPresetAs.name"
+
+    /// Push working state back to the source preset (no-op if none).
+    static let saveBackToExportPresetNotification = "dev.frostman.PhotoX.uitest.saveBackToExportPreset"
+    static let saveBackToExportPresetCompletedNotification = "dev.frostman.PhotoX.uitest.saveBackToExportPresetCompleted"
+
+    /// Save working state by overwriting a different preset. Payload: target name.
+    static let saveOverwritingExportPresetNotification = "dev.frostman.PhotoX.uitest.saveOverwritingExportPreset"
+    static let saveOverwritingExportPresetCompletedNotification = "dev.frostman.PhotoX.uitest.saveOverwritingExportPresetCompleted"
+    static let saveOverwritingExportPresetPayloadBasename = "saveOverwritingExportPreset.name"
+
+    /// Reload current shoot's config from its source preset.
+    static let reloadFromExportPresetNotification = "dev.frostman.PhotoX.uitest.reloadFromExportPreset"
+    static let reloadFromExportPresetCompletedNotification = "dev.frostman.PhotoX.uitest.reloadFromExportPresetCompleted"
+
+    /// Remove a preset from the global library. Payload: name.
+    static let removeExportPresetNotification = "dev.frostman.PhotoX.uitest.removeExportPreset"
+    static let removeExportPresetCompletedNotification = "dev.frostman.PhotoX.uitest.removeExportPresetCompleted"
+    static let removeExportPresetPayloadBasename = "removeExportPreset.name"
+
+    /// Set the library's default-RoWM value (seeded into new presets). Payload: "true"|"false".
+    static let setExportDefaultRoWMNotification = "dev.frostman.PhotoX.uitest.setExportDefaultRoWM"
+    static let setExportDefaultRoWMCompletedNotification = "dev.frostman.PhotoX.uitest.setExportDefaultRoWMCompleted"
+    static let setExportDefaultRoWMPayloadBasename = "setExportDefaultRoWM.bool"
+
+    /// Set the working config's per-shoot RoWM toggle. Payload: "true"|"false".
+    static let setExportRoWMNotification = "dev.frostman.PhotoX.uitest.setExportRoWM"
+    static let setExportRoWMCompletedNotification = "dev.frostman.PhotoX.uitest.setExportRoWMCompleted"
+    static let setExportRoWMPayloadBasename = "setExportRoWM.bool"
+
+    /// Clear the project-name user override and re-derive from EXIF.
+    static let resetExportProjectNameNotification = "dev.frostman.PhotoX.uitest.resetExportProjectName"
+    static let resetExportProjectNameCompletedNotification = "dev.frostman.PhotoX.uitest.resetExportProjectNameCompleted"
+
+    /// Remove a destination by 0-based index from the current shoot.
+    static let removeExportDestinationNotification = "dev.frostman.PhotoX.uitest.removeExportDestination"
+    static let removeExportDestinationCompletedNotification = "dev.frostman.PhotoX.uitest.removeExportDestinationCompleted"
+    static let removeExportDestinationPayloadBasename = "removeExportDestination.index"
+
+    /// Mutate one field on a destination. Payload JSON:
+    /// `{"index": 0, "field": "includeXMP", "value": false}`.
+    /// Supported fields: includeARW, includeHIF, includeXMP,
+    /// showRejected, showUnrated, allowNonEmpty, removeOrphans
+    /// (Bool values); overwrite (one of the policy raw values).
+    static let updateExportDestinationNotification = "dev.frostman.PhotoX.uitest.updateExportDestination"
+    static let updateExportDestinationCompletedNotification = "dev.frostman.PhotoX.uitest.updateExportDestinationCompleted"
+    static let updateExportDestinationPayloadBasename = "updateExportDestination.json"
+
+    /// Drop every preset in the global library (test isolation).
+    static let clearExportPresetsLibraryNotification = "dev.frostman.PhotoX.uitest.clearExportPresetsLibrary"
+    static let clearExportPresetsLibraryCompletedNotification = "dev.frostman.PhotoX.uitest.clearExportPresetsLibraryCompleted"
+
+    /// Read-only JSON dump of the current shoot's `ShootExportConfig`.
+    /// Writes to `<PHOTOX_UITEST_PAYLOAD_DIR>/exportConfigSnapshot.json`.
+    static let readExportConfigSnapshotNotification = "dev.frostman.PhotoX.uitest.readExportConfigSnapshot"
+    static let readExportConfigSnapshotCompletedNotification = "dev.frostman.PhotoX.uitest.readExportConfigSnapshotCompleted"
+    static let readExportConfigSnapshotPayloadBasename = "exportConfigSnapshot.json"
+
+    /// Read-only JSON dump of the `ShootExportConfig` for the
+    /// window holding a given shoot path (resolves via
+    /// `WindowRegistry.window(forShootPath:)`). Request payload:
+    /// the shoot path (text); response written to the same JSON
+    /// file as `readExportConfigSnapshot`.
+    static let readExportConfigSnapshotForWindowNotification = "dev.frostman.PhotoX.uitest.readExportConfigSnapshotForWindow"
+    static let readExportConfigSnapshotForWindowCompletedNotification = "dev.frostman.PhotoX.uitest.readExportConfigSnapshotForWindowCompleted"
+    static let readExportConfigSnapshotForWindowRequestBasename = "readExportConfigSnapshotForWindow.path"
+
+    /// Read-only JSON dump of the `ExportPresetsLibrary` state
+    /// (default-RoWM + every preset).
+    static let readExportPresetsLibraryNotification = "dev.frostman.PhotoX.uitest.readExportPresetsLibrary"
+    static let readExportPresetsLibraryCompletedNotification = "dev.frostman.PhotoX.uitest.readExportPresetsLibraryCompleted"
+    static let readExportPresetsLibraryPayloadBasename = "exportPresetsLibrary.json"
+
+    /// Simulate an "external" edit to a preset: bumps the preset's
+    /// `updatedAt` directly via `library.update(_:)` without
+    /// touching the current shoot's `sourcePresetSnapshotAt`. The
+    /// only way a shoot can normally observe a stale snapshot is
+    /// if some OTHER process / window updated the preset — this
+    /// hook simulates that single-window. Payload: the preset name.
+    static let bumpExportPresetNotification = "dev.frostman.PhotoX.uitest.bumpExportPreset"
+    static let bumpExportPresetCompletedNotification = "dev.frostman.PhotoX.uitest.bumpExportPresetCompleted"
+    static let bumpExportPresetPayloadBasename = "bumpExportPreset.name"
+
     /// Holds the in-flight reset task so back-to-back postings
     /// don't pile up overlapping reloads. The test side waits for
     /// the completion sentinel before posting the next reset, so
@@ -263,7 +370,65 @@ enum UITestResetObserver {
             nil,
             .deliverImmediately
         )
-        Log.app.notice("UITestResetObserver: installed (reset + captureNow + openInNewWindow + injectFailedXMPWrite + makeWindowKey + addExportDestination + runExportSingleDestination + setExportProjectName + readOverlays)")
+
+        // Export v2 preset/config hooks. CFNotificationCenter's
+        // callback parameter is a C function pointer, so each
+        // registration uses an inline non-capturing closure that
+        // hops to the MainActor and calls the typed handler.
+        // Sentinel pointers 0xCAFE1008 ..< 0xCAFE1018 reserved.
+        CFNotificationCenterAddObserver(center, UnsafeRawPointer(bitPattern: 0xCAFE1008),
+            { _, _, _, _, _ in Task { @MainActor in UITestResetObserver.handleApplyExportPreset() } },
+            applyExportPresetNotification as CFString, nil, .deliverImmediately)
+        CFNotificationCenterAddObserver(center, UnsafeRawPointer(bitPattern: 0xCAFE1009),
+            { _, _, _, _, _ in Task { @MainActor in UITestResetObserver.handleClearExportPreset() } },
+            clearExportPresetNotification as CFString, nil, .deliverImmediately)
+        CFNotificationCenterAddObserver(center, UnsafeRawPointer(bitPattern: 0xCAFE100A),
+            { _, _, _, _, _ in Task { @MainActor in UITestResetObserver.handleSaveExportPresetAs() } },
+            saveExportPresetAsNotification as CFString, nil, .deliverImmediately)
+        CFNotificationCenterAddObserver(center, UnsafeRawPointer(bitPattern: 0xCAFE100B),
+            { _, _, _, _, _ in Task { @MainActor in UITestResetObserver.handleSaveBackToExportPreset() } },
+            saveBackToExportPresetNotification as CFString, nil, .deliverImmediately)
+        CFNotificationCenterAddObserver(center, UnsafeRawPointer(bitPattern: 0xCAFE100C),
+            { _, _, _, _, _ in Task { @MainActor in UITestResetObserver.handleSaveOverwritingExportPreset() } },
+            saveOverwritingExportPresetNotification as CFString, nil, .deliverImmediately)
+        CFNotificationCenterAddObserver(center, UnsafeRawPointer(bitPattern: 0xCAFE100D),
+            { _, _, _, _, _ in Task { @MainActor in UITestResetObserver.handleReloadFromExportPreset() } },
+            reloadFromExportPresetNotification as CFString, nil, .deliverImmediately)
+        CFNotificationCenterAddObserver(center, UnsafeRawPointer(bitPattern: 0xCAFE100E),
+            { _, _, _, _, _ in Task { @MainActor in UITestResetObserver.handleRemoveExportPreset() } },
+            removeExportPresetNotification as CFString, nil, .deliverImmediately)
+        CFNotificationCenterAddObserver(center, UnsafeRawPointer(bitPattern: 0xCAFE100F),
+            { _, _, _, _, _ in Task { @MainActor in UITestResetObserver.handleSetExportDefaultRoWM() } },
+            setExportDefaultRoWMNotification as CFString, nil, .deliverImmediately)
+        CFNotificationCenterAddObserver(center, UnsafeRawPointer(bitPattern: 0xCAFE1010),
+            { _, _, _, _, _ in Task { @MainActor in UITestResetObserver.handleSetExportRoWM() } },
+            setExportRoWMNotification as CFString, nil, .deliverImmediately)
+        CFNotificationCenterAddObserver(center, UnsafeRawPointer(bitPattern: 0xCAFE1011),
+            { _, _, _, _, _ in Task { @MainActor in UITestResetObserver.handleResetExportProjectName() } },
+            resetExportProjectNameNotification as CFString, nil, .deliverImmediately)
+        CFNotificationCenterAddObserver(center, UnsafeRawPointer(bitPattern: 0xCAFE1012),
+            { _, _, _, _, _ in Task { @MainActor in UITestResetObserver.handleRemoveExportDestination() } },
+            removeExportDestinationNotification as CFString, nil, .deliverImmediately)
+        CFNotificationCenterAddObserver(center, UnsafeRawPointer(bitPattern: 0xCAFE1013),
+            { _, _, _, _, _ in Task { @MainActor in UITestResetObserver.handleUpdateExportDestination() } },
+            updateExportDestinationNotification as CFString, nil, .deliverImmediately)
+        CFNotificationCenterAddObserver(center, UnsafeRawPointer(bitPattern: 0xCAFE1014),
+            { _, _, _, _, _ in Task { @MainActor in UITestResetObserver.handleClearExportPresetsLibrary() } },
+            clearExportPresetsLibraryNotification as CFString, nil, .deliverImmediately)
+        CFNotificationCenterAddObserver(center, UnsafeRawPointer(bitPattern: 0xCAFE1015),
+            { _, _, _, _, _ in Task { @MainActor in UITestResetObserver.handleReadExportConfigSnapshot() } },
+            readExportConfigSnapshotNotification as CFString, nil, .deliverImmediately)
+        CFNotificationCenterAddObserver(center, UnsafeRawPointer(bitPattern: 0xCAFE1016),
+            { _, _, _, _, _ in Task { @MainActor in UITestResetObserver.handleReadExportConfigSnapshotForWindow() } },
+            readExportConfigSnapshotForWindowNotification as CFString, nil, .deliverImmediately)
+        CFNotificationCenterAddObserver(center, UnsafeRawPointer(bitPattern: 0xCAFE1017),
+            { _, _, _, _, _ in Task { @MainActor in UITestResetObserver.handleReadExportPresetsLibrary() } },
+            readExportPresetsLibraryNotification as CFString, nil, .deliverImmediately)
+        CFNotificationCenterAddObserver(center, UnsafeRawPointer(bitPattern: 0xCAFE1018),
+            { _, _, _, _, _ in Task { @MainActor in UITestResetObserver.handleBumpExportPreset() } },
+            bumpExportPresetNotification as CFString, nil, .deliverImmediately)
+
+        Log.app.notice("UITestResetObserver: installed (reset + captureNow + openInNewWindow + injectFailedXMPWrite + makeWindowKey + addExportDestination + runExportSingleDestination + setExportProjectName + readOverlays + export v2 preset/config hooks)")
     }
 
     private static func handleReset() {
@@ -273,15 +438,11 @@ enum UITestResetObserver {
         currentResetTask?.cancel()
         currentResetTask = Task { @MainActor in
             // Wipe export config so every session-test starts with
-            // no destinations and an empty project name. Without
-            // this, a previous test's `add(path:)` leaks into the
-            // next test's setup. ExportSettings.shared persists to
-            // UserDefaults, but the JSON-encoded destinations array
-            // is in-memory and cleared by removing each one.
-            for dest in ExportSettings.shared.destinations {
-                ExportSettings.shared.remove(id: dest.id)
-            }
-            ExportSettings.shared.setProjectName("")
+            // no destinations and an empty project name. The
+            // per-shoot config persists to disk
+            // (Application Support/PhotoX/ExportConfigs/), so we
+            // clear both the in-memory state AND the loaded shoot's
+            // file after the reset reloads the sample fixture.
 
             await viewerState.resetForUITest()
             // Re-bootstrap from PHOTOX_SAMPLE_DIR. Deliberately NOT
@@ -295,6 +456,27 @@ enum UITestResetObserver {
             // and the real launch path.
             if let (shoot, firstFocus) = SamplePathProvider.resolveShoot() {
                 await viewerState.loadShoot(shoot, focus: firstFocus)
+            }
+            // After loadShoot instantiates the per-shoot config
+            // for the sample fixture, blank it so every test
+            // begins with no destinations / no preset / empty
+            // project name. The deriver will then re-derive the
+            // project name from EXIF as it flushes.
+            if let config = viewerState.exportConfig {
+                while !config.destinations.isEmpty {
+                    config.removeDestination(id: config.destinations[0].id)
+                }
+                config.clearPreset()
+                config.setProjectNameFromUser("")
+            }
+            // Wipe the global preset library so each test starts
+            // with no presets. Without this, a preset created in
+            // one test would survive into the next, contaminating
+            // assertions like "library snapshot has exactly N
+            // presets".
+            let library = ExportPresetsLibrary.shared
+            for preset in library.presets {
+                library.remove(id: preset.id)
             }
             // Force the workspace back to View. ContentView's
             // shootMissing-onChange auto-switches to View only
@@ -464,14 +646,18 @@ enum UITestResetObserver {
             Log.app.warning("UITestResetObserver: addExportDestination payload missing or invalid")
             return
         }
-        let result = ExportSettings.shared.add(path: info.path)
+        guard let config = viewerState?.exportConfig else {
+            Log.app.warning("UITestResetObserver: addExportDestination — no exportConfig (no shoot loaded)")
+            return
+        }
+        let result = config.addDestination(path: info.path)
         guard case .ok = result else {
             Log.app.warning("UITestResetObserver: addExportDestination rejected (\(String(describing: result), privacy: .public))")
             return
         }
         if info.allowNonEmpty == true,
-           let dest = ExportSettings.shared.destinations.last(where: { $0.path == info.path }) {
-            ExportSettings.shared.update(id: dest.id) { $0.allowNonEmpty = true }
+           let dest = config.destinations.last(where: { $0.path == info.path }) {
+            config.updateDestination(id: dest.id) { $0.allowNonEmpty = true }
         }
     }
 
@@ -489,19 +675,19 @@ enum UITestResetObserver {
         let payload = dir.appendingPathComponent(runExportSingleDestinationPayloadBasename)
         let raw = (try? String(contentsOf: payload, encoding: .utf8)) ?? ""
         try? FileManager.default.removeItem(at: payload)
+        guard let viewerState, let shoot = viewerState.shoot,
+              let config = viewerState.exportConfig else {
+            Log.app.warning("UITestResetObserver: runExportSingleDestination — no viewerState / shoot / exportConfig")
+            return
+        }
         guard let index = Int(raw.trimmingCharacters(in: .whitespacesAndNewlines)),
               index >= 0,
-              index < ExportSettings.shared.destinations.count else {
+              index < config.destinations.count else {
             Log.app.warning("UITestResetObserver: runExportSingleDestination — invalid index '\(raw, privacy: .public)'")
             return
         }
-        guard let viewerState, let shoot = viewerState.shoot else {
-            Log.app.warning("UITestResetObserver: runExportSingleDestination — no viewerState / shoot")
-            return
-        }
-        let dest = ExportSettings.shared.destinations[index]
-        let projectName = ExportSettings.shared.projectName
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let dest = config.destinations[index]
+        let projectName = config.trimmedProjectName
         viewerState.exportRunner.startOne(
             dest.id,
             entries: shoot.entries,
@@ -527,7 +713,7 @@ enum UITestResetObserver {
         let raw = (try? String(contentsOf: payload, encoding: .utf8)) ?? ""
         try? FileManager.default.removeItem(at: payload)
         let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        ExportSettings.shared.setProjectName(name)
+        viewerState?.exportConfig?.setProjectNameFromUser(name)
     }
 
     private static func handleReadOverlays() {
@@ -579,4 +765,330 @@ enum UITestResetObserver {
             true
         )
     }
+
+    // MARK: - Export v2 preset/config handlers
+
+    /// Read a plain-text payload file (used by hooks where the
+    /// payload is just one trimmed string). Returns nil if absent
+    /// or empty; consumes (removes) the file on success.
+    private static func consumeTextPayload(_ basename: String) -> String? {
+        guard let dir = payloadDir else { return nil }
+        let url = dir.appendingPathComponent(basename)
+        guard let raw = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        try? FileManager.default.removeItem(at: url)
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func currentExportConfig() -> ShootExportConfig? {
+        viewerState?.exportConfig
+    }
+
+    private static func presetByName(_ name: String) -> ExportPreset? {
+        ExportPresetsLibrary.shared.presets.first(where: { $0.name == name })
+    }
+
+    private static func handleApplyExportPreset() {
+        defer { postSentinel(applyExportPresetCompletedNotification) }
+        guard let name = consumeTextPayload(applyExportPresetPayloadBasename),
+              let preset = presetByName(name),
+              let config = currentExportConfig() else {
+            Log.app.warning("UITestResetObserver: applyExportPreset failed (name/preset/config missing)")
+            return
+        }
+        config.applyPreset(preset)
+    }
+
+    private static func handleClearExportPreset() {
+        defer { postSentinel(clearExportPresetCompletedNotification) }
+        currentExportConfig()?.clearPreset()
+    }
+
+    private static func handleSaveExportPresetAs() {
+        defer { postSentinel(saveExportPresetAsCompletedNotification) }
+        guard let name = consumeTextPayload(saveExportPresetAsPayloadBasename),
+              let config = currentExportConfig() else {
+            Log.app.warning("UITestResetObserver: saveExportPresetAs failed (name/config missing)")
+            return
+        }
+        _ = config.saveAsNewPreset(name: name)
+    }
+
+    private static func handleSaveBackToExportPreset() {
+        defer { postSentinel(saveBackToExportPresetCompletedNotification) }
+        currentExportConfig()?.saveBackToSourcePreset()
+    }
+
+    private static func handleSaveOverwritingExportPreset() {
+        defer { postSentinel(saveOverwritingExportPresetCompletedNotification) }
+        guard let name = consumeTextPayload(saveOverwritingExportPresetPayloadBasename),
+              let target = presetByName(name),
+              let config = currentExportConfig() else {
+            Log.app.warning("UITestResetObserver: saveOverwritingExportPreset failed")
+            return
+        }
+        config.saveOverwriting(presetID: target.id)
+    }
+
+    private static func handleReloadFromExportPreset() {
+        defer { postSentinel(reloadFromExportPresetCompletedNotification) }
+        currentExportConfig()?.reloadFromSourcePreset()
+    }
+
+    private static func handleRemoveExportPreset() {
+        defer { postSentinel(removeExportPresetCompletedNotification) }
+        guard let name = consumeTextPayload(removeExportPresetPayloadBasename),
+              let preset = presetByName(name) else {
+            Log.app.warning("UITestResetObserver: removeExportPreset failed (name/preset missing)")
+            return
+        }
+        ExportPresetsLibrary.shared.remove(id: preset.id)
+    }
+
+    private static func handleSetExportDefaultRoWM() {
+        defer { postSentinel(setExportDefaultRoWMCompletedNotification) }
+        guard let raw = consumeTextPayload(setExportDefaultRoWMPayloadBasename) else { return }
+        ExportPresetsLibrary.shared.defaultReadOnceWriteMany = (raw.lowercased() == "true")
+    }
+
+    private static func handleSetExportRoWM() {
+        defer { postSentinel(setExportRoWMCompletedNotification) }
+        guard let raw = consumeTextPayload(setExportRoWMPayloadBasename),
+              let config = currentExportConfig() else { return }
+        config.setReadOnceWriteMany(raw.lowercased() == "true")
+    }
+
+    private static func handleResetExportProjectName() {
+        defer { postSentinel(resetExportProjectNameCompletedNotification) }
+        guard let viewerState, let config = viewerState.exportConfig else { return }
+        let dates = viewerState.entryExif.values.compactMap(\.dateTime)
+        config.resetProjectNameToAuto(dates: dates)
+    }
+
+    private static func handleRemoveExportDestination() {
+        defer { postSentinel(removeExportDestinationCompletedNotification) }
+        guard let raw = consumeTextPayload(removeExportDestinationPayloadBasename),
+              let index = Int(raw),
+              let config = currentExportConfig(),
+              index >= 0, index < config.destinations.count else {
+            Log.app.warning("UITestResetObserver: removeExportDestination — invalid index")
+            return
+        }
+        config.removeDestination(id: config.destinations[index].id)
+    }
+
+    /// Payload JSON: `{"index": Int, "field": String, "value": Bool|String}`.
+    /// Switches on the field name to apply the right mutation.
+    private static func handleUpdateExportDestination() {
+        defer { postSentinel(updateExportDestinationCompletedNotification) }
+        guard let dir = payloadDir else { return }
+        let url = dir.appendingPathComponent(updateExportDestinationPayloadBasename)
+        guard let data = try? Data(contentsOf: url) else { return }
+        try? FileManager.default.removeItem(at: url)
+        struct Payload: Decodable {
+            let index: Int
+            let field: String
+            // value comes through as either Bool or String depending
+            // on the field; decode both, use whichever matches.
+            let boolValue: Bool?
+            let stringValue: String?
+            enum CodingKeys: String, CodingKey { case index, field, value }
+            init(from decoder: Decoder) throws {
+                let c = try decoder.container(keyedBy: CodingKeys.self)
+                self.index = try c.decode(Int.self, forKey: .index)
+                self.field = try c.decode(String.self, forKey: .field)
+                if let b = try? c.decode(Bool.self, forKey: .value) {
+                    self.boolValue = b; self.stringValue = nil
+                } else if let s = try? c.decode(String.self, forKey: .value) {
+                    self.stringValue = s; self.boolValue = nil
+                } else {
+                    self.boolValue = nil; self.stringValue = nil
+                }
+            }
+        }
+        guard let payload = try? JSONDecoder().decode(Payload.self, from: data),
+              let config = currentExportConfig(),
+              payload.index >= 0, payload.index < config.destinations.count else {
+            Log.app.warning("UITestResetObserver: updateExportDestination — invalid payload/index")
+            return
+        }
+        let id = config.destinations[payload.index].id
+        config.updateDestination(id: id) { dest in
+            switch payload.field {
+            case "includeARW":    if let v = payload.boolValue { dest.includeARW = v }
+            case "includeHIF":    if let v = payload.boolValue { dest.includeHIF = v }
+            case "includeXMP":    if let v = payload.boolValue { dest.includeXMP = v }
+            case "showRejected":  if let v = payload.boolValue { dest.showRejected = v }
+            case "showUnrated":   if let v = payload.boolValue { dest.showUnrated = v }
+            case "allowNonEmpty": if let v = payload.boolValue { dest.allowNonEmpty = v }
+            case "removeOrphans": if let v = payload.boolValue { dest.removeOrphans = v }
+            case "overwrite":
+                if let v = payload.stringValue,
+                   let policy = ExportPreset.OverwritePolicy(rawValue: v) {
+                    dest.overwrite = policy
+                }
+            default:
+                Log.app.warning("UITestResetObserver: updateExportDestination — unknown field \(payload.field, privacy: .public)")
+            }
+        }
+    }
+
+    private static func handleClearExportPresetsLibrary() {
+        defer { postSentinel(clearExportPresetsLibraryCompletedNotification) }
+        let library = ExportPresetsLibrary.shared
+        for preset in library.presets {
+            library.remove(id: preset.id)
+        }
+    }
+
+    /// Codable mirror for the snapshot JSON. Kept inside the
+    /// observer so callers don't depend on `ShootExportConfigData`
+    /// fields they don't care about (and so renaming model
+    /// fields doesn't accidentally break the wire format).
+    private struct ExportConfigSnapshot: Encodable {
+        let projectName: String
+        let projectNameIsUserOverride: Bool
+        let readOnceWriteMany: Bool
+        let sourcePresetID: String?
+        let sourcePresetNameCached: String?
+        let sourcePresetExists: Bool
+        let isModifiedFromPreset: Bool
+        let presetChangedSinceApply: Bool
+        let destinations: [DestinationSnapshot]
+    }
+
+    private struct DestinationSnapshot: Encodable {
+        let path: String
+        let includeARW: Bool
+        let includeHIF: Bool
+        let includeXMP: Bool
+        let showStars: [Int]
+        let showRejected: Bool
+        let showUnrated: Bool
+        let overwrite: String
+        let allowNonEmpty: Bool
+        let removeOrphans: Bool
+
+        init(from dest: ExportPreset.Destination) {
+            self.path = dest.path
+            self.includeARW = dest.includeARW
+            self.includeHIF = dest.includeHIF
+            self.includeXMP = dest.includeXMP
+            // Sets aren't deterministically ordered; sort for
+            // stable diff in assertions.
+            self.showStars = dest.showStars.sorted()
+            self.showRejected = dest.showRejected
+            self.showUnrated = dest.showUnrated
+            self.overwrite = dest.overwrite.rawValue
+            self.allowNonEmpty = dest.allowNonEmpty
+            self.removeOrphans = dest.removeOrphans
+        }
+    }
+
+    private static func snapshot(of config: ShootExportConfig) -> ExportConfigSnapshot {
+        ExportConfigSnapshot(
+            projectName: config.projectName,
+            projectNameIsUserOverride: config.projectNameIsUserOverride,
+            readOnceWriteMany: config.readOnceWriteMany,
+            sourcePresetID: config.sourcePresetID?.uuidString,
+            sourcePresetNameCached: config.sourcePresetNameCached,
+            sourcePresetExists: config.sourcePresetExists,
+            isModifiedFromPreset: config.isModifiedFromPreset,
+            presetChangedSinceApply: config.presetChangedSinceApply,
+            destinations: config.destinations.map(DestinationSnapshot.init(from:))
+        )
+    }
+
+    private static func writeConfigSnapshot(_ config: ShootExportConfig) {
+        guard let dir = payloadDir else { return }
+        let url = dir.appendingPathComponent(readExportConfigSnapshotPayloadBasename)
+        let snap = snapshot(of: config)
+        if let data = try? JSONEncoder().encode(snap) {
+            try? data.write(to: url, options: .atomic)
+        }
+    }
+
+    private static func handleReadExportConfigSnapshot() {
+        defer { postSentinel(readExportConfigSnapshotCompletedNotification) }
+        guard let config = currentExportConfig() else {
+            // Still write an empty file so the test can detect
+            // "no config" via the absence of expected fields.
+            if let dir = payloadDir {
+                let url = dir.appendingPathComponent(readExportConfigSnapshotPayloadBasename)
+                try? Data("{}".utf8).write(to: url, options: .atomic)
+            }
+            return
+        }
+        writeConfigSnapshot(config)
+    }
+
+    private static func handleReadExportConfigSnapshotForWindow() {
+        defer { postSentinel(readExportConfigSnapshotForWindowCompletedNotification) }
+        guard let path = consumeTextPayload(readExportConfigSnapshotForWindowRequestBasename),
+              let window = WindowRegistry.shared.window(forShootPath: path),
+              let state = WindowRegistry.shared.viewerState(for: window),
+              let config = state.exportConfig else {
+            // Same empty-stub fallback as above for absence detection.
+            if let dir = payloadDir {
+                let url = dir.appendingPathComponent(readExportConfigSnapshotPayloadBasename)
+                try? Data("{}".utf8).write(to: url, options: .atomic)
+            }
+            return
+        }
+        writeConfigSnapshot(config)
+    }
+
+    private struct PresetsLibrarySnapshot: Encodable {
+        let defaultReadOnceWriteMany: Bool
+        let presets: [PresetSnapshot]
+    }
+    private struct PresetSnapshot: Encodable {
+        let id: String
+        let name: String
+        let readOnceWriteMany: Bool
+        let destinations: [DestinationSnapshot]
+    }
+
+    /// Simulate an "external" preset edit: call `library.update`
+    /// on the matching preset (which bumps its `updatedAt`)
+    /// WITHOUT touching the current shoot's snapshot timestamp.
+    /// This is the only way a single-process E2E run can leave a
+    /// shoot pointing at a stale snapshot.
+    private static func handleBumpExportPreset() {
+        defer { postSentinel(bumpExportPresetCompletedNotification) }
+        guard let name = consumeTextPayload(bumpExportPresetPayloadBasename),
+              let preset = presetByName(name) else {
+            Log.app.warning("UITestResetObserver: bumpExportPreset failed (name/preset missing)")
+            return
+        }
+        // Make the bump observable as content change too: tweak a
+        // throwaway field. We change the preset's `name` to itself
+        // — that's a no-op semantically but goes through
+        // `library.update(...)` which bumps `updatedAt`.
+        var updated = preset
+        updated.name = preset.name
+        ExportPresetsLibrary.shared.update(updated)
+    }
+
+    private static func handleReadExportPresetsLibrary() {
+        defer { postSentinel(readExportPresetsLibraryCompletedNotification) }
+        guard let dir = payloadDir else { return }
+        let library = ExportPresetsLibrary.shared
+        let snap = PresetsLibrarySnapshot(
+            defaultReadOnceWriteMany: library.defaultReadOnceWriteMany,
+            presets: library.presets.map { preset in
+                PresetSnapshot(
+                    id: preset.id.uuidString,
+                    name: preset.name,
+                    readOnceWriteMany: preset.readOnceWriteMany,
+                    destinations: preset.destinations.map(DestinationSnapshot.init(from:))
+                )
+            }
+        )
+        if let data = try? JSONEncoder().encode(snap) {
+            let url = dir.appendingPathComponent(readExportPresetsLibraryPayloadBasename)
+            try? data.write(to: url, options: .atomic)
+        }
+    }
 }
+

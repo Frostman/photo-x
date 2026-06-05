@@ -635,6 +635,12 @@ final class ViewerState {
     /// even with concurrent exports across windows.
     let exportRunner = ExportRunner()
 
+    /// Per-shoot export configuration (project name, destinations,
+    /// applied preset). Replaced when the shoot changes; flushed to
+    /// disk before being replaced so the previous shoot's edits
+    /// land. Nil while no shoot is loaded (starter screen).
+    var exportConfig: ShootExportConfig?
+
     /// Lifetime usage counters surfaced in the Stats window and (when
     /// the user opts in) uploaded to PostHog. Mutators tick in-memory
     /// only; a background task persists every
@@ -908,6 +914,11 @@ final class ViewerState {
         // last position so a future reopen (favorite / recent click,
         // app relaunch) lands them back where they were.
         captureLastEntryToStores()
+        // Flush any pending export-config save before the shoot
+        // pointer moves — otherwise a debounced edit (typed
+        // project name, toggle) could land against the next
+        // shoot's file.
+        exportConfig?.flushPendingSave()
         // Persist the previous shoot's indexer cache before tearing
         // down. Best-effort — quit-time hook is a backstop.
         let oldCache = cache
@@ -926,6 +937,11 @@ final class ViewerState {
         // observe this UserDefaults write and re-render.
         AppDefaults.shared.set(false, forKey: SettingsKey.collapseBursts)
         self.shoot = shoot
+        self.exportConfig = ShootExportConfig(
+            shootPath: shoot.folderURL.path,
+            folderName: shoot.folderURL.lastPathComponent,
+            store: .shared,
+            library: .shared)
         self.currentIndex = shoot.index(of: focus) ?? 0
         // displayedIndex mirrors currentIndex on shoot load — the first
         // texture upload will fire commitDisplayed and keep it in sync
@@ -1027,6 +1043,8 @@ final class ViewerState {
         // Save the user's position before tearing down so reopening
         // this shoot (favorite / recent click) lands on the same entry.
         captureLastEntryToStores()
+        exportConfig?.flushPendingSave()
+        exportConfig = nil
         // Final flush of the indexer cache. Detached so the cleanup
         // doesn't block the UI; cache.close handles its own
         // background encode.
@@ -1705,6 +1723,14 @@ final class ViewerState {
         if let stem = displayedEntry?.stem,
            let ex = exifs.first(where: { $0.0 == stem })?.1 {
             self.displayedExif = ex
+        }
+        // Refresh the auto-derived export project name as more
+        // EXIF dates flow in. The deriver self-gates on date count
+        // so this is cheap for shoots where the date range hasn't
+        // grown since the last flush.
+        if let config = exportConfig, !config.projectNameIsUserOverride {
+            let dates = entryExif.values.compactMap(\.dateTime)
+            config.refreshAutoProjectName(dates: dates)
         }
     }
 

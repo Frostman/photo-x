@@ -42,11 +42,11 @@ final class ExportSharedReadTests: XCTestCase {
     }
 
     private func dest(at url: URL,
-                      includeXMP: Bool = true) -> ExportSettings.Destination {
+                      includeXMP: Bool = true) -> ExportPreset.Destination {
         // Tests intentionally re-run exports into the same
         // dest dir; the new per-row "Allow non-empty" gate
         // would otherwise block every second run.
-        ExportSettings.Destination(path: url.path,
+        ExportPreset.Destination(path: url.path,
                                    includeXMP: includeXMP,
                                    allowNonEmpty: true)
     }
@@ -269,12 +269,12 @@ final class ExportSharedReadTests: XCTestCase {
             "A": XMPSidecar(rating: 5),
             "B": XMPSidecar(rating: 1),
         ]
-        let dB1Filtered = ExportSettings.Destination(
+        let dB1Filtered = ExportPreset.Destination(
             path: destB1.path,
             showStars: [5], showRejected: false, showUnrated: false,
             allowNonEmpty: true, removeOrphans: true
         )
-        let dB2Filtered = ExportSettings.Destination(
+        let dB2Filtered = ExportPreset.Destination(
             path: destB2.path,
             showStars: [5], showRejected: false, showUnrated: false,
             allowNonEmpty: true, removeOrphans: false

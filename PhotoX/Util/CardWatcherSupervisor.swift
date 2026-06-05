@@ -107,6 +107,12 @@ enum CardWatcherSupervisor {
     /// transient "starting" state from a hard "macOS blocked
     /// the helper" state.
     static func liveStatus() async -> LiveStatus {
+        // Unit tests host inside the production app — without
+        // this guard, polling SMAppService / launchctl on every
+        // boot pokes the user's environment. E2E tests still
+        // exercise the real path (uiTestMode excludes them from
+        // `unitTestHost`).
+        if LaunchFlags.unitTestHost { return .notRegistered }
         let smStatus = SMAppService.agent(plistName: plistName).status
         switch smStatus {
         case .notRegistered, .notFound:
@@ -135,7 +141,8 @@ enum CardWatcherSupervisor {
     /// reset will recover it.
     @discardableResult
     static func bootstrapAtLaunch() async -> LiveStatus {
-        await runBootstrap(forceManual: false)
+        if LaunchFlags.unitTestHost { return .notRegistered }
+        return await runBootstrap(forceManual: false)
     }
 
     /// User-initiated restart from Settings. Bypasses the
@@ -144,7 +151,8 @@ enum CardWatcherSupervisor {
     /// unregister/register races on SMAppService.
     @discardableResult
     static func manualRestart() async -> LiveStatus {
-        await runBootstrap(forceManual: true)
+        if LaunchFlags.unitTestHost { return .notRegistered }
+        return await runBootstrap(forceManual: true)
     }
 
     // MARK: - Bootstrap pipeline

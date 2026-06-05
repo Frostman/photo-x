@@ -18,7 +18,7 @@ final class OverwriteDecisionTests: XCTestCase {
     private func decide(
         src: FileSnapshot,
         dst: FileSnapshot,
-        policy: ExportSettings.OverwritePolicy,
+        policy: ExportPreset.OverwritePolicy,
         isXMP: Bool = false
     ) -> CopyDecision {
         OverwriteDecision.decide(source: src, destination: dst, isXMP: isXMP, policy: policy)
@@ -28,7 +28,7 @@ final class OverwriteDecisionTests: XCTestCase {
 
     func test_sourceMissing_alwaysSkips_regardlessOfPolicy() {
         let dst = snap(size: 100, mtimeOffset: 0)
-        for policy in ExportSettings.OverwritePolicy.allCases {
+        for policy in ExportPreset.OverwritePolicy.allCases {
             XCTAssertEqual(decide(src: .missing, dst: dst, policy: policy), .skip,
                            "policy \(policy)")
         }
@@ -38,7 +38,7 @@ final class OverwriteDecisionTests: XCTestCase {
 
     func test_destMissing_alwaysWrites_noRemove_regardlessOfPolicy() {
         let src = snap(size: 100, mtimeOffset: 0)
-        for policy in ExportSettings.OverwritePolicy.allCases {
+        for policy in ExportPreset.OverwritePolicy.allCases {
             XCTAssertEqual(decide(src: src, dst: .missing, policy: policy),
                            .write(removeFirst: false),
                            "policy \(policy)")
@@ -50,7 +50,7 @@ final class OverwriteDecisionTests: XCTestCase {
     func test_sameSize_sameMtime_alwaysSkips() {
         let src = snap(size: 100, mtimeOffset: 0)
         let dst = snap(size: 100, mtimeOffset: 0)
-        for policy in ExportSettings.OverwritePolicy.allCases {
+        for policy in ExportPreset.OverwritePolicy.allCases {
             XCTAssertEqual(decide(src: src, dst: dst, policy: policy), .skip)
         }
     }
@@ -58,7 +58,7 @@ final class OverwriteDecisionTests: XCTestCase {
     func test_sameSize_mtimeWithin1Second_skips() {
         let src = snap(size: 100, mtimeOffset: 0.0)
         let dst = snap(size: 100, mtimeOffset: 0.999)  // <1s diff
-        for policy in ExportSettings.OverwritePolicy.allCases {
+        for policy in ExportPreset.OverwritePolicy.allCases {
             XCTAssertEqual(decide(src: src, dst: dst, policy: policy), .skip)
         }
     }

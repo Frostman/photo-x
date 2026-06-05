@@ -46,7 +46,7 @@ enum OverwriteDecision {
         source: FileSnapshot,
         destination: FileSnapshot,
         isXMP: Bool,
-        policy: ExportSettings.OverwritePolicy
+        policy: ExportPreset.OverwritePolicy
     ) -> CopyDecision {
         // Source must exist to copy at all. If it doesn't, callers shouldn't
         // ask — but defend against it cleanly.

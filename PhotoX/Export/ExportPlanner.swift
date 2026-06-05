@@ -46,7 +46,7 @@ enum ExportPlanner {
         entries: [PhotoEntry],
         entryXMPs: [String: XMPSidecar],
         projectName: String,
-        destination: ExportSettings.Destination,
+        destination: ExportPreset.Destination,
         sourceSizes: [URL: Int64]? = nil
     ) -> Plan {
         let trimmed = projectName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -109,7 +109,7 @@ enum ExportPlanner {
     /// the runner doesn't depend on ViewerState.
     private static func matches(
         _ entry: PhotoEntry,
-        destination: ExportSettings.Destination,
+        destination: ExportPreset.Destination,
         entryXMPs: [String: XMPSidecar]
     ) -> Bool {
         let xmp = entryXMPs[entry.stem] ?? .empty
@@ -151,7 +151,7 @@ enum ExportPlanner {
     static func runPlanningPhase(
         entries: [PhotoEntry],
         projectName: String,
-        destinations: [ExportSettings.Destination],
+        destinations: [ExportPreset.Destination],
         progress: PlanningPhaseProgress
     ) async -> ExportPlanningResult {
         // Register destination progress slots up-front so the

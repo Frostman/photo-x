@@ -53,10 +53,10 @@ final class ExportCopyLoopTests: XCTestCase {
         includeARW: Bool = true,
         includeHIF: Bool = true,
         includeXMP: Bool = true,
-        overwrite: ExportSettings.OverwritePolicy = .skipUnchangedElseOverwrite,
+        overwrite: ExportPreset.OverwritePolicy = .skipUnchangedElseOverwrite,
         removeOrphans: Bool = false
-    ) -> ExportSettings.Destination {
-        ExportSettings.Destination(
+    ) -> ExportPreset.Destination {
+        ExportPreset.Destination(
             path: destDir.path,
             showStars: showStars,
             showRejected: showRejected,
@@ -83,7 +83,7 @@ final class ExportCopyLoopTests: XCTestCase {
         try Data(contentsOf: url)
     }
 
-    private func run(_ dest: ExportSettings.Destination, entries: [PhotoEntry],
+    private func run(_ dest: ExportPreset.Destination, entries: [PhotoEntry],
                      entryXMPs: [String: XMPSidecar] = [:],
                      project: String = "P") async {
         runner.startOne(dest.id, entries: entries, entryXMPs: entryXMPs,

@@ -16,6 +16,24 @@ enum LaunchFlags {
     /// notification-permission prompt) that would interfere with
     /// XCUITest's expectations of a default frame and a quiet session.
     static let uiTestMode = ProcessInfo.processInfo.arguments.contains("-photoxUITestMode")
+    /// True when this process was launched by xcodebuild to host a
+    /// PhotoXTests *unit* bundle. macOS unit tests load `@testable
+    /// import PhotoX` symbols by booting the host app inside the
+    /// test runner, which means `applicationDidFinishLaunching`
+    /// fires with the real production side-effects (card-watcher
+    /// bootstrap, alert presentation, etc.). Gate any
+    /// side-effecting boot work on this flag so unit tests don't
+    /// poke launchctl / surface alerts the test runner can't see.
+    ///
+    /// E2E tests also have `XCTestConfigurationFilePath` set but
+    /// additionally pass `-photoxUITestMode YES` — they NEED the
+    /// real boot path (the card-watcher / multi-window restore /
+    /// etc. are exactly what E2E exercises), so the AND-NOT
+    /// clause excludes them.
+    static let unitTestHost: Bool = {
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+            && !ProcessInfo.processInfo.arguments.contains("-photoxUITestMode")
+    }()
 }
 
 @main
@@ -876,6 +894,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
         // evict since they're at the LRU tail.
         MemoryPressureMonitor.shared.start()
 
+        // Trim per-shoot export config files to the most recent N.
+        // Touch-on-load means active shoots are always at the head
+        // and never lost. Runs on a background queue inside the
+        // store so it doesn't gate app launch.
+        ShootExportConfigStore.shared.purgeBeyondLRU()
+
         // Bootstrap the background card-watcher helper once per
         // process. The supervisor has its own once-per-session
         // gate, but pinning the call here (rather than in a view
@@ -883,15 +907,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
         // explicit and decouples it from multi-window scene
         // creation. Detached so launchctl I/O doesn't stall app
         // launch; unhealthy outcomes surface as an alert.
-        Task.detached(priority: .background) {
-            let status = await CardWatcherSupervisor.bootstrapAtLaunch()
-            await MainActor.run {
-                // Order matters: a broken watcher's "needs
-                // attention" alert outranks any promo. Only one
-                // promo per launch, so the user never sees two
-                // stacked modal alerts on a cold start.
-                presentCardWatcherAlertIfNeeded(status: status)
-                presentOnboardingPromosIfNeeded()
+        //
+        // Skipped under `LaunchFlags.unitTestHost`: xcodebuild
+        // unit-test runs boot the host app inside the test
+        // runner, which would otherwise touch the user's
+        // launchctl state, surface a "card watcher needs
+        // attention" alert the test runner can't dismiss, and
+        // generally interfere with the user's actual PhotoX
+        // session.
+        if !LaunchFlags.unitTestHost {
+            Task.detached(priority: .background) {
+                let status = await CardWatcherSupervisor.bootstrapAtLaunch()
+                await MainActor.run {
+                    // Order matters: a broken watcher's "needs
+                    // attention" alert outranks any promo. Only one
+                    // promo per launch, so the user never sees two
+                    // stacked modal alerts on a cold start.
+                    presentCardWatcherAlertIfNeeded(status: status)
+                    presentOnboardingPromosIfNeeded()
+                }
             }
         }
 

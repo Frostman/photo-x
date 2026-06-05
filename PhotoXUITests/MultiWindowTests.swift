@@ -270,6 +270,228 @@ final class MultiWindowTests: PhotoXUITestCase {
                       "both windows should remain after Stay")
     }
 
+    /// Pins the per-window Export-config isolation that the v2
+    /// rework was built for: setting the project name in window A
+    /// must NOT bleed into window B's Export pane. Old behaviour
+    /// (singleton `ExportSettings.shared`) regressed this without
+    /// noise — both windows held the same @Observable instance and
+    /// re-rendered together.
+    func test_export_projectName_isolatedAcrossWindows() throws {
+        XCTAssertTrue(waitForWindowCount(2, timeout: 10),
+                      "expected two windows after initial launch")
+        try waitForShootLoadedInAllWindows(timeout: 15)
+
+        let sentinel = "ZZZ-cross-window-test-12345"
+
+        // Window A (fixtureA) is the primary — driven via the
+        // `setExportProjectName` Darwin hook which always targets
+        // the registered viewerState.
+        try postMakeWindowKeyAndWait(path: fixtureA.path)
+        try switchToExportTab()
+        try setProjectName(sentinel)
+        XCTAssertEqual(projectNameValue(forWindowTitleContains: fixtureA.lastPathComponent),
+                       sentinel,
+                       "sanity: window A's field reflects the set value")
+
+        // Bring window B to front and open its Export pane.
+        try postMakeWindowKeyAndWait(path: fixtureB.path)
+        try switchToExportTab()
+
+        let bValue = projectNameValue(forWindowTitleContains: fixtureB.lastPathComponent)
+        XCTAssertNotEqual(bValue, sentinel,
+                          "window B's project name must not be touched by window A's edit")
+        XCTAssertFalse((bValue ?? "").contains(sentinel),
+                       "window B's project name must not contain the sentinel either")
+    }
+
+    /// Adding a destination in window A must not appear in window B's
+    /// per-shoot config. Reads each window's snapshot via the
+    /// `readExportConfigSnapshotForWindow` hook (which resolves a
+    /// ViewerState by shoot path, independent of the
+    /// `viewerState` weak-ref that always points at the primary).
+    func test_export_destinations_isolatedAcrossWindows() throws {
+        XCTAssertTrue(waitForWindowCount(2, timeout: 10), "two windows expected")
+        try waitForShootLoadedInAllWindows(timeout: 15)
+
+        // The primary observer always targets the primary
+        // viewerState (fixtureA's window in this setUp). Promote
+        // it just to be defensive against any focus surprise.
+        try postMakeWindowKeyAndWait(path: fixtureA.path)
+        try switchToExportTab()
+
+        let aDest = (NSTemporaryDirectory() as NSString)
+            .appendingPathComponent("crosswin-dest-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: URL(fileURLWithPath: aDest), withIntermediateDirectories: true)
+        try addExportDestination(path: aDest, allowNonEmpty: false)
+
+        let aSnap = try readConfigSnapshotForWindow(path: fixtureA.path)
+        XCTAssertEqual(aSnap.destinations.map(\.path), [aDest],
+                       "window A should have the destination we just added")
+
+        let bSnap = try readConfigSnapshotForWindow(path: fixtureB.path)
+        XCTAssertTrue(bSnap.destinations.isEmpty,
+                      "window B's destinations must remain empty; got \(bSnap.destinations.map(\.path))")
+    }
+
+    /// Applying a preset in window A must not change window B's
+    /// preset binding. Sets up a preset in the global library,
+    /// applies it to A, then verifies B's snapshot still shows no
+    /// source preset and unchanged auto-derived project name.
+    func test_export_presetApply_isolatedAcrossWindows() throws {
+        XCTAssertTrue(waitForWindowCount(2, timeout: 10), "two windows expected")
+        try waitForShootLoadedInAllWindows(timeout: 15)
+
+        try postMakeWindowKeyAndWait(path: fixtureA.path)
+        try switchToExportTab()
+
+        let presetDest = (NSTemporaryDirectory() as NSString)
+            .appendingPathComponent("crosswin-preset-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: URL(fileURLWithPath: presetDest), withIntermediateDirectories: true)
+
+        // Build a preset using only the existing hooks: add the
+        // destination, save-as, then clear (so we're left with the
+        // preset in the library but no preset applied to A).
+        try addExportDestination(path: presetDest, allowNonEmpty: false)
+        try saveAsNewPreset("crosswin-preset")
+        try clearPreset()
+        // Drop the leftover working destinations so A starts clean
+        // before applying the preset.
+        let preApply = try readConfigSnapshotForWindow(path: fixtureA.path)
+        for _ in preApply.destinations.indices {
+            try removeFirstExportDestination()
+        }
+
+        // Apply preset to window A.
+        try applyPreset("crosswin-preset")
+        let aSnap = try readConfigSnapshotForWindow(path: fixtureA.path)
+        XCTAssertEqual(aSnap.sourcePresetNameCached, "crosswin-preset",
+                       "window A should adopt the preset")
+        XCTAssertEqual(aSnap.destinations.map(\.path), [presetDest])
+
+        // Window B must NOT have the preset applied — the working
+        // config is per-shoot.
+        let bSnap = try readConfigSnapshotForWindow(path: fixtureB.path)
+        XCTAssertNil(bSnap.sourcePresetID,
+                     "window B must not have any preset applied")
+        XCTAssertNil(bSnap.sourcePresetNameCached)
+        XCTAssertTrue(bSnap.destinations.isEmpty)
+    }
+
+    // MARK: - Export-isolation test helpers (local to this file)
+
+    /// Switch the key window's workspace to Export via ⌘3.
+    private func switchToExportTab() throws {
+        pressKey("3", modifiers: .command)
+        let projectField = app.textFields["export.projectName"]
+        XCTAssertTrue(projectField.waitForExistence(timeout: 5),
+                      "Export tab didn't open within 5 s")
+        pressKey(.escape)
+    }
+
+    /// Drives `ExportSettings.setProjectNameFromUser` via the
+    /// Darwin hook so we don't have to drive the TextField via
+    /// `typeText` (`@FocusState`-managed field is flaky for it).
+    private func setProjectName(_ name: String) throws {
+        let payload = (NSTemporaryDirectory() as NSString)
+            .appendingPathComponent("setExportProjectName.name")
+        try name.write(toFile: payload, atomically: true, encoding: .utf8)
+        try postDarwinNotificationAndWait(
+            request:    "dev.frostman.PhotoX.uitest.setExportProjectName",
+            completion: "dev.frostman.PhotoX.uitest.setExportProjectNameCompleted",
+            timeout:    5)
+    }
+
+    /// Read the visible Export project-name TextField for the
+    /// window whose title contains `substring`. Returns nil if
+    /// the field isn't there (Export pane not open in that window).
+    /// XCUITest scopes textFields to the key window in most cases,
+    /// so we additionally correlate by frame intersection against
+    /// the named window — same pattern as `pillIndex(...)`.
+    private func projectNameValue(forWindowTitleContains substring: String) -> String? {
+        let w = window(titleContains: substring)
+        guard w.exists else { return nil }
+        let windowFrame = w.frame
+        let fields = app.textFields
+            .matching(identifier: "export.projectName")
+            .allElementsBoundByIndex
+        for field in fields {
+            guard field.exists else { continue }
+            if windowFrame.contains(field.frame.origin) {
+                return field.value as? String
+            }
+        }
+        return nil
+    }
+
+    private func addExportDestination(path: String, allowNonEmpty: Bool) throws {
+        let payloadPath = (NSTemporaryDirectory() as NSString)
+            .appendingPathComponent("addExportDestination.json")
+        let json: [String: Any] = ["path": path, "allowNonEmpty": allowNonEmpty]
+        let data = try JSONSerialization.data(withJSONObject: json, options: [])
+        try data.write(to: URL(fileURLWithPath: payloadPath))
+        try postDarwinNotificationAndWait(
+            request:    "dev.frostman.PhotoX.uitest.addExportDestination",
+            completion: "dev.frostman.PhotoX.uitest.addExportDestinationCompleted",
+            timeout:    5)
+    }
+
+    private func saveAsNewPreset(_ name: String) throws {
+        let payloadPath = (NSTemporaryDirectory() as NSString)
+            .appendingPathComponent("saveExportPresetAs.name")
+        try name.write(toFile: payloadPath, atomically: true, encoding: .utf8)
+        try postDarwinNotificationAndWait(
+            request:    "dev.frostman.PhotoX.uitest.saveExportPresetAs",
+            completion: "dev.frostman.PhotoX.uitest.saveExportPresetAsCompleted",
+            timeout:    5)
+    }
+
+    private func clearPreset() throws {
+        try postDarwinNotificationAndWait(
+            request:    "dev.frostman.PhotoX.uitest.clearExportPreset",
+            completion: "dev.frostman.PhotoX.uitest.clearExportPresetCompleted",
+            timeout:    5)
+    }
+
+    private func applyPreset(_ name: String) throws {
+        let payloadPath = (NSTemporaryDirectory() as NSString)
+            .appendingPathComponent("applyExportPreset.name")
+        try name.write(toFile: payloadPath, atomically: true, encoding: .utf8)
+        try postDarwinNotificationAndWait(
+            request:    "dev.frostman.PhotoX.uitest.applyExportPreset",
+            completion: "dev.frostman.PhotoX.uitest.applyExportPresetCompleted",
+            timeout:    5)
+    }
+
+    private func removeFirstExportDestination() throws {
+        let payloadPath = (NSTemporaryDirectory() as NSString)
+            .appendingPathComponent("removeExportDestination.index")
+        try "0".write(toFile: payloadPath, atomically: true, encoding: .utf8)
+        try postDarwinNotificationAndWait(
+            request:    "dev.frostman.PhotoX.uitest.removeExportDestination",
+            completion: "dev.frostman.PhotoX.uitest.removeExportDestinationCompleted",
+            timeout:    5)
+    }
+
+    /// Read the snapshot of the per-window `ShootExportConfig` for
+    /// the window holding `path`. Uses
+    /// `readExportConfigSnapshotForWindow` so we can read state
+    /// from a window that isn't the primary observer target.
+    private func readConfigSnapshotForWindow(path: String) throws -> ExportConfigSnapshot {
+        let req = (NSTemporaryDirectory() as NSString)
+            .appendingPathComponent("readExportConfigSnapshotForWindow.path")
+        try path.write(toFile: req, atomically: true, encoding: .utf8)
+        try postDarwinNotificationAndWait(
+            request:    "dev.frostman.PhotoX.uitest.readExportConfigSnapshotForWindow",
+            completion: "dev.frostman.PhotoX.uitest.readExportConfigSnapshotForWindowCompleted",
+            timeout:    5)
+        let payloadPath = (NSTemporaryDirectory() as NSString)
+            .appendingPathComponent("exportConfigSnapshot.json")
+        let data = try Data(contentsOf: URL(fileURLWithPath: payloadPath))
+        return try JSONDecoder().decode(ExportConfigSnapshot.self, from: data)
+    }
+
     // MARK: - Helpers
 
     // waitForWindowCount and currentWindowTitles live on

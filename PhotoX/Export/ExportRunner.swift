@@ -73,7 +73,7 @@ final class ExportRunner {
         }
     }
 
-    /// Per-destination state map. UUIDs come from `ExportSettings.Destination.id`.
+    /// Per-destination state map. UUIDs come from `ExportPreset.Destination.id`.
     private(set) var perDestination: [UUID: DestinationState] = [:]
 
     /// Aggregate progress across the CURRENT batch (one Run / one Export-all
@@ -272,7 +272,7 @@ final class ExportRunner {
         entries: [PhotoEntry],
         entryXMPs: [String: XMPSidecar],
         projectName: String,
-        destinations: [ExportSettings.Destination],
+        destinations: [ExportPreset.Destination],
         sharedRead: Bool = false,
         notifications: ExportNotificationsAdapter = .live
     ) {
@@ -323,7 +323,7 @@ final class ExportRunner {
             // Mark blocked destinations failed immediately;
             // they're skipped from the copy phase. Other
             // destinations proceed.
-            var runnable: [ExportSettings.Destination] = []
+            var runnable: [ExportPreset.Destination] = []
             for dest in destinations {
                 if let reason = planResult.perDestination[dest.id]?.blockedReason {
                     self.perDestination[dest.id] = .failed(reason, nil)
@@ -338,7 +338,7 @@ final class ExportRunner {
             // batch-end book-keeping so the UI's
             // post-completion label / cleanup all happen.
             guard !runnable.isEmpty else {
-                let summaries: [(ExportSettings.Destination, Summary)] = destinations.map { ($0, .empty) }
+                let summaries: [(ExportPreset.Destination, Summary)] = destinations.map { ($0, .empty) }
                 self.planningProgress = nil
                 notifications.postAllComplete(summaries)
                 self.endPreventingSleep()
@@ -379,7 +379,7 @@ final class ExportRunner {
                 currentDestinationIndex: sharedRead ? nil : 1
             )
 
-            let summaries: [(ExportSettings.Destination, Summary)]
+            let summaries: [(ExportPreset.Destination, Summary)]
             if sharedRead {
                 summaries = await self.runAllSharedRead(
                     entries: entries, entryXMPs: entryXMPs,
@@ -416,9 +416,9 @@ final class ExportRunner {
         entries: [PhotoEntry],
         entryXMPs: [String: XMPSidecar],
         projectName: String,
-        destinations: [ExportSettings.Destination]
-    ) async -> [(ExportSettings.Destination, Summary)] {
-        var summaries: [(ExportSettings.Destination, Summary)] = []
+        destinations: [ExportPreset.Destination]
+    ) async -> [(ExportPreset.Destination, Summary)] {
+        var summaries: [(ExportPreset.Destination, Summary)] = []
         for (idx, dest) in destinations.enumerated() {
             if cancellationTokens[dest.id]?.isCancelled == true {
                 perDestination[dest.id] = .cancelled(.empty)
@@ -445,7 +445,7 @@ final class ExportRunner {
         entries: [PhotoEntry],
         entryXMPs: [String: XMPSidecar],
         projectName: String,
-        destination: ExportSettings.Destination,
+        destination: ExportPreset.Destination,
         notifications: ExportNotificationsAdapter = .live
     ) {
         // See note in startAll: bump epoch so any pending
@@ -531,7 +531,7 @@ final class ExportRunner {
     /// how many files copied / skipped / deleted, how many errors, total
     /// wall time.
     private func logBatchCompletion(
-        summaries: [(ExportSettings.Destination, Summary)],
+        summaries: [(ExportPreset.Destination, Summary)],
         outcome: BatchOutcome,
         startedAt: Date
     ) {
@@ -558,7 +558,7 @@ final class ExportRunner {
     /// Inspect `perDestination` for the destinations in this batch and roll
     /// up to a single outcome.
     private func summariseBatchOutcome(
-        for destinations: [ExportSettings.Destination]
+        for destinations: [ExportPreset.Destination]
     ) -> BatchOutcome {
         var anyCancelled = false
         var anyFailed = false
@@ -604,7 +604,7 @@ final class ExportRunner {
     /// Returns the final Summary. Updates `perDestination[dest.id]` as it
     /// progresses. Caller is responsible for emitting any notification.
     private func runSingle(
-        destination dest: ExportSettings.Destination,
+        destination dest: ExportPreset.Destination,
         entries: [PhotoEntry],
         entryXMPs: [String: XMPSidecar],
         projectName: String
@@ -741,11 +741,11 @@ final class ExportRunner {
         entries: [PhotoEntry],
         entryXMPs: [String: XMPSidecar],
         projectName: String,
-        destinations: [ExportSettings.Destination]
-    ) async -> [(ExportSettings.Destination, Summary)] {
+        destinations: [ExportPreset.Destination]
+    ) async -> [(ExportPreset.Destination, Summary)] {
         // Per-destination scratch state.
         struct DestState {
-            let dest: ExportSettings.Destination
+            let dest: ExportPreset.Destination
             let plan: ExportPlanner.Plan
             var progress: Progress
             var errors: [Summary.ErrorEntry]
@@ -788,7 +788,7 @@ final class ExportRunner {
         struct ReadRequest: @unchecked Sendable {
             let sourceURL: URL
             let isXMP: Bool
-            var writes: [(destID: UUID, destURL: URL, policy: ExportSettings.OverwritePolicy)]
+            var writes: [(destID: UUID, destURL: URL, policy: ExportPreset.OverwritePolicy)]
         }
         var requestsBySource: [URL: ReadRequest] = [:]
         for (destID, state) in states {
@@ -923,7 +923,7 @@ final class ExportRunner {
 
         // Per-destination orphan-removal phase (cannot be batched — orphans
         // depend on each destination's eligible-stems set). Off-main.
-        var summaries: [(ExportSettings.Destination, Summary)] = []
+        var summaries: [(ExportPreset.Destination, Summary)] = []
         for dest in destinations {
             guard var state = states[dest.id] else { continue }
             var deleted = 0
@@ -1137,7 +1137,7 @@ enum FileSystemSnapshot {
 /// per-destination notifications were removed (noisy + duplicative
 /// with the per-row progress in the sheet).
 struct ExportNotificationsAdapter: Sendable {
-    var postAllComplete: @Sendable ([(ExportSettings.Destination, ExportRunner.Summary)]) -> Void
+    var postAllComplete: @Sendable ([(ExportPreset.Destination, ExportRunner.Summary)]) -> Void
 
     static let live = ExportNotificationsAdapter(
         postAllComplete: { summaries in

@@ -2,10 +2,14 @@ import AppKit
 import SwiftUI
 
 /// One row in the Export sheet's destinations list. Caller owns the
-/// underlying `ExportSettings.Destination`; mutations come back via the
-/// `onChange` callback so this view stays pure.
+/// underlying `ExportPreset.Destination`; mutations come back via the
+/// `onChange` callback so this view stays pure. `rowIndex` is the
+/// 0-based position in the parent's destinations array — used to
+/// emit stable per-row AX identifiers (`export.destination.<N>.*`)
+/// that XCUITest can target without resolving UUIDs.
 struct ExportDestinationRow: View {
-    let destination: ExportSettings.Destination
+    let rowIndex: Int
+    let destination: ExportPreset.Destination
     let runnerState: ExportRunner.DestinationState
     let completedAt: Date?
     let canRun: Bool
@@ -19,7 +23,9 @@ struct ExportDestinationRow: View {
     let onRunOne: () -> Void
     let onCancel: () -> Void
     let onRemove: () -> Void
-    let onChange: ((inout ExportSettings.Destination) -> Void) -> Void
+    let onChange: ((inout ExportPreset.Destination) -> Void) -> Void
+
+    private var idPrefix: String { "export.destination.\(rowIndex)" }
 
     /// Flips to true for ~1 s after a click-to-copy on the path,
     /// flipping the label to "Copied path" — mirrors the canvas
@@ -58,6 +64,11 @@ struct ExportDestinationRow: View {
             }
             .buttonStyle(.plain)
             .help("Click to copy absolute path — \(destination.path)")
+            // Stable accessibility label is the absolute path so
+            // tests can assert on the destination identity even
+            // when the visual label is the abbreviated form.
+            .accessibilityIdentifier("\(idPrefix).path")
+            .accessibilityLabel(destination.path)
             Spacer()
             runButton
             removeButton
@@ -102,6 +113,7 @@ struct ExportDestinationRow: View {
             }
             .controlSize(.small)
             .help("Cancel this destination's run")
+            .accessibilityIdentifier("\(idPrefix).cancel")
         } else {
             Button {
                 onRunOne()
@@ -113,6 +125,7 @@ struct ExportDestinationRow: View {
             .help(canRun
                   ? "Export to this destination only"
                   : "Set a project name first")
+            .accessibilityIdentifier("\(idPrefix).run")
         }
     }
 
@@ -125,6 +138,7 @@ struct ExportDestinationRow: View {
         .buttonStyle(.plain)
         .help("Remove this destination")
         .disabled(isThisRunning || isAnotherRunning)
+        .accessibilityIdentifier("\(idPrefix).remove")
     }
 
     // MARK: filter + flags row
@@ -140,17 +154,20 @@ struct ExportDestinationRow: View {
                         }
                     }
                     .help("Include \(stars)-star pairs")
+                    .accessibilityIdentifier("\(idPrefix).star.\(stars)")
                 }
             }
             Toggle(isOn: boolBinding(\.showRejected)) {
                 Image(systemName: "xmark.circle.fill")
             }
             .help("Include rejected pairs")
+            .accessibilityIdentifier("\(idPrefix).rejected")
 
             Toggle(isOn: boolBinding(\.showUnrated)) {
                 Image(systemName: "circle")
             }
             .help("Include unrated pairs")
+            .accessibilityIdentifier("\(idPrefix).unrated")
 
             Divider().frame(height: 16)
 
@@ -158,14 +175,17 @@ struct ExportDestinationRow: View {
                 Text("ARW").font(.caption2.bold())
             }
             .help("Copy .ARW files")
+            .accessibilityIdentifier("\(idPrefix).includeARW")
             Toggle(isOn: boolBinding(\.includeHIF)) {
                 Text("HIF/JPG").font(.caption2.bold())
             }
             .help("Copy .HIF or .JPG files (whichever the entry has)")
+            .accessibilityIdentifier("\(idPrefix).includeHIF")
             Toggle(isOn: boolBinding(\.includeXMP)) {
                 Text("XMP").font(.caption2.bold())
             }
             .help("Copy .xmp sidecars")
+            .accessibilityIdentifier("\(idPrefix).includeXMP")
             Spacer()
         }
         .toggleStyle(.button)
@@ -176,7 +196,7 @@ struct ExportDestinationRow: View {
     private var secondRow: some View {
         HStack(spacing: 12) {
             Picker(selection: overwriteBinding) {
-                ForEach(ExportSettings.OverwritePolicy.allCases) { policy in
+                ForEach(ExportPreset.OverwritePolicy.allCases) { policy in
                     Text(policy.displayName).tag(policy)
                 }
             } label: {
@@ -187,6 +207,8 @@ struct ExportDestinationRow: View {
             .pickerStyle(.menu)
             .fixedSize()
             .help(destination.overwrite.helpText)
+            .accessibilityIdentifier("\(idPrefix).overwrite")
+            .accessibilityLabel(destination.overwrite.displayName)
 
             Toggle(isOn: boolBinding(\.allowNonEmpty)) {
                 Label("Allow non-empty", systemImage: destination.allowNonEmpty
@@ -196,6 +218,7 @@ struct ExportDestinationRow: View {
             .toggleStyle(.checkbox)
             .controlSize(.small)
             .help("When off, exporting to this destination errors out if its project subfolder already has files. Turn on to overlay onto an existing project folder.")
+            .accessibilityIdentifier("\(idPrefix).allowNonEmpty")
 
             Toggle(isOn: boolBinding(\.removeOrphans)) {
                 Label("Remove orphans", systemImage: destination.removeOrphans
@@ -205,6 +228,7 @@ struct ExportDestinationRow: View {
             .toggleStyle(.checkbox)
             .controlSize(.small)
             .help("After copying, delete files at the destination whose stem isn't in the filtered selection. Destructive — confirmation required.")
+            .accessibilityIdentifier("\(idPrefix).removeOrphans")
 
             Spacer()
         }
@@ -217,6 +241,44 @@ struct ExportDestinationRow: View {
     private var statusRow: some View {
         TimelineView(.periodic(from: .now, by: 60)) { context in
             statusContent(now: context.date)
+                // Stable AX surface for the status row. The label
+                // is a plain string that XCUITest reads via
+                // `.label`; the visual children stay rich.
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("\(idPrefix).status")
+                .accessibilityLabel(statusAXLabel(now: context.date))
+        }
+    }
+
+    /// Plain-string status for `.accessibilityLabel`. Mirrors what
+    /// the user sees minus the icons. Tests assert on the prefix
+    /// ("Idle", "Queued", "Planning", "Running", "Done", "Cancelled",
+    /// "Failed") and on key counters (copied/skipped/total).
+    private func statusAXLabel(now: Date) -> String {
+        if let p = planningProgress, p.total > 0 {
+            return "Planning… \(Int(p.fraction * 100))%"
+        }
+        switch runnerState {
+        case .idle:
+            return "Idle"
+        case .queued:
+            return "Queued"
+        case .running(let p):
+            return "Running \(Int(p.percent * 100))% — copied \(p.copied) skipped \(p.skipped) total \(p.total)"
+        case .done(let s):
+            var t = "Done · \(s.copied) copied · \(s.skipped) skipped"
+            if s.deleted > 0 { t += " · \(s.deleted) deleted" }
+            if let at = completedAt { t += " · \(agoString(from: at, now: now))" }
+            return t
+        case .cancelled(let s):
+            var t = "Cancelled · \(s.copied) copied · \(s.skipped) skipped"
+            if let at = completedAt { t += " · \(agoString(from: at, now: now))" }
+            return t
+        case .failed(let message, let summary):
+            var t = "Failed · \(message)"
+            if let s = summary { t += " · \(s.copied) copied · \(s.skipped) skipped" }
+            if let at = completedAt { t += " · \(agoString(from: at, now: now))" }
+            return t
         }
     }
 
@@ -379,14 +441,14 @@ struct ExportDestinationRow: View {
         )
     }
 
-    private func boolBinding(_ keyPath: WritableKeyPath<ExportSettings.Destination, Bool>) -> Binding<Bool> {
+    private func boolBinding(_ keyPath: WritableKeyPath<ExportPreset.Destination, Bool>) -> Binding<Bool> {
         Binding(
             get: { destination[keyPath: keyPath] },
             set: { v in onChange { $0[keyPath: keyPath] = v } }
         )
     }
 
-    private var overwriteBinding: Binding<ExportSettings.OverwritePolicy> {
+    private var overwriteBinding: Binding<ExportPreset.OverwritePolicy> {
         Binding(
             get: { destination.overwrite },
             set: { v in onChange { $0.overwrite = v } }

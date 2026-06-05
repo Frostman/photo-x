@@ -3,69 +3,117 @@ import AppKit
 
 /// Inline pane that configures and triggers exports. Rendered as the
 /// `.export` branch of `ContentView`'s `WorkspaceMode` switch — the
-/// segmented toolbar picker (or ⌘1 / ⌘2) flips between this and the
-/// viewer. Exits leave the underlying singletons untouched, so any
-/// running batch keeps going and the toolbar pill keeps reporting.
+/// segmented toolbar picker (or ⌘3) flips between this and the
+/// viewer. Per-shoot working state lives on `state.exportConfig`;
+/// the per-window runner on `state.exportRunner`. The global
+/// preset library (`ExportPresetsLibrary.shared`) seeds the working
+/// state when the user applies a preset and is the global save
+/// target for "Save back to <preset>" / "Save as new" actions.
 struct ExportPaneView: View {
     @Bindable var state: ViewerState
     /// Workspace-wide focus binding owned by `ContentView`.
     /// Binding the TextField via this shared state (instead of
     /// a private @FocusState) is what makes the Export → View
-    /// transition reliably re-engage canvas key handling —
-    /// SwiftUI sees the focus change as one atomic transition
-    /// and propagates it into AppKit's responder chain.
+    /// transition reliably re-engage canvas key handling.
     var focus: FocusState<WorkspaceFocus?>.Binding
-    @State private var settings = ExportSettings.shared
-    private var runner: ExportRunner { state.exportRunner }
+    @State private var library = ExportPresetsLibrary.shared
     @State private var dropTarget: UUID? = nil
+    @State private var showSaveAsPresetSheet = false
+    @State private var pendingPresetName = ""
+    @State private var showOverwritePresetSheet = false
+    @State private var pendingOverwriteID: UUID? = nil
+    @State private var showManagePresetsSheet = false
 
-    private var projectNameBinding: Binding<String> {
-        Binding(
-            get: { settings.projectName },
-            set: { settings.setProjectName($0) }
-        )
-    }
-
-    private var canRun: Bool {
-        settings.isValidForExport && !settings.destinations.isEmpty
-    }
+    private var runner: ExportRunner { state.exportRunner }
 
     var body: some View {
         VStack(spacing: 0) {
-            header
-            Divider()
-            ScrollView { content.padding(16) }
-            Divider()
-            footer
+            if state.exportConfig != nil {
+                fullPane
+            } else {
+                emptyState
+            }
         }
-        // Cap the pane width and let the outer frame centre it
-        // horizontally — same spirit as the starter screen's
-        // intrinsically-narrow VStack sitting centred in the
-        // canvas's full-width container. Wide windows otherwise
-        // make TextField + destination rows stretch awkwardly.
         .frame(maxWidth: 800)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // Focus is driven by ContentView's mode-change handler
-        // (sets `focus = .exportProjectName`) — no `onAppear`
-        // trick needed here.
     }
 
-    // MARK: header / footer
+    // MARK: - Empty state
 
-    private var header: some View {
+    private var emptyState: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "arrow.up.doc.on.clipboard")
+                .font(.system(size: 36))
+                .foregroundStyle(.tertiary)
+            Text("Open a shoot to start an export")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+            Text("Each shoot remembers its own project name, destinations, and preset.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // MARK: - Full pane (shoot is loaded)
+
+    @ViewBuilder
+    private var fullPane: some View {
+        if let config = state.exportConfig {
+            VStack(spacing: 0) {
+                header(config: config)
+                Divider()
+                ScrollView { content(config: config).padding(16) }
+                Divider()
+                footer(config: config)
+            }
+            .sheet(isPresented: $showSaveAsPresetSheet) {
+                SaveAsPresetSheet(
+                    name: $pendingPresetName,
+                    onCancel: { showSaveAsPresetSheet = false },
+                    onSave: { newName in
+                        _ = config.saveAsNewPreset(name: newName)
+                        showSaveAsPresetSheet = false
+                        pendingPresetName = ""
+                    }
+                )
+            }
+            .sheet(isPresented: $showOverwritePresetSheet) {
+                OverwritePresetSheet(
+                    library: library,
+                    selectedID: $pendingOverwriteID,
+                    excludingID: config.sourcePresetID,
+                    onCancel: { showOverwritePresetSheet = false },
+                    onConfirm: { id in
+                        config.saveOverwriting(presetID: id)
+                        showOverwritePresetSheet = false
+                        pendingOverwriteID = nil
+                    }
+                )
+            }
+            .sheet(isPresented: $showManagePresetsSheet) {
+                ManagePresetsSheet(library: library,
+                                   onClose: { showManagePresetsSheet = false })
+            }
+        }
+    }
+
+    private func header(config: ShootExportConfig) -> some View {
         HStack(spacing: 12) {
             Image(systemName: "arrow.up.doc.on.clipboard")
                 .font(.title2)
                 .foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Export").font(.title3.bold())
-                if !canRun {
+                if !canRun(config) {
                     Text("Set a project name and add at least one destination to enable export.")
                         .font(.caption).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("export.header.summary")
                 } else {
-                    Text("Files land at <destination>/\(settings.projectName.trimmingCharacters(in: .whitespacesAndNewlines))/")
+                    Text("Files land at <destination>/\(config.trimmedProjectName)/")
                         .font(.caption.monospaced()).foregroundStyle(.secondary)
                         .lineLimit(1).truncationMode(.middle)
+                        .accessibilityIdentifier("export.header.summary")
                 }
             }
             Spacer()
@@ -73,7 +121,7 @@ struct ExportPaneView: View {
         .padding(16)
     }
 
-    private var footer: some View {
+    private func footer(config: ShootExportConfig) -> some View {
         HStack(spacing: 12) {
             if let batch = runner.batchProgress {
                 VStack(alignment: .leading, spacing: 4) {
@@ -100,31 +148,233 @@ struct ExportPaneView: View {
                 Button("Cancel all") { runner.cancelAll() }
             }
             Button {
-                runExportAll()
+                runExportAll(config: config)
             } label: {
                 Label("Export all", systemImage: "arrow.up.doc.fill")
             }
             .keyboardShortcut(.defaultAction)
-            .disabled(!canRun || runner.isRunning)
+            .disabled(!canRun(config) || runner.isRunning)
             .accessibilityIdentifier("export.runAll")
         }
         .padding(16)
-        // Anchored on the whole footer (rather than the Export-all
-        // button) so the .top callout centres above the window
-        // instead of above the right-edge button — the latter
-        // overflows the window because Export mode has no canvas
-        // anchor for the overlay's clamp logic to fall back on.
         .helpAnchor(.exportRun)
     }
 
-    // MARK: content
+    // MARK: - Content sections
 
-    private var content: some View {
+    @ViewBuilder
+    private func content(config: ShootExportConfig) -> some View {
         VStack(alignment: .leading, spacing: 18) {
-            projectSection
+            presetSection(config: config)
+            projectSection(config: config)
             sourceSection
-            destinationsSection
+            destinationsSection(config: config)
         }
+    }
+
+    private func presetSection(config: ShootExportConfig) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Preset")
+                    .font(.caption.smallCaps()).foregroundStyle(.secondary)
+                Spacer()
+                Button {
+                    showManagePresetsSheet = true
+                } label: {
+                    Label("Manage presets…", systemImage: "slider.horizontal.3")
+                }
+                .controlSize(.small)
+                .accessibilityIdentifier("export.managePresets")
+            }
+            HStack(spacing: 8) {
+                presetPicker(config: config)
+                presetActionsMenu(config: config)
+            }
+            presetProvenanceLine(config: config)
+        }
+    }
+
+    private func presetPicker(config: ShootExportConfig) -> some View {
+        Menu {
+            Button("No preset") { config.clearPreset() }
+            if !library.presets.isEmpty {
+                Divider()
+                ForEach(library.presets) { preset in
+                    Button {
+                        config.applyPreset(preset)
+                    } label: {
+                        if preset.id == config.sourcePresetID {
+                            Label(preset.name, systemImage: "checkmark")
+                        } else {
+                            Text(preset.name)
+                        }
+                    }
+                }
+            }
+            Divider()
+            Button("Save current as new preset…") {
+                pendingPresetName = config.sourcePresetNameCached ?? ""
+                showSaveAsPresetSheet = true
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "tray.full")
+                Text(presetPickerLabel(config: config))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+        }
+        .controlSize(.regular)
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .accessibilityIdentifier("export.presetPicker")
+        .accessibilityLabel(presetPickerLabel(config: config))
+    }
+
+    private func presetPickerLabel(config: ShootExportConfig) -> String {
+        if config.sourcePresetID == nil { return "No preset" }
+        return config.sourcePresetNameCached ?? "Preset"
+    }
+
+    @ViewBuilder
+    private func presetActionsMenu(config: ShootExportConfig) -> some View {
+        Menu {
+            if config.sourcePresetID != nil, config.sourcePresetExists {
+                Button("Save changes to \"\(config.sourcePresetNameCached ?? "preset")\"") {
+                    config.saveBackToSourcePreset()
+                }
+                .disabled(!config.isModifiedFromPreset)
+            }
+            Button("Save as new preset…") {
+                pendingPresetName = config.sourcePresetNameCached ?? ""
+                showSaveAsPresetSheet = true
+            }
+            Button("Save to existing preset…") {
+                pendingOverwriteID = nil
+                showOverwritePresetSheet = true
+            }
+            .disabled(library.presets.isEmpty
+                || (library.presets.count == 1 && library.presets[0].id == config.sourcePresetID))
+        } label: {
+            Image(systemName: "ellipsis.circle")
+        }
+        .menuStyle(.borderlessButton)
+        .controlSize(.regular)
+        .fixedSize()
+        .accessibilityIdentifier("export.presetActions")
+    }
+
+    /// Text shown by the provenance badge for the current state. Kept
+    /// as a single string per state so the `export.presetProvenance.badge`
+    /// AX label is the authoritative testing surface. Tests assert on
+    /// the prefix ("Modified from", "Up to date with", "No preset
+    /// applied"); the suffix is the preset name when applicable.
+    private func provenanceBadgeText(config: ShootExportConfig) -> String {
+        if config.sourcePresetID == nil {
+            return "No preset applied"
+        }
+        let name = config.sourcePresetNameCached ?? "?"
+        if config.isModifiedFromPreset {
+            return "Modified from \"\(name)\""
+        }
+        return "Up to date with \"\(name)\""
+    }
+
+    @ViewBuilder
+    private func presetProvenanceLine(config: ShootExportConfig) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if config.presetChangedSinceApply {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    Text("Preset \"\(config.sourcePresetNameCached ?? "?")\" was updated since you applied it.")
+                        .font(.caption)
+                    Button("Reload from preset") {
+                        config.reloadFromSourcePreset()
+                    }
+                    .controlSize(.small)
+                    .accessibilityIdentifier("export.presetProvenance.reloadFromPreset")
+                    Spacer()
+                }
+                .padding(8)
+                .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
+                .accessibilityIdentifier("export.presetProvenance.staleBanner")
+            }
+            badgeLabel(config: config)
+        }
+    }
+
+    /// The provenance chip — always rendered (even with no preset
+    /// applied) so the `export.presetProvenance.badge` identifier is
+    /// reliably present; its label content varies by state.
+    ///
+    /// `.accessibilityElement(children: .ignore)` makes the wrapper
+    /// the AX leaf so `.accessibilityLabel(text)` actually surfaces
+    /// — without it, SwiftUI keeps the inner `Label`/`Text` as the
+    /// AX descendants and XCUITest reads an empty label off the
+    /// wrapper.
+    @ViewBuilder
+    private func badgeLabel(config: ShootExportConfig) -> some View {
+        let text = provenanceBadgeText(config: config)
+        Group {
+            if config.sourcePresetID == nil {
+                Text(text)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            } else if config.isModifiedFromPreset {
+                Label(text, systemImage: "pencil")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            } else {
+                Label(text, systemImage: "checkmark.circle")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityIdentifier("export.presetProvenance.badge")
+        .accessibilityLabel(text)
+    }
+
+    private func projectSection(config: ShootExportConfig) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Project name")
+                .font(.caption.smallCaps()).foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                TextField("Required to export", text: Binding(
+                    get: { config.projectName },
+                    set: { config.setProjectNameFromUser($0) }
+                ))
+                .textFieldStyle(.roundedBorder)
+                .focused(focus, equals: .exportProjectName)
+                .disabled(runner.isRunning)
+                .accessibilityIdentifier("export.projectName")
+                if config.projectNameIsUserOverride {
+                    Button {
+                        let dates = state.entryExif.values.compactMap(\.dateTime)
+                        config.resetProjectNameToAuto(dates: dates)
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .controlSize(.small)
+                    .help("Re-derive from photo dates")
+                    .accessibilityIdentifier("export.projectName.resetToAuto")
+                }
+            }
+            Toggle(isOn: Binding(
+                get: { config.readOnceWriteMany },
+                set: { config.setReadOnceWriteMany($0) }
+            )) {
+                Label("Read each file once, write to all destinations",
+                      systemImage: "arrow.triangle.branch")
+                    .font(.caption)
+            }
+            .toggleStyle(.checkbox)
+            .help("Saves I/O on slow source media (SD cards) when running 'Export all'. Has no effect when running destinations individually.")
+            .disabled(runner.isRunning)
+            .accessibilityIdentifier("export.readOnceWriteMany")
+        }
+        .helpAnchor(.exportProject)
     }
 
     private var sourceSection: some View {
@@ -138,35 +388,14 @@ struct ExportPaneView: View {
         }
     }
 
-    private var projectSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Project name")
-                .font(.caption.smallCaps()).foregroundStyle(.secondary)
-            TextField("Required to export", text: projectNameBinding)
-                .textFieldStyle(.roundedBorder)
-                .focused(focus, equals: .exportProjectName)
-                .disabled(runner.isRunning)
-                .accessibilityIdentifier("export.projectName")
-            Toggle(isOn: $settings.readOnceWriteMany) {
-                Label("Read each file once, write to all destinations",
-                      systemImage: "arrow.triangle.branch")
-                    .font(.caption)
-            }
-            .toggleStyle(.checkbox)
-            .help("Saves I/O on slow source media (SD cards) when running 'Export all'. Has no effect when running destinations individually.")
-            .disabled(runner.isRunning)
-        }
-        .helpAnchor(.exportProject)
-    }
-
-    private var destinationsSection: some View {
+    private func destinationsSection(config: ShootExportConfig) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("Destinations")
                     .font(.caption.smallCaps()).foregroundStyle(.secondary)
                 Spacer()
                 Button {
-                    pickDestinationFolder()
+                    pickDestinationFolder(config: config)
                 } label: {
                     Label("Add destination", systemImage: "plus")
                 }
@@ -177,24 +406,25 @@ struct ExportPaneView: View {
                 .accessibilityIdentifier("export.addDestination")
             }
 
-            if settings.destinations.isEmpty {
-                Text("No destinations configured. Add one to start.")
+            if config.destinations.isEmpty {
+                Text("No destinations configured. Apply a preset or add one to start.")
                     .font(.callout).foregroundStyle(.secondary)
                     .padding(.vertical, 12)
             } else {
                 LazyVStack(alignment: .leading, spacing: 12) {
-                    ForEach(settings.destinations) { dest in
+                    ForEach(Array(config.destinations.enumerated()), id: \.element.id) { idx, dest in
                         ExportDestinationRow(
+                            rowIndex: idx,
                             destination: dest,
                             runnerState: runner.perDestination[dest.id] ?? .idle,
                             completedAt: runner.perDestinationCompletedAt[dest.id],
-                            canRun: canRun,
+                            canRun: canRun(config),
                             isAnotherRunning: runner.isRunning,
                             planningProgress: runner.planningProgress?.destinations[dest.id],
-                            onRunOne: { runExportOne(dest) },
+                            onRunOne: { runExportOne(dest, config: config) },
                             onCancel: { runner.cancel(dest.id) },
-                            onRemove: { settings.remove(id: dest.id) },
-                            onChange: { mutate in settings.update(id: dest.id, mutate) }
+                            onRemove: { config.removeDestination(id: dest.id) },
+                            onChange: { mutate in config.updateDestination(id: dest.id, mutate) }
                         )
                         .overlay(alignment: .top) {
                             if dropTarget == dest.id {
@@ -211,7 +441,7 @@ struct ExportPaneView: View {
                                 guard let src = ids.first,
                                       let sourceID = UUID(uuidString: src),
                                       sourceID != dest.id else { return false }
-                                settings.move(sourceID, before: dest.id)
+                                config.moveDestination(sourceID, before: dest.id)
                                 dropTarget = nil
                                 return true
                             },
@@ -222,11 +452,7 @@ struct ExportPaneView: View {
                                 }
                             }
                         )
-                        // Only the first card publishes the help
-                        // anchor — one callout per kind of card is
-                        // enough, and we want it absent entirely
-                        // when there are no destinations.
-                        .conditional(dest.id == settings.destinations.first?.id) { row in
+                        .conditional(dest.id == config.destinations.first?.id) { row in
                             row.helpAnchor(.exportDestinationCard)
                         }
                     }
@@ -235,41 +461,38 @@ struct ExportPaneView: View {
         }
     }
 
-    // MARK: actions
+    // MARK: - Helpers
 
-    private func pickDestinationFolder() {
+    private func canRun(_ config: ShootExportConfig) -> Bool {
+        config.isValidForExport && !config.destinations.isEmpty
+    }
+
+    // MARK: - Actions
+
+    private func pickDestinationFolder(config: ShootExportConfig) {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
-        // Let the user create a new folder inline (the picker grows a
-        // "New Folder" button in its toolbar). Without this, they'd have
-        // to bounce out to Finder, create the folder, then come back.
         panel.canCreateDirectories = true
         panel.prompt = "Choose"
         panel.message = "Select or create a destination folder for exports"
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        // Refuse anything that conflicts with the source shoot
-        // folder — same path, nested under, or containing it.
-        // Copying back into the originals violates the project-
-        // wide "never mutate originals" rule; orphan-prune at a
-        // destination that wraps the source could wipe real files.
         if let shootURL = state.shoot?.folderURL,
-           let conflict = ExportSettings.sourceConflict(
+           let conflict = ExportPathGeometry.sourceConflict(
             destPath: url.path, sourcePath: shootURL.path) {
             presentSourceConflict(conflict, attemptedPath: url.path,
                                   sourcePath: shootURL.path)
             return
         }
-        let result = settings.add(path: url.path)
+        let result = config.addDestination(path: url.path)
         if case .ok = result { return }
         presentAddRejection(result, attemptedPath: url.path)
     }
 
-    /// User-facing copy for the three SourceConflict cases.
-    private func presentSourceConflict(_ conflict: ExportSettings.SourceConflict,
-                                        attemptedPath: String,
-                                        sourcePath: String) {
+    private func presentSourceConflict(_ conflict: ExportPreset.SourceConflict,
+                                       attemptedPath: String,
+                                       sourcePath: String) {
         let alert = NSAlert()
         alert.alertStyle = .warning
         switch conflict {
@@ -287,10 +510,7 @@ struct ExportPaneView: View {
         alert.runModal()
     }
 
-    /// Modal NSAlert that explains why the picked folder was refused.
-    /// Three rejection reasons are all variations on "destinations would
-    /// stomp on each other if both ran" — see `ExportSettings.AddResult`.
-    private func presentAddRejection(_ result: ExportSettings.AddResult,
+    private func presentAddRejection(_ result: ExportPreset.AddResult,
                                      attemptedPath: String) {
         let alert = NSAlert()
         alert.alertStyle = .warning
@@ -311,56 +531,54 @@ struct ExportPaneView: View {
         alert.runModal()
     }
 
-    private func runExportAll() {
-        guard canRun, let shoot = state.shoot else { return }
-        // Re-validate against the source folder on run too — a
-        // destination could've been added against a different shoot
-        // and now collides with the currently-open one.
-        if !confirmSourceConflictsClean(forSingle: nil, shoot: shoot) { return }
-        let needsConfirm = settings.destinations.contains(where: \.removeOrphans)
-        if needsConfirm, !confirmOrphanRemoval(forSingle: nil) { return }
-        // Destination-not-empty enforcement now happens in
-        // ExportRunner's planning phase per-destination,
-        // gated by each Destination's own `allowNonEmpty`
-        // checkbox. No pre-flight modal.
+    private func runExportAll(config: ShootExportConfig) {
+        guard canRun(config), let shoot = state.shoot else { return }
+        if !confirmSourceConflictsClean(forSingle: nil, shoot: shoot, config: config) { return }
+        let needsConfirm = config.destinations.contains(where: \.removeOrphans)
+        if needsConfirm, !confirmOrphanRemoval(forSingle: nil, config: config) { return }
+        // Flush any debounced save so the per-shoot config file
+        // exists on disk with a current mtime before the export
+        // starts. LRU purge keeps shoots by file mtime — a shoot
+        // that's actively being exported from must survive even if
+        // the user never edited its config in this session.
+        config.flushPendingSave()
         runner.startAll(
             entries: shoot.entries,
             entryXMPs: state.entryXMPs,
-            projectName: settings.projectName.trimmingCharacters(in: .whitespacesAndNewlines),
-            destinations: settings.destinations,
-            sharedRead: settings.readOnceWriteMany
+            projectName: config.trimmedProjectName,
+            destinations: config.destinations,
+            sharedRead: config.readOnceWriteMany
         )
     }
 
-    private func runExportOne(_ dest: ExportSettings.Destination) {
-        guard canRun, let shoot = state.shoot else { return }
-        if !confirmSourceConflictsClean(forSingle: dest, shoot: shoot) { return }
-        if dest.removeOrphans, !confirmOrphanRemoval(forSingle: dest) { return }
+    private func runExportOne(_ dest: ExportPreset.Destination,
+                              config: ShootExportConfig) {
+        guard canRun(config), let shoot = state.shoot else { return }
+        if !confirmSourceConflictsClean(forSingle: dest, shoot: shoot, config: config) { return }
+        if dest.removeOrphans, !confirmOrphanRemoval(forSingle: dest, config: config) { return }
+        config.flushPendingSave()
         runner.startOne(
             dest.id,
             entries: shoot.entries,
             entryXMPs: state.entryXMPs,
-            projectName: settings.projectName.trimmingCharacters(in: .whitespacesAndNewlines),
+            projectName: config.trimmedProjectName,
             destination: dest
         )
     }
 
-    /// Returns true when the destination(s) about to run don't
-    /// conflict with the source shoot folder, false (after presenting
-    /// an alert) otherwise. `forSingle` scopes the check to one
-    /// destination row; nil checks every destination.
     private func confirmSourceConflictsClean(
-        forSingle: ExportSettings.Destination?,
-        shoot: Shoot
+        forSingle: ExportPreset.Destination?,
+        shoot: Shoot,
+        config: ShootExportConfig
     ) -> Bool {
         let sourcePath = shoot.folderURL.path
-        let conflicts: [(ExportSettings.Destination, ExportSettings.SourceConflict)]
+        let conflicts: [(ExportPreset.Destination, ExportPreset.SourceConflict)]
         if let dest = forSingle {
-            conflicts = ExportSettings.sourceConflict(
+            conflicts = ExportPathGeometry.sourceConflict(
                 destPath: dest.path, sourcePath: sourcePath
             ).map { [(dest, $0)] } ?? []
         } else {
-            conflicts = settings.sourceConflicts(againstSource: sourcePath)
+            conflicts = config.sourceConflicts(againstSource: sourcePath)
         }
         guard !conflicts.isEmpty else { return true }
         let alert = NSAlert()
@@ -394,16 +612,14 @@ struct ExportPaneView: View {
         return false
     }
 
-    /// Confirm before destructive orphan removal. `forSingle == nil` means
-    /// the user pressed Export all and one or more destinations have the
-    /// flag enabled.
-    private func confirmOrphanRemoval(forSingle: ExportSettings.Destination?) -> Bool {
+    private func confirmOrphanRemoval(forSingle: ExportPreset.Destination?,
+                                      config: ShootExportConfig) -> Bool {
         let alert = NSAlert()
         alert.messageText = "Remove orphaned files?"
         if let dest = forSingle {
             alert.informativeText = "Destination \(dest.path) has 'Remove orphans' enabled. Any files at the destination whose stem isn't in the filtered selection will be deleted after the copy phase. This cannot be undone."
         } else {
-            let count = settings.destinations.filter(\.removeOrphans).count
+            let count = config.destinations.filter(\.removeOrphans).count
             alert.informativeText = "\(count) of your destinations have 'Remove orphans' enabled. Any files at those destinations whose stem isn't in the filtered selection will be deleted after the copy phase. This cannot be undone."
         }
         alert.alertStyle = .warning
@@ -412,7 +628,175 @@ struct ExportPaneView: View {
         goBtn.hasDestructiveAction = true
         return alert.runModal() == .alertSecondButtonReturn
     }
+}
 
+/// "Save as new preset…" inline sheet — takes a name, calls back.
+private struct SaveAsPresetSheet: View {
+    @Binding var name: String
+    let onCancel: () -> Void
+    let onSave: (String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Save as new preset")
+                .font(.headline)
+            TextField("Preset name", text: $name)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 320)
+                .accessibilityIdentifier("export.saveAsPreset.name")
+            HStack {
+                Spacer()
+                Button("Cancel", action: onCancel)
+                    .keyboardShortcut(.cancelAction)
+                    .accessibilityIdentifier("export.saveAsPreset.cancel")
+                Button("Save") {
+                    let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !trimmed.isEmpty else { return }
+                    onSave(trimmed)
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .accessibilityIdentifier("export.saveAsPreset.save")
+            }
+        }
+        .padding(16)
+    }
+}
+
+/// "Save to existing preset…" inline sheet — pick a preset to overwrite.
+private struct OverwritePresetSheet: View {
+    let library: ExportPresetsLibrary
+    @Binding var selectedID: UUID?
+    let excludingID: UUID?
+    let onCancel: () -> Void
+    let onConfirm: (UUID) -> Void
+
+    private var options: [ExportPreset] {
+        library.presets.filter { $0.id != excludingID }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Overwrite existing preset")
+                .font(.headline)
+            Text("Choose a preset to replace with this shoot's current destinations and settings.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Picker("Preset", selection: $selectedID) {
+                Text("Select preset…").tag(UUID?.none)
+                ForEach(options) { p in
+                    Text(p.name).tag(UUID?.some(p.id))
+                }
+            }
+            .pickerStyle(.menu)
+            .frame(width: 320)
+            .accessibilityIdentifier("export.overwritePreset.picker")
+            HStack {
+                Spacer()
+                Button("Cancel", action: onCancel)
+                    .keyboardShortcut(.cancelAction)
+                    .accessibilityIdentifier("export.overwritePreset.cancel")
+                Button("Overwrite") {
+                    guard let id = selectedID else { return }
+                    onConfirm(id)
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(selectedID == nil)
+                .accessibilityIdentifier("export.overwritePreset.confirm")
+            }
+        }
+        .padding(16)
+    }
+}
+
+/// Minimal preset-library management: list, rename, delete, and
+/// configure the default `readOnceWriteMany` value used when
+/// creating new presets.
+private struct ManagePresetsSheet: View {
+    @Bindable var library: ExportPresetsLibrary
+    let onClose: () -> Void
+    @State private var renamingID: UUID? = nil
+    @State private var renameDraft: String = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Manage presets")
+                .font(.headline)
+            if library.presets.isEmpty {
+                Text("No presets yet. Configure destinations in a shoot and use \"Save as new preset…\" to create one.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: 360, alignment: .leading)
+            } else {
+                List {
+                    ForEach(Array(library.presets.enumerated()), id: \.element.id) { idx, preset in
+                        HStack(spacing: 6) {
+                            if renamingID == preset.id {
+                                TextField("Name", text: $renameDraft)
+                                    .textFieldStyle(.roundedBorder)
+                                    .accessibilityIdentifier("export.managePresets.row.\(idx).renameField")
+                                Button("Save") {
+                                    var updated = preset
+                                    updated.name = renameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                                    if !updated.name.isEmpty {
+                                        library.update(updated)
+                                    }
+                                    renamingID = nil
+                                }
+                                .controlSize(.small)
+                                .accessibilityIdentifier("export.managePresets.row.\(idx).saveRename")
+                                Button("Cancel") { renamingID = nil }
+                                    .controlSize(.small)
+                                    .accessibilityIdentifier("export.managePresets.row.\(idx).cancelRename")
+                            } else {
+                                Text(preset.name)
+                                    .accessibilityIdentifier("export.managePresets.row.\(idx).name")
+                                Spacer()
+                                Text("\(preset.destinations.count) destination\(preset.destinations.count == 1 ? "" : "s")")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Button {
+                                    renamingID = preset.id
+                                    renameDraft = preset.name
+                                } label: {
+                                    Image(systemName: "pencil")
+                                }
+                                .buttonStyle(.borderless)
+                                .controlSize(.small)
+                                .accessibilityIdentifier("export.managePresets.row.\(idx).rename")
+                                Button(role: .destructive) {
+                                    library.remove(id: preset.id)
+                                } label: {
+                                    Image(systemName: "trash")
+                                }
+                                .buttonStyle(.borderless)
+                                .controlSize(.small)
+                                .accessibilityIdentifier("export.managePresets.row.\(idx).delete")
+                            }
+                        }
+                    }
+                }
+                .frame(width: 420, height: 220)
+            }
+            Divider()
+            Toggle(isOn: Binding(
+                get: { library.defaultReadOnceWriteMany },
+                set: { library.defaultReadOnceWriteMany = $0 }
+            )) {
+                Text("New presets default to read-once / write-many")
+                    .font(.caption)
+            }
+            .toggleStyle(.checkbox)
+            .accessibilityIdentifier("export.managePresets.defaultRoWM")
+            HStack {
+                Spacer()
+                Button("Done", action: onClose)
+                    .keyboardShortcut(.defaultAction)
+                    .accessibilityIdentifier("export.managePresets.done")
+            }
+        }
+        .padding(16)
+    }
 }
 
 /// Human-friendly "ago" label. Under a minute → "<1m ago"; under an hour
