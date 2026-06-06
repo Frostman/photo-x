@@ -615,3 +615,152 @@ vm-pull:
 # the outcome of the last vm-e2e run.
 vm-status:
     ./scripts/vm-remote.sh status
+
+# ─── Linux indexer (NAS-side sidecar producer) ──────────────────────────────
+#
+# `photox-indexer` is a standalone Swift binary that scans a shoot
+# folder and writes a sidecar plist (.photox-index.plist) the macOS
+# app prefer-loads on shoot open. Built from Indexer/ (separate
+# SwiftPM package) and cross-compiled from this Mac using Apple's
+# Static Linux SDK so the artifact is a fully static ELF that runs
+# on any Linux distro the NAS uses, with `exiftool` as the only
+# runtime dependency.
+#
+# Typical flow (one-time):
+#   just linux-indexer-sdk-install   → ~305 MB download, ~5 min
+#   just linux-indexer-build         → cross-compile x86_64 ELF
+#   just linux-indexer-deploy nas    → scp to /usr/local/bin on NAS
+#
+# Then on the NAS:
+#   photox-indexer /path/to/shoot    → writes .photox-index.plist
+#
+# Pinned to a specific Swift Static Linux SDK version so this Mac
+# doesn't redownload on every Swift toolchain bump; bump the URL +
+# checksum + toolchain version together when upgrading. The
+# checksum is required by `swift sdk install` for remote URLs (it
+# refuses to install without one); the official value comes from
+# https://www.swift.org/documentation/articles/static-linux-getting-started.html
+SWIFT_STATIC_LINUX_SDK_URL := "https://download.swift.org/swift-6.3.2-release/static-sdk/swift-6.3.2-RELEASE/swift-6.3.2-RELEASE_static-linux-0.1.0.artifactbundle.tar.gz"
+SWIFT_STATIC_LINUX_SDK_SHA256 := "3fd798bef6f4408f1ea5a6f94ce4d4052830c4326ab85ebc04f983f01b3da407"
+# The static SDK is built with swift.org's open-source toolchain
+# (`swiftlang-6.3.2.x` vs Apple's Xcode-bundled `swiftlang-6.3.2.1.108`).
+# Cross-compiling from Apple's swift fails with a "compiled module
+# was created by an older version of the compiler" error on Foundation,
+# so we install the matching open-source toolchain via swiftly and
+# invoke `swift` through `swiftly run` for the cross-compile only —
+# Apple's swift remains the default for everything else.
+SWIFT_OSS_TOOLCHAIN := "6.3.2"
+
+# Install Apple's Swift Static Linux SDK + the matching open-source
+# Swift toolchain via swiftly so cross-compile actually works.
+# Idempotent — each step is a no-op when already satisfied.
+#
+# What lands where:
+#   brew → swiftly CLI in $PATH
+#   ~/Library/Developer/Toolchains/swift-{{SWIFT_OSS_TOOLCHAIN}}-…xctoolchain/  (~1 GB)
+#   ~/Library/org.swift.swiftpm/swift-sdks/ — the Static Linux SDK   (~1.2 GB unpacked)
+linux-indexer-sdk-install:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    # 1. swiftly — Homebrew formula, idempotent.
+    if ! command -v swiftly >/dev/null 2>&1; then
+        echo "==> Installing swiftly via Homebrew"
+        brew install swiftly
+    else
+        echo "swiftly: already installed ($(swiftly --version 2>&1 | head -1))"
+    fi
+
+    # First-run init. `swiftly init` is interactive; --assume-yes makes
+    # it scripted. It's a no-op when the home dir already exists.
+    if [ ! -d "${HOME}/Library/Application Support/swiftly" ]; then
+        swiftly init --assume-yes --no-modify-profile --quiet-shell-followup
+    fi
+
+    # 2. swift.org open-source toolchain.
+    if swiftly list 2>/dev/null | grep -q "{{SWIFT_OSS_TOOLCHAIN}}"; then
+        echo "swiftly: {{SWIFT_OSS_TOOLCHAIN}} toolchain already installed"
+    else
+        echo "==> Installing swift.org Swift {{SWIFT_OSS_TOOLCHAIN}} via swiftly (~1 GB)"
+        swiftly install "{{SWIFT_OSS_TOOLCHAIN}}"
+    fi
+
+    # 3. Static Linux SDK. Must be installed under the OSS toolchain so
+    # cross-compile-time `swift sdk list` resolves it. Apple's swift
+    # has its own SDK registry that we don't share.
+    if swiftly run swift sdk list 2>/dev/null | grep -qi 'static-linux'; then
+        echo "Swift Static Linux SDK already installed under {{SWIFT_OSS_TOOLCHAIN}}:"
+        swiftly run swift sdk list
+    else
+        echo "==> Downloading + installing Swift Static Linux SDK (~305 MB) under {{SWIFT_OSS_TOOLCHAIN}}"
+        swiftly run swift sdk install "{{SWIFT_STATIC_LINUX_SDK_URL}}" \
+            --checksum "{{SWIFT_STATIC_LINUX_SDK_SHA256}}"
+    fi
+
+# Cross-compile photox-indexer into build/photox-indexer-<arch>
+# using the swiftly-managed open-source toolchain (Apple's Xcode swift
+# can't drive the Static Linux SDK — see linux-indexer-sdk-install).
+# Default arch matches the user's NAS (x86_64); pass `arm64`
+# explicitly to cross-build for an arm64 NAS (Synology, Pi, etc.).
+#
+#   just linux-indexer-build           → x86_64 (default)
+#   just linux-indexer-build arm64     → arm64
+linux-indexer-build arch='x86_64':
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "{{arch}}" in
+        x86_64) SDK=x86_64-swift-linux-musl ;;
+        arm64|aarch64) SDK=aarch64-swift-linux-musl ;;
+        *) echo "error: unknown arch '{{arch}}' (expected x86_64 or arm64)" >&2; exit 2 ;;
+    esac
+    if ! command -v swiftly >/dev/null 2>&1; then
+        echo "error: swiftly not installed — run 'just linux-indexer-sdk-install' first" >&2
+        exit 2
+    fi
+    if ! swiftly run swift sdk list 2>/dev/null | grep -qi 'static-linux'; then
+        echo "error: Swift Static Linux SDK not installed — run 'just linux-indexer-sdk-install' first" >&2
+        exit 2
+    fi
+    # Inject the same git-derived version the macOS app uses so the
+    # sidecar's indexerVersion field reads like a normal PhotoX
+    # release stamp. main.swift reads PHOTOX_INDEXER_VERSION at
+    # runtime; the binary defaults to "dev" if the env var isn't
+    # set, so the build doesn't need to embed it — set it when
+    # running the binary on the NAS instead.
+    COMMITS=$(git rev-list --count HEAD)
+    SHA9=$(git rev-parse --short=9 HEAD)
+    DIRTY=""
+    [ -n "$(git status --porcelain)" ] && DIRTY="-dirty"
+    DESCRIBE="v0.${COMMITS}.0-${SHA9}${DIRTY}"
+    echo "==> Building photox-indexer ($SDK) — version $DESCRIBE"
+    # `swiftly run` activates the OSS toolchain for this one
+    # invocation only — Apple's swift stays the default for the
+    # macOS app build, `just build`, etc.
+    swiftly run swift build --package-path Indexer -c release --swift-sdk "$SDK"
+    mkdir -p build
+    cp "Indexer/.build/$SDK/release/photox-indexer" "build/photox-indexer-{{arch}}"
+    # Belt-and-braces check: the static SDK is supposed to produce a
+    # statically linked ELF, but a misconfigured target triple could
+    # silently fall back to a dynamic link and break on the NAS at
+    # `cannot open libsomething.so.X`. `file(1)` is portable across
+    # Linux/macOS, doesn't require a Linux box to inspect ELFs, and
+    # prints the linkage class explicitly.
+    echo
+    file "build/photox-indexer-{{arch}}"
+    echo "    -> build/photox-indexer-{{arch}}"
+    echo "       (run as: PHOTOX_INDEXER_VERSION='$DESCRIBE' build/photox-indexer-{{arch}} /path/to/shoot)"
+
+# Build + scp the binary to the NAS, then exec it from $PATH there
+# (assumes /usr/local/bin is on root's PATH; adjust the dest if not).
+# Builds first so a stale binary never gets shipped.
+#
+#   just linux-indexer-deploy             → x86_64 → nas.local:/usr/local/bin
+#   just linux-indexer-deploy myhost      → x86_64 → myhost:/usr/local/bin
+#   just linux-indexer-deploy myhost arm64 → arm64 → myhost:/usr/local/bin
+linux-indexer-deploy host='nas.local' arch='x86_64':
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just linux-indexer-build {{arch}}
+    echo "==> Deploying to {{host}}:/usr/local/bin/photox-indexer"
+    scp "build/photox-indexer-{{arch}}" "{{host}}:/usr/local/bin/photox-indexer"
+    ssh "{{host}}" 'chmod +x /usr/local/bin/photox-indexer && photox-indexer --help' || true

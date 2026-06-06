@@ -19,6 +19,12 @@ Packages/
 Package.pins
 Package.resolved
 
+# swiftly project toolchain pin — `just linux-indexer-build`
+# is explicit about the toolchain via `swiftly run`, and Xcode
+# uses its own toolchain. Committing this would force swiftly on
+# devs who only build the macOS app.
+.swift-version
+
 # Misc
 .DS_Store
 *.swp
