@@ -238,7 +238,7 @@ struct ExportPaneView: View {
         Menu {
             if config.sourcePresetID != nil, config.sourcePresetExists {
                 Button("Save changes to \"\(config.sourcePresetNameCached ?? "preset")\"") {
-                    config.saveBackToSourcePreset()
+                    saveChangesToPreset(config: config)
                 }
                 .disabled(!config.isModifiedFromPreset)
                 Button("Reset to \"\(config.sourcePresetNameCached ?? "preset")\"") {
@@ -611,6 +611,19 @@ struct ExportPaneView: View {
         alert.addButton(withTitle: "OK")
         alert.runModal()
         return false
+    }
+
+    private func saveChangesToPreset(config: ShootExportConfig) {
+        let alert = NSAlert()
+        let name = config.sourcePresetNameCached ?? "preset"
+        alert.messageText = "Save changes to preset \"\(name)\"?"
+        alert.informativeText = "The preset is shared across every shoot and window. Other shoots currently linked to it will show as stale until you reload them. This cannot be undone."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Cancel")
+        let saveBtn = alert.addButton(withTitle: "Save")
+        saveBtn.hasDestructiveAction = true
+        guard alert.runModal() == .alertSecondButtonReturn else { return }
+        config.saveBackToSourcePreset()
     }
 
     private func resetToPreset(config: ShootExportConfig) {
