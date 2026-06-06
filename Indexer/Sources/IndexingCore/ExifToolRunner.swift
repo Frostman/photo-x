@@ -4,11 +4,14 @@ import CoreGraphics
 import Foundation
 
 public enum ExifToolRunner {
-    /// Path to the `exiftool` binary the indexer spawns. The default
-    /// resolves the bundled binary inside the .app on macOS (so the
-    /// PhotoX target works as-is) and `/usr/bin/exiftool` on Linux.
-    /// The CLI (`photox-indexer`) overrides this from its `--exiftool`
-    /// flag before any indexing runs.
+    /// Path-or-name of the `exiftool` binary the indexer spawns.
+    /// Always invoked through `/usr/bin/env`, so this may be either:
+    ///   - a full path (macOS app: bundled binary inside `.app`)
+    ///   - a bare name like `exiftool` (CLI: env resolves via $PATH
+    ///     at spawn time, the only sane lookup on NixOS / minimal
+    ///     installs that don't ship `which`)
+    /// The CLI's `--exiftool` flag overrides this before any
+    /// indexing runs.
     public static var exifToolPath: String = computeDefaultExifToolPath()
 
     private static func computeDefaultExifToolPath() -> String {
@@ -29,10 +32,22 @@ public enum ExifToolRunner {
         return ""
         #endif
         #else
-        // Linux: usual apt path. The CLI overrides this with --exiftool
-        // if installed elsewhere.
-        return "/usr/bin/exiftool"
+        // Linux CLI: let env resolve via $PATH at spawn time.
+        // Works on NixOS / minimal installs that don't ship `which`.
+        return "exiftool"
         #endif
+    }
+
+    /// Build a `Process` for invoking exiftool with `arguments`,
+    /// spawned through `/usr/bin/env` so $PATH resolution happens
+    /// at spawn time. Used by both `runJSON` here and the batch
+    /// loader; centralising this means there's one path-handling
+    /// rule in the codebase.
+    public static func makeProcess(arguments: [String]) -> Process {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["--", exifToolPath] + arguments
+        return process
     }
 
     public enum ExifToolError: Error {
@@ -55,7 +70,7 @@ public enum ExifToolRunner {
     /// Reads AF / focus / face metadata from a Sony ARW. Returns empty if
     /// exiftool isn't installed; the viewer still works without it.
     public static func readAF(from url: URL) -> AFData {
-        guard FileManager.default.isExecutableFile(atPath: exifToolPath) else {
+        guard !exifToolPath.isEmpty else {
             return AFData()
         }
         do {
@@ -144,9 +159,7 @@ public enum ExifToolRunner {
     }
 
     public static func runJSON(arguments: [String]) throws -> [String: Any] {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: exifToolPath)
-        process.arguments = arguments
+        let process = makeProcess(arguments: arguments)
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
         process.standardOutput = stdoutPipe

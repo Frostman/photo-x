@@ -77,14 +77,16 @@ func parseArgs() -> Args {
 
 // MARK: - exiftool resolution
 
-func resolveExiftool(_ explicit: String?) -> String? {
-    if let explicit, FileManager.default.isExecutableFile(atPath: explicit) {
-        return explicit
-    }
-    // $PATH lookup via `which`.
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-    process.arguments = ["which", "exiftool"]
+/// Probe whether exiftool is reachable from `ExifToolRunner.exifToolPath`
+/// by running `<env> -- <path-or-name> -ver`. Lets env do the $PATH
+/// lookup at spawn time on whatever host we're on — no Swift-side
+/// PATH walk, no dependency on `which` being installed (NixOS
+/// minimal installs ship without it).
+///
+/// Returns the version string on success, nil if the spawn or exit
+/// failed (binary missing, not on $PATH, etc.).
+func probeExiftool() -> String? {
+    let process = ExifToolRunner.makeProcess(arguments: ["-ver"])
     let pipe = Pipe()
     process.standardOutput = pipe
     process.standardError = Pipe()
@@ -93,11 +95,8 @@ func resolveExiftool(_ explicit: String?) -> String? {
         process.waitUntilExit()
         guard process.terminationStatus == 0 else { return nil }
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        let path = String(data: data, encoding: .utf8)?
+        return String(data: data, encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let p = path, !p.isEmpty,
-              FileManager.default.isExecutableFile(atPath: p) else { return nil }
-        return p
     } catch {
         return nil
     }
@@ -161,14 +160,27 @@ struct Main {
     static func main() async {
         let args = parseArgs()
 
-        // exiftool resolution. Empty path is allowed but warned —
-        // AF / sequence number won't populate.
-        if let path = resolveExiftool(args.exifToolPath) {
-            ExifToolRunner.exifToolPath = path
-            FileHandle.standardError.write(Data("exiftool: \(path)\n".utf8))
-        } else {
+        // Configure exiftool path. The actual lookup (when a bare
+        // name like `exiftool` is passed) happens at spawn time
+        // inside ExifToolRunner.makeProcess via /usr/bin/env, so all
+        // we do here is set the property and probe once at startup
+        // to give the user a clear go/no-go signal.
+        if let explicit = args.exifToolPath {
+            ExifToolRunner.exifToolPath = explicit
+        }
+        // Default already set by IndexingCore: "exiftool" on Linux,
+        // bundled path on macOS.
+        if let version = probeExiftool() {
             FileHandle.standardError.write(Data(
-                "warning: exiftool not found — AF data + sequence number will be skipped\n".utf8))
+                "exiftool: \(ExifToolRunner.exifToolPath) (version \(version))\n".utf8))
+        } else {
+            let pathVar = ProcessInfo.processInfo.environment["PATH"] ?? "<unset>"
+            FileHandle.standardError.write(Data("""
+                warning: '\(ExifToolRunner.exifToolPath)' not found via /usr/bin/env — AF data + sequence number will be skipped
+                  PATH: \(pathVar)
+                  pass --exiftool /full/path/to/exiftool to override
+
+                """.utf8))
             ExifToolRunner.exifToolPath = ""
         }
 

@@ -111,9 +111,7 @@ public enum MetadataBatchLoader {
     private static func spawnExiftool(args: [String]) async -> Data {
         await withCheckedContinuation { (cont: CheckedContinuation<Data, Never>) in
             DispatchQueue.global(qos: .userInitiated).async {
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: ExifToolRunner.exifToolPath)
-                process.arguments = args
+                let process = ExifToolRunner.makeProcess(arguments: args)
                 let outPipe = Pipe()
                 process.standardOutput = outPipe
                 process.standardError = Pipe()
