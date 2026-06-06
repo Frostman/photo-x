@@ -143,6 +143,16 @@ private let helpAnnotations: [HelpAnnotation] = [
     // Open-tab callouts. Only published while the Open tab is
     // active (the OpenStarterView itself only mounts in that
     // mode, so the anchors are naturally bounded).
+    .init(id: .openMultiWindow, title: "Multiple windows",
+          message: "Open a folder in a new window with ⌘⇧O, or ⌥-click any row above (Favorites / Cards / Recents) — handy for comparing two shoots side by side. ⌘N spawns an empty window. Opening a shoot that's already open just focuses its existing window — no duplicates. Each window has its own shoot, navigation, ratings, and export config; the next launch restores whatever was open.",
+          shortcuts: ["⌘N empty window", "⌘⇧O in new window",
+                      "⌥-click row in new window"],
+          // Floats centred at the bottom of the OpenStarterView
+          // bracket. The per-section right-gutter callouts
+          // (Favorites / Cards / Recents) all sit above this
+          // band so they don't collide.
+          labelEdge: .insideBottom),
+
     .init(id: .openFolderButton, title: "Open Folder",
           message: "Pick a folder of ARW + HIF/JPG pairs (or standalone HIF/JPG files) to load as a shoot. You can also drag a folder onto the window from Finder.",
           shortcuts: ["⌘O"],

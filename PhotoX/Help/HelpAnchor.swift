@@ -56,6 +56,12 @@ enum HelpAnchorID: String, CaseIterable, Hashable, Sendable {
 
     // MARK: Open (starter) tab
 
+    /// Whole-tab anchor for the multi-window callout. Brackets
+    /// the entire OpenStarterView content so its `.insideBottom`
+    /// callout floats centred at the bottom of the tab without
+    /// fighting the per-section right-gutter callouts above.
+    /// Only published while `mode == .open`.
+    case openMultiWindow
     /// "Open Folder…" button — the primary action on the Open
     /// tab. Only published while `mode == .open` (the
     /// `OpenStarterView` only mounts in that mode).

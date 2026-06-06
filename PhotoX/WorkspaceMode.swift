@@ -81,7 +81,9 @@ let workspaceTabs: [WorkspaceTabConfig] = [
           // Open tab is always available — it's where the
           // user picks a folder to load.
           requiresShoot: false,
-          helpVersion: 2),
+          // v3: added the multi-window callout at the
+          // bottom-centre of the Open tab.
+          helpVersion: 3),
     .init(mode: .view,
           title: "View",
           icon: "photo.stack",

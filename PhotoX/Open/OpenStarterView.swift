@@ -27,6 +27,10 @@ struct OpenStarterView: View {
     @State private var volumes = VolumeWatcher()
     @State private var folderStats = FolderStats()
     @State private var favoriteDropTarget: String? = nil
+    /// SwiftUI's open-window action for the main scene. Used by
+    /// the ⌥-click branch on path rows to spawn a new window
+    /// rather than reuse the current one.
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(spacing: 14) {
@@ -82,6 +86,11 @@ struct OpenStarterView: View {
             folderStats.refresh(allStarterPaths)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Whole-tab help anchor: the multi-window callout sits
+        // centred at the bottom-inside of this bracket so it
+        // doesn't crowd the per-section right-gutter callouts
+        // above (Favorites / Cards / Recents).
+        .helpAnchor(.openMultiWindow)
         // Drag-and-drop is handled at the ContentView level
         // (window-wide), so a folder dropped on the tab works
         // here too without a per-view duplicate handler.
@@ -355,7 +364,7 @@ struct OpenStarterView: View {
                 }
             }
             .buttonStyle(.plain)
-            .help(path)
+            .help("\(path)\nHold ⌥ to open in a new window")
             Spacer()
             trailing()
         }
@@ -427,6 +436,15 @@ struct OpenStarterView: View {
     }
 
     private func openPath(_ path: String) {
+        // Modifier-click convention (mirrors the File →
+        // Open Recent submenu): ⌥ at click-time routes to a
+        // new window instead of reusing this one. Read via
+        // NSEvent so a plain SwiftUI Button action can
+        // branch on the live modifier state.
+        if NSEvent.modifierFlags.contains(.option) {
+            openPathInNewWindow(path)
+            return
+        }
         // See `openWithPanel` for why we check dedup before
         // touching mode. Sync check + sync mode write keeps the
         // View tab appearance flicker-free.
@@ -437,6 +455,21 @@ struct OpenStarterView: View {
             _ = await ShootOpener.open(
                 path: path, requestedTarget: .targetState(state))
         }
+    }
+
+    /// ⌥-click branch from `openPath`. Dedup first — if some
+    /// window already holds this shoot, focus it instead of
+    /// spawning a fresh window the user would have to close.
+    /// Otherwise enqueue the path so the next `WindowRoot`
+    /// scene picks it up and ask SwiftUI for a new window.
+    private func openPathInNewWindow(_ path: String) {
+        if let existing = WindowRegistry.shared.window(forShootPath: path) {
+            existing.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+        WindowRegistry.shared.enqueuePendingShoot(.path(path))
+        openWindow(id: WindowID.main)
     }
 
 }
