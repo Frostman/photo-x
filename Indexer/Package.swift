@@ -18,9 +18,18 @@ let package = Package(
     ],
     products: [
         .library(name: "IndexingCore", targets: ["IndexingCore"]),
+        // Binary name is hyphenated (matches the macOS-app CLI
+        // naming convention); target name uses an underscore so
+        // SwiftPM accepts it as a module identifier.
+        .executable(name: "photox-indexer", targets: ["photox_indexer"]),
     ],
     targets: [
         .target(name: "IndexingCore"),
         .testTarget(name: "IndexingCoreTests", dependencies: ["IndexingCore"]),
+        .executableTarget(
+            name: "photox_indexer",
+            dependencies: ["IndexingCore"],
+            path: "Sources/photox-indexer"
+        ),
     ]
 )

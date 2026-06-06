@@ -12,20 +12,20 @@ public enum ExifToolRunner {
     public static var exifToolPath: String = computeDefaultExifToolPath()
 
     private static func computeDefaultExifToolPath() -> String {
+        // Quiet by design — this runs once at first access of the
+        // property and a caller (the CLI, or PhotoX startup) may
+        // override it immediately. Logging here would emit a stale
+        // path before the override lands.
         #if os(macOS)
         if let bundled = Bundle.main.url(
             forResource: "exiftool", withExtension: nil, subdirectory: "exiftool"
         ) {
-            CoreLog.notice("exiftool resolved (bundled): \(bundled.path)")
             return bundled.path
         }
         #if DEBUG
         // Split keeps the literal out of any Release search.
-        let dev = "/opt/" + "homebrew/bin/exiftool"
-        CoreLog.notice("exiftool resolved (dev fallback): \(dev)")
-        return dev
+        return "/opt/" + "homebrew/bin/exiftool"
         #else
-        CoreLog.error("exiftool bundle missing in Release build — AF data will be unavailable")
         return ""
         #endif
         #else
