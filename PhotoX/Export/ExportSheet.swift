@@ -212,11 +212,6 @@ struct ExportPaneView: View {
                     }
                 }
             }
-            Divider()
-            Button("Save current as new preset…") {
-                pendingPresetName = config.sourcePresetNameCached ?? ""
-                showSaveAsPresetSheet = true
-            }
         } label: {
             HStack(spacing: 4) {
                 Image(systemName: "tray.full")
@@ -767,7 +762,7 @@ private struct ManagePresetsSheet: View {
                                 .controlSize(.small)
                                 .accessibilityIdentifier("export.managePresets.row.\(idx).rename")
                                 Button(role: .destructive) {
-                                    library.remove(id: preset.id)
+                                    confirmAndRemove(preset)
                                 } label: {
                                     Image(systemName: "trash")
                                 }
@@ -798,6 +793,19 @@ private struct ManagePresetsSheet: View {
             }
         }
         .padding(16)
+    }
+
+    private func confirmAndRemove(_ preset: ExportPreset) {
+        let alert = NSAlert()
+        alert.messageText = "Delete preset \"\(preset.name)\"?"
+        alert.informativeText = "Shoots currently linked to this preset keep their destinations and settings but lose the link. This cannot be undone."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Cancel")
+        let delBtn = alert.addButton(withTitle: "Delete")
+        delBtn.hasDestructiveAction = true
+        if alert.runModal() == .alertSecondButtonReturn {
+            library.remove(id: preset.id)
+        }
     }
 }
 
