@@ -68,6 +68,12 @@ final class IndexerCache {
     typealias Entry = IndexEntry
     /// Cache key — also in IndexingCore.
     typealias Fingerprint = IndexFingerprint
+    /// Library/Caches plist payload shape. Renamed internally to
+    /// `LocalPayload` (to distinguish from the sidecar's
+    /// `ShootSidecarIndex`), but tests reference the historical
+    /// name when round-tripping through PropertyListEncoder so
+    /// keep the alias visible.
+    typealias Payload = LocalPayload
 
     // MARK: - Local payload (Library/Caches plist)
 
