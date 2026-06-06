@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// SwiftUI root for the external-display NSWindow. Reads the active
@@ -18,7 +19,10 @@ struct ExternalDisplayRootView: View {
                         cgImage: image.cgImage,
                         token: presenter.entry?.stem ?? "",
                         orientation: image.orientation,
-                        decodeKey: key
+                        decodeKey: key,
+                        mainViewport: presenter.viewport,
+                        mainPixelZoom: presenter.currentPixelZoom,
+                        imagePixelSize: presenter.displayedPixelSize
                     )
                     .ignoresSafeArea()
                 }
@@ -28,26 +32,50 @@ struct ExternalDisplayRootView: View {
     }
 }
 
-/// Slim wrapper around `ImageCanvasView` with no zoom / pan / overlays —
-/// fit-to-window letterboxed render driven entirely by the source
-/// `ViewerState`. Onlooker view only: no event capture, no callbacks.
+/// Slim wrapper around `ImageCanvasView` with no overlays. Mirrors the
+/// main canvas's zoom + pan proportionally, so the external display
+/// always shows the same fraction of the photo at the same focal point
+/// — regardless of how much smaller (or larger) the external window is.
+/// Onlooker view only: no event capture, no callbacks.
 private struct ExternalImageCanvas: View {
     let cgImage: CGImage
     let token: String
     let orientation: Int
     let decodeKey: DecodeKey
+    let mainViewport: CanvasViewport
+    let mainPixelZoom: CGFloat
+    let imagePixelSize: CGSize
 
     var body: some View {
-        ImageCanvasView(
-            image: cgImage,
-            imageToken: token,
-            imageOrientation: orientation,
-            imageDecodeKey: decodeKey,
-            viewport: .identity,
-            showClipping: false,
-            showPeaking: false,
-            onViewportChange: { _, _ in },
-            onImageDisplayed: { _, _ in }
-        )
+        GeometryReader { geom in
+            let externalPixelSize = pixelSize(geom: geom)
+            let viewport = ExternalViewportTransform.externalViewport(
+                mainViewport: mainViewport,
+                mainPixelZoom: mainPixelZoom,
+                imagePixelSize: imagePixelSize,
+                externalViewPixelSize: externalPixelSize
+            )
+            ImageCanvasView(
+                image: cgImage,
+                imageToken: token,
+                imageOrientation: orientation,
+                imageDecodeKey: decodeKey,
+                viewport: viewport,
+                showClipping: false,
+                showPeaking: false,
+                onViewportChange: { _, _ in },
+                onImageDisplayed: { _, _ in }
+            )
+        }
+    }
+
+    /// Convert SwiftUI's point-sized GeometryProxy frame to device
+    /// pixels using the screen the window is on (which IS the external
+    /// display's NSScreen, so backingScaleFactor matches what the
+    /// Metal layer renders into).
+    private func pixelSize(geom: GeometryProxy) -> CGSize {
+        let scale = NSScreen.main?.backingScaleFactor ?? 2.0
+        return CGSize(width: geom.size.width * scale,
+                      height: geom.size.height * scale)
     }
 }
