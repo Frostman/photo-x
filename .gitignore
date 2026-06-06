@@ -27,7 +27,7 @@ Package.resolved
 
 # Cross-compiled binary staged for the Docker smoke test (rebuilt
 # every `just linux-test` run from build/photox-arm64).
-Indexer/Tests/Docker/photox-arm64
+CLI/Tests/Docker/photox-arm64
 
 # Misc
 .DS_Store

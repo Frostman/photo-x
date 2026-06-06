@@ -618,7 +618,7 @@ vm-status:
 
 # ─── Linux build of `photox` CLI ────────────────────────────────────────────
 #
-# `photox` is the multi-command Swift CLI from Indexer/ — `photox
+# `photox` is the multi-command Swift CLI from CLI/ — `photox
 # index <folder>` is the sidecar producer today; future subcommands
 # slot in alongside without renaming the binary. Cross-compiled from
 # this Mac using Apple's Static Linux SDK so the artifact is a fully
@@ -738,9 +738,9 @@ linux-build arch='x86_64':
     # `swiftly run` activates the OSS toolchain for this one
     # invocation only — Apple's swift stays the default for the
     # macOS app build, `just build`, etc.
-    swiftly run swift build --package-path Indexer -c release --swift-sdk "$SDK"
+    swiftly run swift build --package-path CLI -c release --swift-sdk "$SDK"
     mkdir -p build
-    cp "Indexer/.build/$SDK/release/photox" "build/photox-{{arch}}"
+    cp "CLI/.build/$SDK/release/photox" "build/photox-{{arch}}"
     # Belt-and-braces check: the static SDK is supposed to produce a
     # statically linked ELF, but a misconfigured target triple could
     # silently fall back to a dynamic link and break on the NAS at
@@ -754,7 +754,7 @@ linux-build arch='x86_64':
 
 # Smoke-test the cross-compiled binary on a real Linux kernel via
 # Docker. Uses linux/arm64 (Apple Silicon native), Alpine + exiftool
-# as the runtime, then runs the script at Indexer/Tests/Docker/run.sh
+# as the runtime, then runs the script at CLI/Tests/Docker/run.sh
 # which exercises:
 #   - `photox --version` (binary boots, env-var resolution works)
 #   - `photox` with no args exits 2 (top-level usage)
@@ -771,13 +771,13 @@ linux-test:
     #!/usr/bin/env bash
     set -euo pipefail
     just linux-build arm64
-    cp build/photox-arm64 Indexer/Tests/Docker/photox-arm64
+    cp build/photox-arm64 CLI/Tests/Docker/photox-arm64
     # `--platform linux/arm64` picks the arm64 manifest even on
     # mixed-arch Docker setups. trap rm-on-exit so a Ctrl-C between
     # build and run doesn't leave the binary in the test dir.
-    trap 'rm -f Indexer/Tests/Docker/photox-arm64' EXIT
+    trap 'rm -f CLI/Tests/Docker/photox-arm64' EXIT
     docker build --platform linux/arm64 \
-        -t photox-linux-test Indexer/Tests/Docker
+        -t photox-linux-test CLI/Tests/Docker
     docker run --rm --platform linux/arm64 photox-linux-test
 
 # Build + scp the binary to the NAS, then exec it from $PATH there

@@ -1,14 +1,11 @@
 // swift-tools-version: 5.10
 //
-// PhotoX indexing primitives, factored out of the macOS app so the
-// same logic can run on a Linux NAS that pre-indexes shoots and
-// writes a sidecar plist (.photox-index.plist) the app prefer-loads
-// on shoot open.
-//
-// Stage 1: the IndexingCore library exposes only the sidecar schema
-// + a read/write API. Stage 2 moves the per-file extraction code
-// (HEIF/JPEG box parsing, TIFF EXIF, exiftool batch runner) into
-// this package. Stage 5 adds the photox-indexer executable target.
+// Multi-command PhotoX CLI. `photox index <folder>` is today's
+// sidecar producer (the NAS pre-indexer); future subcommands live
+// alongside it. IndexingCore is the shared library that the
+// macOS app also consumes (via local SwiftPM dependency on this
+// package), keeping per-photo extraction logic in one place across
+// host platforms.
 import PackageDescription
 
 let package = Package(
