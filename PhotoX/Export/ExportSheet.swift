@@ -241,6 +241,10 @@ struct ExportPaneView: View {
                     config.saveBackToSourcePreset()
                 }
                 .disabled(!config.isModifiedFromPreset)
+                Button("Reset to \"\(config.sourcePresetNameCached ?? "preset")\"") {
+                    resetToPreset(config: config)
+                }
+                .disabled(!config.isModifiedFromPreset && !config.presetChangedSinceApply)
             }
             Button("Save as new preset…") {
                 pendingPresetName = config.sourcePresetNameCached ?? ""
@@ -607,6 +611,21 @@ struct ExportPaneView: View {
         alert.addButton(withTitle: "OK")
         alert.runModal()
         return false
+    }
+
+    private func resetToPreset(config: ShootExportConfig) {
+        if config.isModifiedFromPreset {
+            let alert = NSAlert()
+            let name = config.sourcePresetNameCached ?? "preset"
+            alert.messageText = "Reset to preset \"\(name)\"?"
+            alert.informativeText = "Local changes to destinations and the read-once-write-many toggle will be discarded and replaced with the preset's current state. This cannot be undone."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "Cancel")
+            let resetBtn = alert.addButton(withTitle: "Reset")
+            resetBtn.hasDestructiveAction = true
+            guard alert.runModal() == .alertSecondButtonReturn else { return }
+        }
+        config.reloadFromSourcePreset()
     }
 
     private func confirmOrphanRemoval(forSingle: ExportPreset.Destination?,
