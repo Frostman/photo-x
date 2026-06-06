@@ -138,6 +138,9 @@ struct ContentView: View {
     @State private var showAnnotationHelp: Bool = false
     @State private var helpAnchorStore = HelpAnchorStore()
     @State private var showJumpSheet: Bool = false
+    /// Drives the toolbar Share Menu's `isPresented` binding so the P
+    /// shortcut can open it from outside SwiftUI's click path.
+    @State private var showShareMenu: Bool = false
     @State private var copiedFlash: Bool = false
     /// Title-bar "Copied path" flash, kept distinct from the canvas
     /// stem pill's `copiedFlash` so a click on either doesn't visually
@@ -365,6 +368,12 @@ struct ContentView: View {
             // when the Open tab was promoted to a workspace tab —
             // the Open tab segment in the picker (plus the principal
             // folder-path button above) cover this affordance.
+
+            if state.shoot != nil {
+                ToolbarItem(placement: .primaryAction) {
+                    ShareToDisplayMenu(state: state, isPresented: $showShareMenu)
+                }
+            }
 
             if state.shoot != nil {
                 ToolbarItem(placement: .primaryAction) {
@@ -943,6 +952,13 @@ struct ContentView: View {
             return nil
         case "j", "J":
             showJumpSheet = true; return nil
+        case "p", "P":
+            if PresentationCoordinator.shared.isPresenting(state) {
+                PresentationCoordinator.shared.stopPresenting()
+            } else {
+                showShareMenu = true
+            }
+            return nil
         case "[":
             state.previousUnrated(); return nil
         case "]":

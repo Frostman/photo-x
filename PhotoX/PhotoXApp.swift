@@ -570,14 +570,13 @@ struct WindowRoot: View {
                     // frame and pillIndex(B) returns A's value. We
                     // stride windows by their registration order
                     // along the X axis using a step wide enough to
-                    // clear a full window frame (1000 px > 900 px
-                    // default width).
+                    // clear a full window frame (stride > width).
                     let n = WindowRegistry.shared.all.count - 1
-                    let stride: CGFloat = 1000
+                    let stride: CGFloat = 1400
                     window.setFrame(
                         NSRect(x: 50 + CGFloat(max(n, 0)) * stride,
                                y: 50,
-                               width: 900,
+                               width: 1300,
                                height: 640),
                         display: true)
                 } else if let screen = window.screen ?? NSScreen.main {
