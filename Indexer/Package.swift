@@ -18,18 +18,17 @@ let package = Package(
     ],
     products: [
         .library(name: "IndexingCore", targets: ["IndexingCore"]),
-        // Binary name is hyphenated (matches the macOS-app CLI
-        // naming convention); target name uses an underscore so
-        // SwiftPM accepts it as a module identifier.
-        .executable(name: "photox-indexer", targets: ["photox_indexer"]),
+        // Multi-command CLI — `photox index <folder>` for the
+        // sidecar producer today; future subcommands slot in
+        // alongside without breaking the binary name.
+        .executable(name: "photox", targets: ["photox"]),
     ],
     targets: [
         .target(name: "IndexingCore"),
         .testTarget(name: "IndexingCoreTests", dependencies: ["IndexingCore"]),
         .executableTarget(
-            name: "photox_indexer",
-            dependencies: ["IndexingCore"],
-            path: "Sources/photox-indexer"
+            name: "photox",
+            dependencies: ["IndexingCore"]
         ),
     ]
 )

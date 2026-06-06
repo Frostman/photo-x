@@ -616,23 +616,24 @@ vm-pull:
 vm-status:
     ./scripts/vm-remote.sh status
 
-# ─── Linux indexer (NAS-side sidecar producer) ──────────────────────────────
+# ─── Linux build of `photox` CLI ────────────────────────────────────────────
 #
-# `photox-indexer` is a standalone Swift binary that scans a shoot
-# folder and writes a sidecar plist (.photox-index.plist) the macOS
-# app prefer-loads on shoot open. Built from Indexer/ (separate
-# SwiftPM package) and cross-compiled from this Mac using Apple's
-# Static Linux SDK so the artifact is a fully static ELF that runs
-# on any Linux distro the NAS uses, with `exiftool` as the only
-# runtime dependency.
+# `photox` is the multi-command Swift CLI from Indexer/ — `photox
+# index <folder>` is the sidecar producer today; future subcommands
+# slot in alongside without renaming the binary. Cross-compiled from
+# this Mac using Apple's Static Linux SDK so the artifact is a fully
+# static ELF that runs on any Linux distro with `exiftool` as the
+# only runtime dep.
 #
 # Typical flow (one-time):
-#   just linux-indexer-sdk-install   → ~305 MB download, ~5 min
-#   just linux-indexer-build         → cross-compile x86_64 ELF
-#   just linux-indexer-deploy nas    → scp to /usr/local/bin on NAS
+#   just linux-sdk-install   → ~305 MB download, ~5 min
+#   just linux-build         → cross-compile x86_64 ELF
+#   just linux-test          → arm64 Docker smoke test (verifies static binary
+#                              boots on a real Linux kernel before deploying)
+#   just linux-deploy nas    → scp to /usr/local/bin on NAS
 #
 # Then on the NAS:
-#   photox-indexer /path/to/shoot    → writes .photox-index.plist
+#   photox index /path/to/shoot      → writes .photox-index.plist
 #
 # Pinned to a specific Swift Static Linux SDK version so this Mac
 # doesn't redownload on every Swift toolchain bump; bump the URL +
@@ -659,7 +660,7 @@ SWIFT_OSS_TOOLCHAIN := "6.3.2"
 #   brew → swiftly CLI in $PATH
 #   ~/Library/Developer/Toolchains/swift-{{SWIFT_OSS_TOOLCHAIN}}-…xctoolchain/  (~1 GB)
 #   ~/Library/org.swift.swiftpm/swift-sdks/ — the Static Linux SDK   (~1.2 GB unpacked)
-linux-indexer-sdk-install:
+linux-sdk-install:
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -697,15 +698,16 @@ linux-indexer-sdk-install:
             --checksum "{{SWIFT_STATIC_LINUX_SDK_SHA256}}"
     fi
 
-# Cross-compile photox-indexer into build/photox-indexer-<arch>
-# using the swiftly-managed open-source toolchain (Apple's Xcode swift
-# can't drive the Static Linux SDK — see linux-indexer-sdk-install).
-# Default arch matches the user's NAS (x86_64); pass `arm64`
-# explicitly to cross-build for an arm64 NAS (Synology, Pi, etc.).
+# Cross-compile `photox` into build/photox-<arch> using the
+# swiftly-managed open-source toolchain (Apple's Xcode swift can't
+# drive the Static Linux SDK — see linux-sdk-install). Default arch
+# matches the user's NAS (x86_64); pass `arm64` explicitly to
+# cross-build for an arm64 NAS (Synology, Pi, etc.) or for the
+# `linux-test` Docker smoke test which runs arm64.
 #
-#   just linux-indexer-build           → x86_64 (default)
-#   just linux-indexer-build arm64     → arm64
-linux-indexer-build arch='x86_64':
+#   just linux-build           → x86_64 (default)
+#   just linux-build arm64     → arm64
+linux-build arch='x86_64':
     #!/usr/bin/env bash
     set -euo pipefail
     case "{{arch}}" in
@@ -714,31 +716,31 @@ linux-indexer-build arch='x86_64':
         *) echo "error: unknown arch '{{arch}}' (expected x86_64 or arm64)" >&2; exit 2 ;;
     esac
     if ! command -v swiftly >/dev/null 2>&1; then
-        echo "error: swiftly not installed — run 'just linux-indexer-sdk-install' first" >&2
+        echo "error: swiftly not installed — run 'just linux-sdk-install' first" >&2
         exit 2
     fi
     if ! swiftly run swift sdk list 2>/dev/null | grep -qi 'static-linux'; then
-        echo "error: Swift Static Linux SDK not installed — run 'just linux-indexer-sdk-install' first" >&2
+        echo "error: Swift Static Linux SDK not installed — run 'just linux-sdk-install' first" >&2
         exit 2
     fi
     # Inject the same git-derived version the macOS app uses so the
     # sidecar's indexerVersion field reads like a normal PhotoX
-    # release stamp. main.swift reads PHOTOX_INDEXER_VERSION at
-    # runtime; the binary defaults to "dev" if the env var isn't
-    # set, so the build doesn't need to embed it — set it when
-    # running the binary on the NAS instead.
+    # release stamp. Entry.swift reads $PHOTOX_VERSION at runtime;
+    # the binary defaults to "dev" if the env var isn't set, so the
+    # build doesn't need to embed it — set it when running the
+    # binary on the NAS instead.
     COMMITS=$(git rev-list --count HEAD)
     SHA9=$(git rev-parse --short=9 HEAD)
     DIRTY=""
     [ -n "$(git status --porcelain)" ] && DIRTY="-dirty"
     DESCRIBE="v0.${COMMITS}.0-${SHA9}${DIRTY}"
-    echo "==> Building photox-indexer ($SDK) — version $DESCRIBE"
+    echo "==> Building photox ($SDK) — version $DESCRIBE"
     # `swiftly run` activates the OSS toolchain for this one
     # invocation only — Apple's swift stays the default for the
     # macOS app build, `just build`, etc.
     swiftly run swift build --package-path Indexer -c release --swift-sdk "$SDK"
     mkdir -p build
-    cp "Indexer/.build/$SDK/release/photox-indexer" "build/photox-indexer-{{arch}}"
+    cp "Indexer/.build/$SDK/release/photox" "build/photox-{{arch}}"
     # Belt-and-braces check: the static SDK is supposed to produce a
     # statically linked ELF, but a misconfigured target triple could
     # silently fall back to a dynamic link and break on the NAS at
@@ -746,21 +748,49 @@ linux-indexer-build arch='x86_64':
     # Linux/macOS, doesn't require a Linux box to inspect ELFs, and
     # prints the linkage class explicitly.
     echo
-    file "build/photox-indexer-{{arch}}"
-    echo "    -> build/photox-indexer-{{arch}}"
-    echo "       (run as: PHOTOX_INDEXER_VERSION='$DESCRIBE' build/photox-indexer-{{arch}} /path/to/shoot)"
+    file "build/photox-{{arch}}"
+    echo "    -> build/photox-{{arch}}"
+    echo "       (run as: PHOTOX_VERSION='$DESCRIBE' build/photox-{{arch}} index /path/to/shoot)"
+
+# Smoke-test the cross-compiled binary on a real Linux kernel via
+# Docker. Uses linux/arm64 (Apple Silicon native), Alpine + exiftool
+# as the runtime, then runs the script at Indexer/Tests/Docker/run.sh
+# which exercises:
+#   - `photox --version` (binary boots, env-var resolution works)
+#   - `photox` with no args exits 2 (top-level usage)
+#   - `photox index <empty>` exits 1 (no entries found)
+#   - `photox index <single-JPG>` exits 0 + writes sidecar plist
+#
+# That last step proves the most: it confirms the static binary
+# can fork+execve exiftool on a fresh Linux box (the exact path
+# that broke on NixOS pre-PosixExec), and that PropertyListEncoder
+# binary output works on swift-corelibs-foundation static-musl.
+#
+# Requires Docker Desktop running. ~30 s end-to-end on a warm cache.
+linux-test:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just linux-build arm64
+    cp build/photox-arm64 Indexer/Tests/Docker/photox-arm64
+    # `--platform linux/arm64` picks the arm64 manifest even on
+    # mixed-arch Docker setups. trap rm-on-exit so a Ctrl-C between
+    # build and run doesn't leave the binary in the test dir.
+    trap 'rm -f Indexer/Tests/Docker/photox-arm64' EXIT
+    docker build --platform linux/arm64 \
+        -t photox-linux-test Indexer/Tests/Docker
+    docker run --rm --platform linux/arm64 photox-linux-test
 
 # Build + scp the binary to the NAS, then exec it from $PATH there
 # (assumes /usr/local/bin is on root's PATH; adjust the dest if not).
 # Builds first so a stale binary never gets shipped.
 #
-#   just linux-indexer-deploy             → x86_64 → nas.local:/usr/local/bin
-#   just linux-indexer-deploy myhost      → x86_64 → myhost:/usr/local/bin
-#   just linux-indexer-deploy myhost arm64 → arm64 → myhost:/usr/local/bin
-linux-indexer-deploy host='nas.local' arch='x86_64':
+#   just linux-deploy             → x86_64 → nas.local:/usr/local/bin
+#   just linux-deploy myhost      → x86_64 → myhost:/usr/local/bin
+#   just linux-deploy myhost arm64 → arm64 → myhost:/usr/local/bin
+linux-deploy host='nas.local' arch='x86_64':
     #!/usr/bin/env bash
     set -euo pipefail
-    just linux-indexer-build {{arch}}
-    echo "==> Deploying to {{host}}:/usr/local/bin/photox-indexer"
-    scp "build/photox-indexer-{{arch}}" "{{host}}:/usr/local/bin/photox-indexer"
-    ssh "{{host}}" 'chmod +x /usr/local/bin/photox-indexer && photox-indexer --help' || true
+    just linux-build {{arch}}
+    echo "==> Deploying to {{host}}:/usr/local/bin/photox"
+    scp "build/photox-{{arch}}" "{{host}}:/usr/local/bin/photox"
+    ssh "{{host}}" 'chmod 755 /usr/local/bin/photox && photox --version' || true

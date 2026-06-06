@@ -19,11 +19,15 @@ Packages/
 Package.pins
 Package.resolved
 
-# swiftly project toolchain pin — `just linux-indexer-build`
-# is explicit about the toolchain via `swiftly run`, and Xcode
-# uses its own toolchain. Committing this would force swiftly on
-# devs who only build the macOS app.
+# swiftly project toolchain pin — `just linux-build` is explicit
+# about the toolchain via `swiftly run`, and Xcode uses its own
+# toolchain. Committing this would force swiftly on devs who only
+# build the macOS app.
 .swift-version
+
+# Cross-compiled binary staged for the Docker smoke test (rebuilt
+# every `just linux-test` run from build/photox-arm64).
+Indexer/Tests/Docker/photox-arm64
 
 # Misc
 .DS_Store
