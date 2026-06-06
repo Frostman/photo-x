@@ -105,26 +105,38 @@ private let helpAnnotations: [HelpAnnotation] = [
     // Export-pane callouts. Only published while `mode == .export`,
     // so the View-mode overlay is unaffected. Project + destinations
     // callouts hang in the right-side gutter that the 800pt-capped
-    // centred pane opens up on wide windows — keeps them off the
-    // pane content where the destination-card / export-all callouts
-    // already live.
+    // centred pane opens up on wide windows; the preset-picker
+    // callout sits in the LEFT gutter on the same line as Project
+    // so the two don't fight. Manage-presets sits ABOVE its button
+    // (into the header area), Export-all ABOVE its footer button,
+    // and the destination-card callout BELOW the first card.
+    .init(id: .exportPresetPicker, title: "Preset",
+          message: "A preset is a saved bundle of destinations and filters — a one-click way to set up the same export across shoots. Pick one and PhotoX applies it to this shoot's working config as an independent copy: editing destinations or filters changes the shoot, not the preset. The '•••' menu pushes your edits up — 'Save to <preset>' overwrites the preset with your current state; 'Save as new preset…' creates a new one. Picking 'No preset' keeps your destinations but breaks the link.",
+          shortcuts: [],
+          labelEdge: .leading),
+
+    .init(id: .exportManagePresets, title: "Manage presets",
+          message: "Presets are global — one library shared across every shoot and every window. This sheet is for library admin: rename a preset, delete one you no longer want, and flip the default for the read-once-write-many toggle on newly-created presets. Creating presets happens on the preset bar to the left ('•••' → 'Save as new preset…'), not here. Applying a preset always copies its state into the current shoot's working config; editing in one shoot never touches another's.",
+          shortcuts: [],
+          labelEdge: .trailing),
+
     .init(id: .exportProject, title: "Project name",
-          message: "The subfolder name PhotoX creates under each destination — files land at <destination>/<project name>/. The toggle below makes 'Export all' read each source file once and write it to every destination in parallel, saving I/O on slow source media (SD cards).",
+          message: "The subfolder name PhotoX creates under each destination — files land at <destination>/<project name>/. Auto-derived from your photos' capture dates (e.g. 2026-March-14_to_18); start typing to override, and the ↻ button next to the field re-derives. The toggle below makes 'Export all' read each source file once and write it to every destination in parallel, saving I/O on slow source media (SD cards).",
           shortcuts: [],
           labelEdge: .trailing),
 
     .init(id: .exportDestinations, title: "Destinations",
-          message: "Add one or more folders to export to. Each row gets its own run/cancel/remove controls and a 'remove orphans' toggle that deletes files at the destination whose stem isn't in the filtered selection. Drag rows to reorder.",
+          message: "Add one or more folders to export to. Destinations live on this shoot's working config, not globally — to reuse them on another shoot, save them into a preset via the '•••' menu above. Each row gets its own run/cancel/remove controls and a 'remove orphans' toggle that deletes files at the destination whose stem isn't in the filtered selection.",
           shortcuts: [],
           labelEdge: .trailing),
 
     .init(id: .exportRun, title: "Export all",
-          message: "Kicks off the export to every destination at once (Return). Aggregate progress + ETA appear in the footer while running, and on the Export tab in the toolbar so you can switch back to the viewer without losing sight of it.",
+          message: "Kicks off the export to every destination at once (Return). Aggregate progress + ETA appear in the footer while running, and on the Export tab in the toolbar so you can switch back to the viewer without losing sight of it. Cancel-all stops every running destination at the next file boundary.",
           shortcuts: ["↩ run"],
           labelEdge: .top),
 
     .init(id: .exportDestinationCard, title: "Destination card",
-          message: "One card per destination. Per-card controls: click the path to copy it, Run / Cancel for just this destination, star + reject + unrated + file-type filters (further narrow what the global selection sends here), overwrite policy (skip / overwrite / overwrite-if-different), and 'remove orphans' (destructive — deletes files at this destination whose stem isn't in the filtered selection).",
+          message: "One card per destination. Per-card controls: click the path to copy it, Run / Cancel for just this destination, star / reject / unrated / file-type filters (narrow what this destination receives), overwrite policy (skip / overwrite / newer-only), and 'remove orphans' (destructive — deletes files at this destination whose stem isn't in the filtered selection). Drag the handle on the left to reorder.",
           shortcuts: [],
           labelEdge: .bottom),
 

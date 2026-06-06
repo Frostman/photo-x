@@ -27,6 +27,16 @@ enum HelpAnchorID: String, CaseIterable, Hashable, Sendable {
 
     // MARK: Export pane
 
+    /// Preset picker `Menu` on the export pane's preset bar. The
+    /// callout introduces the preset concept and the per-shoot
+    /// linked-copy semantics. Only published while
+    /// `mode == .export`.
+    case exportPresetPicker
+    /// "Manage presets…" button on the preset bar. The callout
+    /// scopes what this sheet is for (library admin: rename /
+    /// delete / default RoWM) versus what the preset bar's "•••"
+    /// menu does (create / save / overwrite).
+    case exportManagePresets
     /// Project name field + read-once-write-many toggle in the
     /// export pane. Only published while `mode == .export`.
     case exportProject

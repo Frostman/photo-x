@@ -102,7 +102,10 @@ let workspaceTabs: [WorkspaceTabConfig] = [
           shortcut: "3",
           // Nothing to export without a loaded shoot.
           requiresShoot: true,
-          helpVersion: 2),
+          // v3: Export v2 added preset bar / Manage Presets;
+          // two new help cards + a full pass on the existing
+          // four. Bumping fires the auto-show once per user.
+          helpVersion: 3),
 ]
 
 /// Lookup helper — kept tight so call sites don't open-code

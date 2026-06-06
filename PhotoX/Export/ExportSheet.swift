@@ -185,6 +185,7 @@ struct ExportPaneView: View {
                 }
                 .controlSize(.small)
                 .accessibilityIdentifier("export.managePresets")
+                .helpAnchor(.exportManagePresets)
             }
             HStack(spacing: 8) {
                 presetPicker(config: config)
@@ -229,6 +230,7 @@ struct ExportPaneView: View {
         .fixedSize()
         .accessibilityIdentifier("export.presetPicker")
         .accessibilityLabel(presetPickerLabel(config: config))
+        .helpAnchor(.exportPresetPicker)
     }
 
     private func presetPickerLabel(config: ShootExportConfig) -> String {
