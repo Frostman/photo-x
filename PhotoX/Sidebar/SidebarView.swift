@@ -39,6 +39,15 @@ struct SidebarView: View {
                         autofocusSection
                             .helpAnchor(.autofocus)
                     }
+
+                    if state.aiEnabled {
+                        // AI sections render their own title bars
+                        // (matching the autofocus pattern) so the
+                        // compute / recompute icon can sit on the
+                        // right of the title.
+                        AIScoresSection(state: state)
+                        AIKeywordsSection(state: state)
+                    }
                 }
                 .padding(12)
             }

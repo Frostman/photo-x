@@ -509,6 +509,15 @@ struct ContentView: View {
                     }
                 }
                 .overlay {
+                    if let heatmap = state.heatmapOverlay, state.displayedPixelSize != .zero {
+                        SharpnessHeatmapOverlay(
+                            image: heatmap,
+                            imagePixelSize: state.displayedPixelSize,
+                            viewport: state.viewport
+                        )
+                    }
+                }
+                .overlay {
                     if state.isLoadingDisplayedPair,
                        loadingIndicatorEnabled {
                         // Translucent disc so the spinner reads on any
@@ -901,7 +910,17 @@ struct ContentView: View {
         case "c", "C":
             state.toggleClipping(); return nil
         case "f", "F":
-            state.togglePeaking(); return nil
+            // Shift+F is the experimental sharpness heatmap when the
+            // AI master toggle is on; otherwise (or unshifted) it's
+            // focus peaking. Caps-lock doesn't set .shift, so a user
+            // who has caps-lock on still gets focus peaking — same
+            // as today.
+            if mods.contains(.shift) && state.aiEnabled {
+                state.toggleHeatmap()
+            } else {
+                state.togglePeaking()
+            }
+            return nil
         case "a", "A":
             state.toggleAFOverlay(); return nil
         case "b", "B":

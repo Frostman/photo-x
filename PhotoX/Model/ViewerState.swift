@@ -85,6 +85,49 @@ final class ViewerState {
     var currentXMP: XMPSidecar = .empty
     private var xmpGeneration: Int = 0
 
+    /// Sharpness-heatmap overlay image — what's currently drawn on
+    /// the canvas. Toggled on by ⇧F (potentially populated from the
+    /// per-stem cache below); cleared on every new image OR by a
+    /// second ⇧F press. The cache survives nav; this field is the
+    /// "showing right now" pointer and clears on nav.
+    var heatmapOverlay: CGImage?
+
+    /// Per-stem cache of computed scores. Populated by manual button
+    /// clicks and/or the optional auto-compute-on-display path.
+    /// Survives nav within the shoot; cleared in `closeShoot`.
+    var entryAIScores: [String: AICachedScores] = [:]
+
+    /// Per-stem keyword labels (above confidence threshold). Same
+    /// lifecycle as `entryAIScores`.
+    var entryAIKeywords: [String: [AIKeywordLabel]] = [:]
+
+    /// Per-stem sharpness heatmap CGImage. Same lifecycle. Small
+    /// (~16 KB / entry) so we retain directly rather than re-rendering.
+    var entryAIHeatmaps: [String: CGImage] = [:]
+
+    /// Active computes (per kind+stem). Used to dedup parallel kick-
+    /// offs — the same stem can race the auto-compute hook in
+    /// `commitDisplayed` and a manual click; we only want one task
+    /// in flight per (kind, stem).
+    private var inflightAIScores: Set<String> = []
+    private var inflightAIKeywords: Set<String> = []
+
+    /// Live read of `SettingsKey.experimentalAIEnabled`. Every AI
+    /// surface in the UI (sidebar sections, ⇧F handler) gates on
+    /// this so flipping the toggle takes effect immediately
+    /// without restart.
+    var aiEnabled: Bool {
+        AppDefaults.shared.bool(forKey: SettingsKey.experimentalAIEnabled)
+    }
+
+    var autoComputeScoresOnDisplay: Bool {
+        AppDefaults.shared.bool(forKey: SettingsKey.autoComputeScoresOnDisplay)
+    }
+
+    var autoComputeKeywordsOnDisplay: Bool {
+        AppDefaults.shared.bool(forKey: SettingsKey.autoComputeKeywordsOnDisplay)
+    }
+
     /// What's *actually on screen* right now — used by the filmstrip,
     /// AF overlay, sidebar EXIF, and "N/M" indicator so they stay in
     /// sync with the bound texture during rapid navigation. Lags
@@ -1137,6 +1180,15 @@ final class ViewerState {
         entrySequenceNumber.removeAll()
         entryExif.removeAll()
         entryHistograms.removeAll()
+        // Experimental AI per-shoot caches. In-memory only; closing
+        // the shoot discards them. `reIndex()` deliberately does
+        // NOT clear these — same policy as `entryHistograms` (the
+        // values aren't indexer-driven).
+        entryAIScores.removeAll()
+        entryAIKeywords.removeAll()
+        entryAIHeatmaps.removeAll()
+        inflightAIScores.removeAll()
+        inflightAIKeywords.removeAll()
         burstIDByStem.removeAll()
         burstSizesByID.removeAll()
         burstPositionByStem.removeAll()
@@ -1763,6 +1815,7 @@ final class ViewerState {
             displayedPixelSize = .zero
             return
         }
+        let previousStem = entries.indices.contains(displayedIndex) ? entries[displayedIndex].stem : nil
         displayedIndex = idx
         displayedExif = entryExif[stem]
         let af = entryAFData[stem]
@@ -1770,7 +1823,25 @@ final class ViewerState {
         displayedAFSettings = af?.settings ?? AFSettings()
         displayedXMP = entryXMPs[stem] ?? .empty
         displayedPixelSize = pixelSize
+        // Frame-local AI overlays clear on every nav. The heatmap is
+        // computed on demand against the displayed image's pixels;
+        // showing yesterday's heatmap over today's frame is misleading.
+        if previousStem != stem {
+            heatmapOverlay = nil
+        }
         metrics.recordPhotoSeen()
+        // Post-display auto-compute. Fires AFTER the canvas paint —
+        // the texture is already bound by the time this method is
+        // called. Helpers spawn `.utility` Tasks so the canvas / nav
+        // never wait.
+        if aiEnabled {
+            if autoComputeScoresOnDisplay {
+                kickOffAIScoresCompute(for: stem, force: false)
+            }
+            if autoComputeKeywordsOnDisplay {
+                kickOffAIKeywordsCompute(for: stem, force: false)
+            }
+        }
     }
 
     // MARK: progress
@@ -2260,6 +2331,162 @@ final class ViewerState {
 
     func toggleAFOverlay() {
         overlays.afPoints.toggle()
+    }
+
+    /// Kick off the scores compute for `stem` on a background task.
+    /// Caller is responsible for the master-toggle gate.
+    ///
+    /// `force`: when false, the kick-off is suppressed if the slot is
+    /// already populated OR another compute is in flight for this
+    /// stem. Auto-compute uses `force: false`; the sidebar Recompute
+    /// button uses `force: true` and clears the existing entry up
+    /// front.
+    func kickOffAIScoresCompute(for stem: String, force: Bool) {
+        guard aiEnabled else { return }
+        if !force {
+            if entryAIScores[stem] != nil { return }
+            if inflightAIScores.contains(stem) { return }
+        }
+        if force { entryAIScores.removeValue(forKey: stem) }
+        inflightAIScores.insert(stem)
+        Task { [weak self] in
+            guard let self else { return }
+            guard let pair = await self.decodedCGImageForDisplayedOrEntry(stem: stem) else {
+                await MainActor.run { _ = self.inflightAIScores.remove(stem) }
+                return
+            }
+            async let sharpness = AIPrototype.computeSharpness(pair.cgImage)
+            async let aesthetic = AIPrototype.computeAesthetic(pair.cgImage)
+            let (sharp, aes) = await (sharpness, aesthetic)
+            await MainActor.run {
+                self.inflightAIScores.remove(stem)
+                // Drop if the shoot rolled (closeShoot bumps
+                // shootGeneration, but we also conservatively check
+                // the stem is still known).
+                guard self.shoot != nil,
+                      self.sortedEntries.contains(where: { $0.stem == stem })
+                else { return }
+                // Conservatively keep an existing value if one was
+                // produced by a manual click that landed first.
+                if !force, self.entryAIScores[stem] != nil { return }
+                self.entryAIScores[stem] = AICachedScores(
+                    sharpness: sharp.score,
+                    aesthetic: aes?.overall,
+                    utility: aes?.utility
+                )
+            }
+        }
+    }
+
+    /// Same shape for keywords.
+    func kickOffAIKeywordsCompute(for stem: String, force: Bool) {
+        guard aiEnabled else { return }
+        if !force {
+            if entryAIKeywords[stem] != nil { return }
+            if inflightAIKeywords.contains(stem) { return }
+        }
+        if force { entryAIKeywords.removeValue(forKey: stem) }
+        inflightAIKeywords.insert(stem)
+        Task { [weak self] in
+            guard let self else { return }
+            guard let pair = await self.decodedCGImageForDisplayedOrEntry(stem: stem) else {
+                await MainActor.run { _ = self.inflightAIKeywords.remove(stem) }
+                return
+            }
+            let result = await AIPrototype.computeKeywords(pair.cgImage)
+            await MainActor.run {
+                self.inflightAIKeywords.remove(stem)
+                guard self.shoot != nil,
+                      self.sortedEntries.contains(where: { $0.stem == stem })
+                else { return }
+                if !force, self.entryAIKeywords[stem] != nil { return }
+                self.entryAIKeywords[stem] = result.labels.map {
+                    AIKeywordLabel(identifier: $0.0, confidence: $0.1)
+                }
+            }
+        }
+    }
+
+    /// Decode a specific stem (not necessarily the displayed one) via
+    /// the single-flight pipeline. Caller-side variant of
+    /// `decodedCGImageForDisplayed` used by the auto-compute path
+    /// for the stem `commitDisplayed` just announced — at the moment
+    /// `commitDisplayed` runs, `displayedEntry?.stem` is already the
+    /// new stem, so resolving by stem is consistent.
+    private func decodedCGImageForDisplayedOrEntry(stem: String) async -> (cgImage: CGImage, stem: String)? {
+        guard let entry = sortedEntries.first(where: { $0.stem == stem }) else { return nil }
+        let variant = displayedVariant
+        let dec = decoder
+        do {
+            let decoded = try await pipeline.decode(entry: entry, variant: variant, decoder: dec)
+            return (decoded.cgImage, stem)
+        } catch {
+            return nil
+        }
+    }
+
+    /// Returns the CGImage corresponding to whatever the canvas is
+    /// currently displaying, along with that entry's stem so the
+    /// caller can verify on completion that the user hasn't moved to
+    /// a different frame in the meantime.
+    ///
+    /// **Why not `currentImage.cgImage`?** The fast path in
+    /// `applyRequestedVariant` only updates `currentImageKey` (so
+    /// the texture cache can rebind a cached texture); `currentImage`
+    /// stays pointing at whichever entry was last fully decoded. If
+    /// the user goes A → B → A, `currentImage` ends up showing B's
+    /// pixels while the canvas displays A. AI features need pixels
+    /// that match what the user sees, so we always go through
+    /// `pipeline.decode`, which is single-flight and reads bytes
+    /// from the in-memory `PreviewBytesCache` (no disk I/O on a
+    /// loaded shoot).
+    func decodedCGImageForDisplayed() async -> (cgImage: CGImage, stem: String)? {
+        guard let entry = displayedEntry else { return nil }
+        let stem = entry.stem
+        let variant = displayedVariant
+        let dec = decoder
+        do {
+            let decoded = try await pipeline.decode(entry: entry, variant: variant, decoder: dec)
+            return (decoded.cgImage, stem)
+        } catch {
+            return nil
+        }
+    }
+
+    /// Experimental: show the sharpness heatmap for the currently
+    /// displayed frame (first press) or hide it (second press). The
+    /// per-shoot `entryAIHeatmaps` cache backs this — a re-press on
+    /// a frame that's been heatmapped before is instant (no compute,
+    /// no decode).
+    ///
+    /// Cleared `heatmapOverlay` (what's on screen) vs.
+    /// `entryAIHeatmaps[stem]` (the cache value) live on different
+    /// lifecycles: the overlay clears on every nav; the cache
+    /// survives until shoot close.
+    func toggleHeatmap() {
+        guard aiEnabled else { return }
+        if heatmapOverlay != nil {
+            heatmapOverlay = nil
+            return
+        }
+        guard let stem = displayedEntry?.stem else { return }
+        // Cache hit — instant show, no compute.
+        if let cached = entryAIHeatmaps[stem] {
+            heatmapOverlay = cached
+            return
+        }
+        Task { [weak self] in
+            guard let self else { return }
+            guard let pair = await self.decodedCGImageForDisplayed() else { return }
+            guard let result = await AIPrototype.computeHeatmap(pair.cgImage) else { return }
+            await MainActor.run {
+                // Drop the result if the user navigated away while
+                // we were decoding + computing.
+                guard self.displayedEntry?.stem == pair.stem else { return }
+                self.entryAIHeatmaps[pair.stem] = result.image
+                self.heatmapOverlay = result.image
+            }
+        }
     }
 
     /// Sets the star rating (1...5), clears it (nil), or marks rejected (-1).

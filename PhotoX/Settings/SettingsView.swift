@@ -101,6 +101,19 @@ enum SettingsKey {
     /// Same shape for the usage-stats opt-in promo.
     static let onboardingTelemetryPromoShown = "onboarding.telemetry.shown"
 
+    /// Master gate for the on-device AI prototype (sidebar scores +
+    /// keywords sections, ⇧F sharpness heatmap). Off by default —
+    /// no Vision requests, no vImage work, no sidebar AI UI, no
+    /// hotkey response unless this is on.
+    static let experimentalAIEnabled = "settings.experimentalAIEnabled"
+    /// When on (and master also on), the scores helper fires
+    /// automatically once a frame is displayed, post-canvas-paint,
+    /// at .utility priority — so the canvas never waits on AI.
+    /// Results land in the per-shoot cache; revisits are instant.
+    static let autoComputeScoresOnDisplay = "settings.ai.autoComputeScoresOnDisplay"
+    /// Same shape for the classifier-based keywords path.
+    static let autoComputeKeywordsOnDisplay = "settings.ai.autoComputeKeywordsOnDisplay"
+
     enum Defaults {
         static let appearance = AppearanceMode.system.rawValue
         static let sidebarVisible = true
@@ -123,6 +136,9 @@ enum SettingsKey {
         static let cacheThumbnail       = true
         static let indexerCacheMaxSizeGB = 2
         static let cardWatcherEnabled    = false
+        static let experimentalAIEnabled = false
+        static let autoComputeScoresOnDisplay = false
+        static let autoComputeKeywordsOnDisplay = false
     }
 }
 
@@ -208,6 +224,10 @@ struct SettingsView: View {
     // their own LaunchAgent, so the toggle that drives
     // register/unregister must NOT be shared between builds.
     @AppStorage(SettingsKey.cardWatcherEnabled, store: LocalAppDefaults.shared) private var cardWatcherEnabled = SettingsKey.Defaults.cardWatcherEnabled
+
+    @AppStorage(SettingsKey.experimentalAIEnabled, store: AppDefaults.shared) private var experimentalAIEnabled = SettingsKey.Defaults.experimentalAIEnabled
+    @AppStorage(SettingsKey.autoComputeScoresOnDisplay, store: AppDefaults.shared) private var autoComputeScoresOnDisplay = SettingsKey.Defaults.autoComputeScoresOnDisplay
+    @AppStorage(SettingsKey.autoComputeKeywordsOnDisplay, store: AppDefaults.shared) private var autoComputeKeywordsOnDisplay = SettingsKey.Defaults.autoComputeKeywordsOnDisplay
 
     /// Last error from a card-watcher register/unregister attempt
     /// — surfaces inline under the toggle so the user knows when
@@ -336,6 +356,31 @@ struct SettingsView: View {
                 Text("Helper runs as a LaunchAgent registered via SMAppService. It's installed inside the PhotoX app bundle, registered only when this toggle is on, and shows up in System Settings → Login Items where you can also disable it.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+
+            Section("Experimental AI (on-device)") {
+                Toggle("Enable experimental AI features", isOn: $experimentalAIEnabled)
+                    .accessibilityIdentifier("settings.toggle.experimentalAI")
+                VStack(alignment: .leading, spacing: 2) {
+                    Toggle("Auto-compute scores when an image is displayed",
+                           isOn: $autoComputeScoresOnDisplay)
+                        .disabled(!experimentalAIEnabled)
+                        .accessibilityIdentifier("settings.toggle.aiAutoScores")
+                    Toggle("Auto-compute keywords when an image is displayed",
+                           isOn: $autoComputeKeywordsOnDisplay)
+                        .disabled(!experimentalAIEnabled)
+                        .accessibilityIdentifier("settings.toggle.aiAutoKeywords")
+                }
+                .padding(.leading, 18)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Adds two sidebar sections — Scores and Keywords — each with an icon button to compute on the displayed frame, and binds ⇧F to a one-shot sharpness heatmap overlay on the canvas. Manual compute happens when you click or press.")
+                    Text("With auto-compute on, the relevant section runs in the background after the canvas finishes painting (never blocking display) and caches the result per frame for the current shoot. The cache is in-memory only — closing the shoot discards it.")
+                    Text("All compute is on-device: vImage Laplacian on CPU; Apple Vision (ANE on M-series) for aesthetic + keywords. No downloads, no network, no XMP writes.")
+                    Text("Off by default.")
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             }
 
             Section("Privacy") {

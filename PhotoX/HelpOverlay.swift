@@ -48,6 +48,7 @@ struct HelpOverlay: View {
         ("Overlays", [
             .init(keys: "C", label: "Clipping zebra — magenta = blown highlights (any channel ≥ 99%), blue = crushed shadows (max ≤ 2%)"),
             .init(keys: "F", label: "Focus peaking — orange tint over in-focus edges (Sobel on luminance)"),
+            .init(keys: "⇧F", label: "Sharpness heatmap (experimental AI) — per-tile Laplacian variance. Enable in Settings → Experimental AI."),
             .init(keys: "A", label: "AF point overlay — yellow box where the camera focused (read from MakerNotes via exiftool)"),
             .init(keys: "B", label: "Toggle sidebar (histogram, etc.)"),
             .init(keys: "T", label: "Toggle filmstrip (thumbnails with star/label badges)"),
