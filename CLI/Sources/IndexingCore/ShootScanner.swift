@@ -2,16 +2,71 @@ import Foundation
 
 public enum ShootScanner {
     /// Scan a folder for `PhotoEntry`s (ARW+HIF / ARW+JPG pairs or
-    /// standalone HIF / JPG previews). Sorted by filename (which ==
-    /// capture order for Sony bodies). Does NOT recurse.
+    /// standalone HIF / JPG previews) and harvest every byte of
+    /// metadata the macOS app needs for the shoot-open pre-pass
+    /// from the same directory listing. Sorted by filename (which
+    /// == capture order for Sony bodies). Does NOT recurse.
+    ///
+    /// The single `contentsOfDirectory(at:includingPropertiesForKeys:options:)`
+    /// call asks the filesystem for size + mtime alongside the
+    /// listing — on SMB this is one `FILE_DIRECTORY_INFORMATION`
+    /// round-trip instead of one stat per file. The resulting URLs
+    /// have those values cached on the URL object, so the
+    /// `previewFingerprints` harvest below doesn't re-stat.
     public static func scan(folder url: URL) -> Shoot {
+        let keys: Set<URLResourceKey> = [.fileSizeKey, .contentModificationDateKey]
         let contents = (try? FileManager.default.contentsOfDirectory(
             at: url,
-            includingPropertiesForKeys: nil,
+            includingPropertiesForKeys: Array(keys),
             options: [.skipsHiddenFiles, .skipsSubdirectoryDescendants]
         )) ?? []
         let entries = EntryFinder.entries(in: contents)
-        return Shoot(folderURL: url, entries: entries)
+
+        // Harvest previewFingerprints from each entry's previewURL.
+        // The URL came back from contentsOfDirectory with the size
+        // + mtime resource values cached — `resourceValues(forKeys:)`
+        // doesn't issue a fresh stat.
+        var previewFingerprints: [String: IndexFingerprint] = [:]
+        previewFingerprints.reserveCapacity(entries.count)
+        for entry in entries {
+            if let fp = fingerprint(from: entry.previewURL, keys: keys) {
+                previewFingerprints[entry.stem] = fp
+            }
+        }
+
+        // Build xmpStems from the listing — any .xmp sibling whose
+        // stem also appears in `entries`. Detached .xmp files
+        // (no matching photo) are ignored.
+        let entryStems = Set(entries.map(\.stem))
+        var xmpStems: Set<String> = []
+        for url in contents where url.pathExtension.lowercased() == "xmp" {
+            let stem = url.deletingPathExtension().lastPathComponent
+            if entryStems.contains(stem) {
+                xmpStems.insert(stem)
+            }
+        }
+
+        return Shoot(folderURL: url,
+                     entries: entries,
+                     previewFingerprints: previewFingerprints,
+                     xmpStems: xmpStems)
+    }
+
+    /// Read size + mtime from a URL's cached resource values (set
+    /// during the parent `contentsOfDirectory` call) and convert
+    /// to an `IndexFingerprint`. Returns nil if either value is
+    /// missing — caller treats that stem as "unknown fingerprint"
+    /// and skips the cache lookup (entry then goes through the
+    /// normal indexing path).
+    private static func fingerprint(from url: URL,
+                                    keys: Set<URLResourceKey>) -> IndexFingerprint? {
+        guard let values = try? url.resourceValues(forKeys: keys),
+              let size = values.fileSize,
+              let mtime = values.contentModificationDate else {
+            return nil
+        }
+        let mtimeNanos = Int64(mtime.timeIntervalSince1970 * 1_000_000_000)
+        return IndexFingerprint(size: Int64(size), mtimeNanos: mtimeNanos)
     }
 
     /// Resolves whatever the user dropped / picked into a (Shoot, focus entry):

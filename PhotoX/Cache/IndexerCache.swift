@@ -173,6 +173,16 @@ final class IndexerCache {
         sidecarPayload = loaded
     }
 
+    /// Drop a sidecar payload in directly. Used by `ViewerState.loadShoot`
+    /// when it loads the sidecar in parallel with cache init — the
+    /// payload arrives as the return value of a sibling task instead of
+    /// being read from disk by the cache itself. `loadSidecar()` stays
+    /// as a convenience wrapper for callers that want the cache to do
+    /// its own read.
+    func setSidecarPayload(_ payload: ShootSidecarIndex?) {
+        sidecarPayload = payload
+    }
+
     /// Number of entries the sidecar covers (0 when no sidecar).
     /// Surfaced in the popover summary row.
     var sidecarEntryCount: Int { sidecarPayload?.entries.count ?? 0 }

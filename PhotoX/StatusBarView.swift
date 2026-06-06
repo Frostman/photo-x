@@ -61,10 +61,11 @@ struct StatusBarView: View {
             // wait for `done` before asserting cache behaviour.
             .accessibilityIdentifier({
                 switch state.indexingStatus {
-                case .idle:       return "indexer.statusChip.idle"
-                case .indexing:   return "indexer.statusChip.indexing"
-                case .done:       return "indexer.statusChip.done"
-                case .cancelled:  return "indexer.statusChip.cancelled"
+                case .idle:           return "indexer.statusChip.idle"
+                case .loadingShoot:   return "indexer.statusChip.loadingShoot"
+                case .indexing:       return "indexer.statusChip.indexing"
+                case .done:           return "indexer.statusChip.done"
+                case .cancelled:      return "indexer.statusChip.cancelled"
                 }
             }())
             .popover(isPresented: $showIndexingDetails, arrowEdge: .bottom) {
@@ -73,8 +74,13 @@ struct StatusBarView: View {
                     timings: state.indexingTimings,
                     completedAt: state.indexingCompletedAt,
                     shootFolder: state.shoot?.folderURL,
+                    sidecarEntryCount: state.sidecarEntryCount,
+                    sidecarIndexedAt: state.sidecarIndexedAt,
+                    sidecarIndexerVersion: state.sidecarIndexerVersion,
+                    sidecarHits: state.indexerCacheSidecarHitsThisOpen,
                     cacheHits: state.indexerCacheHitsThisOpen,
                     cacheMisses: state.indexerCacheMissesThisOpen,
+                    isMutationLocked: state.isUserMutationLocked,
                     onReindex: { state.reIndex() }
                 )
                 .padding(14)
@@ -88,6 +94,15 @@ struct StatusBarView: View {
         switch state.indexingStatus {
         case .idle:
             EmptyView()
+        case .loadingShoot:
+            HStack(spacing: 4) {
+                ProgressView()
+                    .progressViewStyle(.circular)
+                    .controlSize(.mini)
+                Text("Loading shoot…")
+                    .font(.caption.bold())
+                    .foregroundStyle(.secondary)
+            }
         case .indexing(let pct):
             HStack(spacing: 4) {
                 ProgressView(value: pct)
@@ -293,12 +308,27 @@ private struct IndexingProgressPopover: View {
     /// nil when no shoot is open. Drives the cache-size row +
     /// the "delete this shoot" menu item.
     let shootFolder: URL?
-    /// How many cache hits / misses the current indexer run
-    /// observed. Surfaced in the Cache section + exposed via
-    /// accessibility identifiers so RelaunchTests can verify
-    /// the indexer cache is actually being read on a warm reopen.
+    /// Sidecar coverage from the NAS-produced
+    /// `.photox-index.plist`. Zero when no sidecar exists for
+    /// this shoot; non-zero shows a dedicated sidecar row above
+    /// the local-cache row so the user can see the NAS index is
+    /// doing the work.
+    let sidecarEntryCount: Int
+    let sidecarIndexedAt: Date?
+    let sidecarIndexerVersion: String?
+    /// Split hit count: hits served from the sidecar payload
+    /// (NAS), hits from the local Library/Caches plist, and
+    /// misses. Surfaced individually in the "This open" row.
+    /// All three exposed via accessibility identifiers so e2e
+    /// tests can verify the sidecar path is actually feeding
+    /// the popover.
+    let sidecarHits: Int
     let cacheHits: Int
     let cacheMisses: Int
+    /// `ViewerState.isUserMutationLocked` — disables the Delete /
+    /// Re-index buttons while the indexer is still running so a
+    /// stray click can't race the active pipelines.
+    let isMutationLocked: Bool
     let onReindex: () -> Void
 
     @State private var thisShootSize: Int64 = 0
@@ -350,8 +380,23 @@ private struct IndexingProgressPopover: View {
                 timing: timings.xmpSidecars,
                 icon: "tag")
             Divider().padding(.vertical, 2)
+            if sidecarEntryCount > 0 {
+                sidecarSection
+            }
             cacheSection
-            if completedAt != nil {
+            if isMutationLocked {
+                // Indexer running — show a hint instead of action
+                // buttons so users see why their click would no-op.
+                HStack(spacing: 6) {
+                    Image(systemName: "lock.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Text("Indexing — shoot is read-only")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+            } else if completedAt != nil {
                 HStack(alignment: .center) {
                     deleteCacheButton
                     Spacer()
@@ -407,7 +452,11 @@ private struct IndexingProgressPopover: View {
             .foregroundStyle(.secondary)
             HStack(spacing: 8) {
                 Text("  This open:")
-                Text("\(cacheHits) hits")
+                Text("\(sidecarHits) sidecar")
+                    .font(.caption.monospacedDigit())
+                    .accessibilityIdentifier("indexer.cache.sidecarHits")
+                Text("·")
+                Text("\(cacheHits) cache")
                     .font(.caption.monospacedDigit())
                     .accessibilityIdentifier("indexer.cache.hits")
                 Text("·")
@@ -418,6 +467,48 @@ private struct IndexingProgressPopover: View {
             }
             .font(.caption)
             .foregroundStyle(.secondary)
+        }
+    }
+
+    // MARK: Sidecar UI
+
+    /// "Sidecar: N entries · indexed Xm ago" row. Gated by the
+    /// host on `sidecarEntryCount > 0` so shoots opened without a
+    /// NAS index don't get a misleading empty row. The indexer
+    /// version stamp lands in `.help(...)` so it's visible on
+    /// hover but doesn't crowd the popover.
+    private var sidecarSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Image(systemName: "externaldrive.connected.to.line.below")
+                    .frame(width: 18)
+                    .foregroundStyle(.secondary)
+                Text("Sidecar")
+                    .font(.caption.bold())
+                Spacer()
+            }
+            HStack(spacing: 8) {
+                Text("  \(sidecarEntryCount) entries")
+                    .font(.caption.monospacedDigit())
+                    .accessibilityIdentifier("indexer.sidecar.entryCount")
+                if let indexedAt = sidecarIndexedAt {
+                    Text("·")
+                    // Tick "X ago" once a minute, same cadence as
+                    // the completed-at header.
+                    TimelineView(.periodic(from: .now, by: 60)) { ctx in
+                        Text("indexed \(agoString(from: indexedAt, now: ctx.date))")
+                            .font(.caption)
+                            .accessibilityIdentifier("indexer.sidecar.indexedAt")
+                    }
+                }
+                Spacer()
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            // Tooltip lands only when the producer stamped the
+            // sidecar — empty string would otherwise attach a
+            // hover popup that says nothing.
+            .help(sidecarIndexerVersion.map { "Indexed by \($0)" } ?? "")
         }
     }
 

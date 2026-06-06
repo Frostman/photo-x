@@ -17,6 +17,29 @@ final class CoordinatorParityTests: XCTestCase {
         return URL(fileURLWithPath: path)
     }
 
+    /// Fingerprint equality tolerates up to 1 s of mtime drift
+    /// (size must still match exactly). Pins the SMB/ext4-drift
+    /// guarantee from `IndexFingerprint.==` — a future change that
+    /// tightens this without thinking through SMB users will fail
+    /// here visibly.
+    func testFingerprintTolerates1sMtimeDrift() throws {
+        // Within the tolerance window → equal.
+        let a = IndexFingerprint(size: 100, mtimeNanos: 1_700_000_000_000_000_000)
+        let b = IndexFingerprint(size: 100, mtimeNanos: 1_700_000_000_500_000_000)
+        XCTAssertEqual(a, b, "500 ms drift must compare equal")
+
+        let c = IndexFingerprint(size: 100, mtimeNanos: 1_700_000_001_000_000_000)
+        XCTAssertEqual(a, c, "exactly 1 s drift must compare equal")
+
+        // Outside the tolerance window → not equal.
+        let d = IndexFingerprint(size: 100, mtimeNanos: 1_700_000_001_000_000_001)
+        XCTAssertNotEqual(a, d, "1 s + 1 ns drift must compare unequal")
+
+        // Size mismatch is always unequal regardless of mtime.
+        let e = IndexFingerprint(size: 101, mtimeNanos: 1_700_000_000_000_000_000)
+        XCTAssertNotEqual(a, e, "size mismatch must compare unequal")
+    }
+
     func testFixtureFolderProducesNonEmptySidecar() async throws {
         guard let fixture = fixtureURL else {
             // Silently skipped; CI / dev opts in via env var.

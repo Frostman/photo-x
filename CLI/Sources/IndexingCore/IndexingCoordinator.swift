@@ -77,11 +77,16 @@ public struct IndexingCoordinator: Sendable {
         await counters.emitNow()
 
         // Stage 1: fingerprints. Sequential — stat is microseconds.
+        // Always fingerprints the previewURL (HIF/JPG), NOT the
+        // RAW, even when both exist — the macOS app does the
+        // same. Mixing the two surfaces as "sidecar entries
+        // never match" because RAW and preview share a stem but
+        // have different mtimes (the camera writes them in the
+        // same burst but they're separate file system objects).
         var fingerprints: [String: IndexFingerprint] = [:]
         fingerprints.reserveCapacity(total)
         for entry in shoot.entries {
-            let url = entry.rawURL ?? entry.previewURL
-            if let fp = try? Self.fingerprint(of: url) {
+            if let fp = try? Self.fingerprint(of: entry.previewURL) {
                 fingerprints[entry.stem] = fp
             }
             await counters.bumpFingerprint()
@@ -131,10 +136,14 @@ public struct IndexingCoordinator: Sendable {
 
     private func runAdvancedExif(entries: [PhotoEntry],
                                  counters: ProgressCounters) async -> [String: AdvancedResult] {
-        // Build batches of preview-or-raw URLs (rawURL when present —
-        // ARW MakerNotes are the authoritative source).
+        // Build batches of preview URLs. The macOS app's advanced-EXIF
+        // pipeline runs exiftool against `entry.previewURL` (HIF/JPG)
+        // too — Sony MakerNotes carry the AF data into the embedded
+        // preview, and using the same source on both sides keeps the
+        // sidecar's AF / sequence values byte-identical to what the
+        // app would produce locally.
         let urlPairs: [(stem: String, url: URL)] = entries.map { entry in
-            (entry.stem, entry.rawURL ?? entry.previewURL)
+            (entry.stem, entry.previewURL)
         }
         let batches: [[(stem: String, url: URL)]]
             = stride(from: 0, to: urlPairs.count, by: advancedExifBatchSize).map {

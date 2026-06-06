@@ -25,6 +25,9 @@ struct Main {
           index <shoot-folder>     Scan a shoot folder and write .photox-index.plist
                                    (the sidecar the macOS app prefer-loads on shoot
                                    open). Run `photox index --help` for options.
+          diagnose <shoot-folder>  Compare the sidecar's stored fingerprints to
+                                   live fingerprints of the same files. Diagnostic
+                                   only — doesn't write anything.
 
         Global flags:
           --version                Print version and exit.
@@ -42,6 +45,8 @@ struct Main {
         switch cmd {
         case "index":
             await IndexCommand.run(args: rest)
+        case "diagnose":
+            DiagnoseCommand.run(args: rest)
         case "--version":
             FileHandle.standardOutput.write(Data("\(toolVersion)\n".utf8))
             exit(0)

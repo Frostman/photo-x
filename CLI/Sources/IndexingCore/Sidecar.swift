@@ -82,13 +82,41 @@ public struct IndexEntry: Codable, Sendable, Equatable {
 /// (size, mtimeNanos) against the sidecar's stored fingerprint —
 /// mismatch means the file changed since the sidecar was produced
 /// and the cached entry is dropped.
-public struct IndexFingerprint: Codable, Equatable, Sendable {
+///
+/// Equality is **tolerant of up to 1 s of mtime drift** so a
+/// sidecar produced on a Linux NAS still matches the file when
+/// read via SMB from macOS (Samba dialects round sub-second mtimes
+/// in ways that drift from ext4's view by up to ~1 s). Size must
+/// match exactly — that's what catches actual file replacement.
+public struct IndexFingerprint: Codable, Sendable, Hashable {
     public var size: Int64
     public var mtimeNanos: Int64
 
     public init(size: Int64, mtimeNanos: Int64) {
         self.size = size
         self.mtimeNanos = mtimeNanos
+    }
+
+    /// Maximum mtime drift (in nanoseconds) tolerated by `==`.
+    /// Set to 1 s because that's the worst-case offset we've seen
+    /// between Linux ext4 mtimes and the same files served via
+    /// Samba to a macOS SMB client. Increase if other mount
+    /// layers drift further; decrease at your own risk.
+    public static let mtimeToleranceNanos: Int64 = 1_000_000_000
+
+    public static func == (lhs: IndexFingerprint, rhs: IndexFingerprint) -> Bool {
+        lhs.size == rhs.size
+            && abs(lhs.mtimeNanos &- rhs.mtimeNanos) <= mtimeToleranceNanos
+    }
+
+    /// Hashes on `size` only so the Hashable<->Equatable contract
+    /// holds under the ±1 s mtime tolerance: two values that
+    /// compare equal must hash equal, and two values with the same
+    /// size *might* compare equal (depending on mtime drift), so
+    /// they must land in the same bucket. Mtime is not part of the
+    /// hash — equality already does the tolerant comparison.
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(size)
     }
 }
 
