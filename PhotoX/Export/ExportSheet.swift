@@ -85,6 +85,7 @@ struct ExportPaneView: View {
                     excludingID: config.sourcePresetID,
                     onCancel: { showOverwritePresetSheet = false },
                     onConfirm: { id in
+                        guard confirmOverwriteExistingPreset(id: id) else { return }
                         config.saveOverwriting(presetID: id)
                         showOverwritePresetSheet = false
                         pendingOverwriteID = nil
@@ -624,6 +625,18 @@ struct ExportPaneView: View {
         saveBtn.hasDestructiveAction = true
         guard alert.runModal() == .alertSecondButtonReturn else { return }
         config.saveBackToSourcePreset()
+    }
+
+    private func confirmOverwriteExistingPreset(id: UUID) -> Bool {
+        let name = library.preset(id: id)?.name ?? "preset"
+        let alert = NSAlert()
+        alert.messageText = "Overwrite preset \"\(name)\"?"
+        alert.informativeText = "The preset's destinations and read-once-write-many setting will be replaced with this shoot's current state. Other shoots linked to this preset will show as stale until you reload them. This cannot be undone."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Cancel")
+        let saveBtn = alert.addButton(withTitle: "Overwrite")
+        saveBtn.hasDestructiveAction = true
+        return alert.runModal() == .alertSecondButtonReturn
     }
 
     private func resetToPreset(config: ShootExportConfig) {
