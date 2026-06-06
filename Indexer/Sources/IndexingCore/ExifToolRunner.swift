@@ -1,0 +1,349 @@
+#if canImport(CoreGraphics)
+import CoreGraphics
+#endif
+import Foundation
+
+public enum ExifToolRunner {
+    /// Path to the `exiftool` binary the indexer spawns. The default
+    /// resolves the bundled binary inside the .app on macOS (so the
+    /// PhotoX target works as-is) and `/usr/bin/exiftool` on Linux.
+    /// The CLI (`photox-indexer`) overrides this from its `--exiftool`
+    /// flag before any indexing runs.
+    public static var exifToolPath: String = computeDefaultExifToolPath()
+
+    private static func computeDefaultExifToolPath() -> String {
+        #if os(macOS)
+        if let bundled = Bundle.main.url(
+            forResource: "exiftool", withExtension: nil, subdirectory: "exiftool"
+        ) {
+            CoreLog.notice("exiftool resolved (bundled): \(bundled.path)")
+            return bundled.path
+        }
+        #if DEBUG
+        // Split keeps the literal out of any Release search.
+        let dev = "/opt/" + "homebrew/bin/exiftool"
+        CoreLog.notice("exiftool resolved (dev fallback): \(dev)")
+        return dev
+        #else
+        CoreLog.error("exiftool bundle missing in Release build — AF data will be unavailable")
+        return ""
+        #endif
+        #else
+        // Linux: usual apt path. The CLI overrides this with --exiftool
+        // if installed elsewhere.
+        return "/usr/bin/exiftool"
+        #endif
+    }
+
+    public enum ExifToolError: Error {
+        case notInstalled
+        case launchFailed(String)
+        case nonZeroExit(Int32, String)
+        case parseFailed
+    }
+
+    public struct AFData: Sendable, Codable, Equatable {
+        public var regions: [AFRegion] = []
+        public var settings: AFSettings = AFSettings()
+        public init(regions: [AFRegion] = [],
+                    settings: AFSettings = AFSettings()) {
+            self.regions = regions
+            self.settings = settings
+        }
+    }
+
+    /// Reads AF / focus / face metadata from a Sony ARW. Returns empty if
+    /// exiftool isn't installed; the viewer still works without it.
+    public static func readAF(from url: URL) -> AFData {
+        guard FileManager.default.isExecutableFile(atPath: exifToolPath) else {
+            return AFData()
+        }
+        do {
+            let json = try runJSON(arguments: [
+                "-j", "-G1",
+                "-Sony:FocusLocation", "-Sony:FocusFrameSize",
+                "-Sony:FocalPlaneAFPointArea", "-Sony:FocalPlaneAFPointLocation1",
+                "-Sony:FocalPlaneAFPointLocation2", "-Sony:FocalPlaneAFPointLocation3",
+                "-Sony:FocalPlaneAFPointLocation4", "-Sony:FocalPlaneAFPointLocation5",
+                "-Sony:FocalPlaneAFPointLocation6", "-Sony:FocalPlaneAFPointLocation7",
+                "-Sony:FocalPlaneAFPointLocation8", "-Sony:FocalPlaneAFPointLocation9",
+                "-Sony:FocalPlaneAFPointsUsed",
+                "-Sony:FocusMode", "-Sony:AFAreaModeSetting", "-Sony:AFAreaMode",
+                "-Sony:AFTracking",
+                "-Sony:Face1Position", "-Sony:Face2Position", "-Sony:Face3Position",
+                "-Sony:Face4Position", "-Sony:Face5Position", "-Sony:Face6Position",
+                "-Sony:FacesDetected",
+                "-Composite:FocusDistance", "-Composite:FocusDistance2",
+                "-Orientation#",  // numeric (1-8) so we can transform AF rects
+                url.path
+            ])
+
+            var data = AFData()
+            data.settings = parseSettings(from: json)
+            let rawRegions = parseRegions(from: json)
+            let orientation = parseOrientation(from: json)
+            let rawSize = parseRawImageSize(from: json)
+            data.regions = rawRegions.map { region in
+                AFRegion(
+                    kind: region.kind,
+                    rect: transform(region.rect, orientation: orientation, rawSize: rawSize),
+                    label: region.label
+                )
+            }
+            return data
+        } catch {
+            CoreLog.error("ExifToolRunner: \(String(describing: error))")
+            return AFData()
+        }
+    }
+
+    /// Read EXIF Orientation (1-8). With -Orientation# the value comes back
+    /// numeric. Keys can be group-prefixed (e.g. "IFD0:Orientation").
+    public static func parseOrientation(from dict: [String: Any]) -> Int {
+        for key in dict.keys where key.hasSuffix("Orientation") {
+            if let i = int(dict, key) { return i }
+        }
+        return 1
+    }
+
+    /// Sony:FocusLocation embeds the raw sensor W×H as the first two ints.
+    public static func parseRawImageSize(from dict: [String: Any]) -> CGSize {
+        guard let str = string(dict, "Sony:FocusLocation") else { return .zero }
+        let parts = str.split(separator: " ").compactMap { Int($0) }
+        guard parts.count >= 2 else { return .zero }
+        return CGSize(width: parts[0], height: parts[1])
+    }
+
+    /// Apply an EXIF Orientation (1-8) to a rect in raw sensor space, returning
+    /// the equivalent rect in display orientation. Width and height swap on
+    /// 90°/270° rotations.
+    public static func transform(_ rect: CGRect, orientation: Int, rawSize: CGSize) -> CGRect {
+        guard rawSize.width > 0, rawSize.height > 0 else { return rect }
+        let W = rawSize.width
+        let H = rawSize.height
+        switch orientation {
+        case 1: // Up — no change
+            return rect
+        case 2: // Mirror horizontal
+            return CGRect(x: W - rect.maxX, y: rect.minY, width: rect.width, height: rect.height)
+        case 3: // Rotate 180
+            return CGRect(x: W - rect.maxX, y: H - rect.maxY, width: rect.width, height: rect.height)
+        case 4: // Mirror vertical
+            return CGRect(x: rect.minX, y: H - rect.maxY, width: rect.width, height: rect.height)
+        case 5: // Mirror horizontal + rotate 270 CW (transpose)
+            return CGRect(x: rect.minY, y: rect.minX, width: rect.height, height: rect.width)
+        case 6: // Rotate 90 CW: (x,y,w,h) → (H-y-h, x, h, w)
+            return CGRect(x: H - rect.maxY, y: rect.minX, width: rect.height, height: rect.width)
+        case 7: // Mirror horizontal + rotate 90 CW
+            return CGRect(x: H - rect.maxY, y: W - rect.maxX, width: rect.height, height: rect.width)
+        case 8: // Rotate 270 CW (= 90 CCW): (x,y,w,h) → (y, W-x-w, h, w)
+            return CGRect(x: rect.minY, y: W - rect.maxX, width: rect.height, height: rect.width)
+        default:
+            return rect
+        }
+    }
+
+    public static func runJSON(arguments: [String]) throws -> [String: Any] {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: exifToolPath)
+        process.arguments = arguments
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        process.standardOutput = stdoutPipe
+        process.standardError = stderrPipe
+
+        do { try process.run() } catch {
+            throw ExifToolError.launchFailed(error.localizedDescription)
+        }
+        process.waitUntilExit()
+
+        guard process.terminationStatus == 0 else {
+            let errData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+            throw ExifToolError.nonZeroExit(process.terminationStatus,
+                                            String(data: errData, encoding: .utf8) ?? "")
+        }
+
+        let data = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+        guard let arr = try JSONSerialization.jsonObject(with: data) as? [[String: Any]],
+              let first = arr.first else {
+            throw ExifToolError.parseFailed
+        }
+        return first
+    }
+
+    // MARK: - Settings
+
+    public static func parseSettings(from dict: [String: Any]) -> AFSettings {
+        var s = AFSettings()
+        s.focusMode = string(dict, "Sony:FocusMode")
+        s.afAreaMode = [string(dict, "Sony:AFAreaModeSetting"),
+                        string(dict, "Sony:AFAreaMode")]
+            .compactMap { $0 }
+            .joined(separator: " / ")
+            .nilIfEmpty
+        s.afTracking = string(dict, "Sony:AFTracking")
+        s.focusDistance = (string(dict, "Composite:FocusDistance")
+            ?? string(dict, "Composite:FocusDistance2"))
+            .map(prettyDistance)
+        if let n = int(dict, "Sony:FocalPlaneAFPointsUsed") {
+            s.pointsUsed = n
+        }
+        if let raw = string(dict, "Sony:FocusFrameSize") {
+            s.focusFrameSize = raw.replacingOccurrences(of: "x", with: " × ")
+        }
+        return s
+    }
+
+    public static func prettyDistance(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespaces)
+        if trimmed.lowercased() == "inf" || trimmed.lowercased() == "infinity" {
+            return "∞"
+        }
+        return trimmed
+    }
+
+    // MARK: - Regions
+
+    public static func parseRegions(from dict: [String: Any]) -> [AFRegion] {
+        // Sony writes `FocusLocation: 0 0 0 0` when the file has no
+        // usable AF info (manual focus, MF lens, AF metadata stripped,
+        // etc.). The three downstream parsers all derive image
+        // dimensions + focus coords from this string; with all zeros
+        // every region collapses to a meaningless point at origin
+        // (and a tiny rectangle drawn on the canvas). Bail early.
+        if isFocusLocationAllZero(dict) { return [] }
+        var regions: [AFRegion] = []
+        regions.append(contentsOf: parsePrimaryFocus(dict))
+        regions.append(contentsOf: parseFocalPlanePoints(dict))
+        regions.append(contentsOf: parseFaces(dict))
+        return regions
+    }
+
+    /// True when `Sony:FocusLocation` is present but reads
+    /// `0 0 0 0` — the sentinel Sony writes for "no AF info".
+    /// False when the tag is missing (the per-parser
+    /// `guard let str` checks handle that path).
+    public static func isFocusLocationAllZero(_ dict: [String: Any]) -> Bool {
+        guard let str = string(dict, "Sony:FocusLocation") else { return false }
+        let parts = str.split(separator: " ").compactMap { Int($0) }
+        return parts.count == 4 && parts.allSatisfy { $0 == 0 }
+    }
+
+    public static func parsePrimaryFocus(_ dict: [String: Any]) -> [AFRegion] {
+        guard let str = string(dict, "Sony:FocusLocation") else { return [] }
+        let parts = str.split(separator: " ").compactMap { Int($0) }
+        guard parts.count == 4 else { return [] }
+        let imgW = parts[0], imgH = parts[1], fx = parts[2], fy = parts[3]
+
+        let frameSize = string(dict, "Sony:FocusFrameSize") ?? "120x120"
+        let dims = frameSize.split(whereSeparator: { $0 == "x" || $0 == " " }).compactMap { Int($0) }
+        let fw = dims.first ?? 120
+        let fh = dims.dropFirst().first ?? fw
+
+        let rect = CGRect(
+            x: CGFloat(fx) - CGFloat(fw) / 2,
+            y: CGFloat(fy) - CGFloat(fh) / 2,
+            width: CGFloat(fw),
+            height: CGFloat(fh)
+        )
+        return [AFRegion(kind: .primaryFocus, rect: rect,
+                         label: "\(imgW)×\(imgH) primary focus")]
+    }
+
+    /// Sony writes per-point AF coordinates in an INTERNAL 640×480 grid (not
+    /// the reported FocalPlaneAFPointArea, which uses a smaller height that
+    /// reflects sensor-area aspect). 640×480 is hardcoded — verified
+    /// empirically against the A1 II sample (point y=240 → image y=2880 for
+    /// 8640×5760 = exact center). May need adjustment for other bodies.
+    private static let sonyAFGridSize = (w: CGFloat(640), h: CGFloat(480))
+
+    public static func parseFocalPlanePoints(_ dict: [String: Any]) -> [AFRegion] {
+        // The image-pixel dimensions live in FocusLocation as the first two ints.
+        guard let locStr = string(dict, "Sony:FocusLocation") else { return [] }
+        let locParts = locStr.split(separator: " ").compactMap { Int($0) }
+        guard locParts.count >= 2 else { return [] }
+        let imgW = CGFloat(locParts[0])
+        let imgH = CGFloat(locParts[1])
+
+        let xScale = imgW / sonyAFGridSize.w
+        let yScale = imgH / sonyAFGridSize.h
+        // Each point is ~20 grid-units. Use that as a visible dot size in image px.
+        let dotSizeImagePx = max(20 * yScale, 80)
+
+        var out: [AFRegion] = []
+        for i in 1...9 {
+            guard let s = string(dict, "Sony:FocalPlaneAFPointLocation\(i)") else { continue }
+            let p = s.split(separator: " ").compactMap { Int($0) }
+            guard p.count == 2 else { continue }
+            let x = CGFloat(p[0]) * xScale
+            let y = CGFloat(p[1]) * yScale
+            out.append(AFRegion(
+                kind: .focalPlanePoint,
+                rect: CGRect(x: x - dotSizeImagePx / 2,
+                             y: y - dotSizeImagePx / 2,
+                             width: dotSizeImagePx,
+                             height: dotSizeImagePx),
+                label: "AF \(i)"
+            ))
+        }
+        return out
+    }
+
+    /// Best-effort face parsing. ExifTool's Sony face fields vary by firmware;
+    /// the common "FaceNPosition" string format is "y x width height" in some
+    /// scaled coordinate system. Untested on the current sample (no face data).
+    /// If face data is malformed, we just skip rather than throw.
+    public static func parseFaces(_ dict: [String: Any]) -> [AFRegion] {
+        guard let locStr = string(dict, "Sony:FocusLocation") else { return [] }
+        let locParts = locStr.split(separator: " ").compactMap { Int($0) }
+        guard locParts.count >= 2 else { return [] }
+        let imgW = CGFloat(locParts[0])
+        let imgH = CGFloat(locParts[1])
+
+        var out: [AFRegion] = []
+        for i in 1...6 {
+            guard let s = string(dict, "Sony:Face\(i)Position") else { continue }
+            let p = s.split(separator: " ").compactMap { Int($0) }
+            guard p.count == 4 else { continue }
+            // Sony's "FaceNPosition" is documented as: y x height width (yes, in
+            // that order) in a 640-wide coord space. Scale linearly.
+            let xScale = imgW / sonyAFGridSize.w
+            let yScale = imgH / sonyAFGridSize.h
+            let rect = CGRect(
+                x: CGFloat(p[1]) * xScale,
+                y: CGFloat(p[0]) * yScale,
+                width: CGFloat(p[3]) * xScale,
+                height: CGFloat(p[2]) * yScale
+            )
+            out.append(AFRegion(kind: .face, rect: rect, label: "Face \(i)"))
+        }
+        return out
+    }
+
+    // MARK: - Dict helpers
+
+    public static func string(_ dict: [String: Any], _ key: String) -> String? {
+        guard let v = dict[key] else { return nil }
+        if let s = v as? String { return s.isEmpty ? nil : s }
+        if let n = v as? NSNumber { return n.stringValue }
+        return nil
+    }
+
+    public static func int(_ dict: [String: Any], _ key: String) -> Int? {
+        if let i = dict[key] as? Int { return i }
+        if let n = dict[key] as? NSNumber { return n.intValue }
+        if let s = dict[key] as? String, let i = Int(s) { return i }
+        return nil
+    }
+}
+
+extension Optional where Wrapped == String {
+    fileprivate var nilIfEmpty: String? {
+        guard let self, !self.isEmpty else { return nil }
+        return self
+    }
+}
+
+extension String {
+    fileprivate var nilIfEmpty: String? { isEmpty ? nil : self }
+}
