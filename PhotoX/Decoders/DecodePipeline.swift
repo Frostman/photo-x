@@ -1,4 +1,5 @@
 import Foundation
+import IndexingCore
 
 /// Orchestrates preview + RAW decoding. No longer caches `DecodedImage`
 /// results — that role moved downstream to `MTLTextureCache`, which

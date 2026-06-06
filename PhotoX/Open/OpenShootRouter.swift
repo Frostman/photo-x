@@ -1,4 +1,5 @@
 import Foundation
+import IndexingCore
 
 /// Single entry point that turns a folder path into a loaded shoot.
 /// Shared between the in-app Open tab (`OpenStarterView.openPath`)

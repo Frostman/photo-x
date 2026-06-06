@@ -1,4 +1,5 @@
 import XCTest
+import IndexingCore
 @testable import PhotoX
 
 /// Coverage for the in-process TIFF/EXIF parser scoped to the

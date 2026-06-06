@@ -1,4 +1,5 @@
 import SwiftUI
+import IndexingCore
 
 struct ExifPanelView: View {
     let summary: ExifSummary

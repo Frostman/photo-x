@@ -1,4 +1,5 @@
 import Observation
+import IndexingCore
 import SwiftUI
 
 /// Where a rating/label/reject action originated from. Each source has its
@@ -970,9 +971,15 @@ final class ViewerState {
         await Self.dropSharedCaches(forFolder: oldFolder)
         metrics.recordShootOpened()
         // Swap in a cache scoped to the new shoot. Reading the
-        // existing .plist (if any) happens synchronously in the
-        // initializer — typically <100 ms even for 20 k entries.
+        // existing local .plist (if any) happens synchronously in
+        // the initializer — typically <100 ms even for 20 k entries.
         cache = IndexerCache(shootFolder: shoot.folderURL)
+        // Hydrate the NAS-side sidecar (.photox-index.plist)
+        // before the indexing pipelines start so per-entry
+        // lookups in advanced / basic pipelines hit it. Off-main
+        // under the hood; ~100 MB for a 10k-entry shoot. No-op
+        // when no sidecar exists or it's schema-mismatched.
+        await cache.loadSidecar()
         // Every shoot opens with collapse-bursts off — the indexer
         // hasn't started yet and the burst table will only be
         // complete once indexing finishes (the StatusBarView button

@@ -1,4 +1,5 @@
 import AppKit
+import IndexingCore
 import SwiftUI
 
 extension View {

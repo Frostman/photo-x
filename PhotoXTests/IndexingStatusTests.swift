@@ -1,4 +1,5 @@
 import XCTest
+import IndexingCore
 @testable import PhotoX
 
 /// Indexer lifecycle: starts on shoot load, reaches .done for an empty

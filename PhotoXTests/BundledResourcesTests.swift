@@ -1,4 +1,5 @@
 import XCTest
+import IndexingCore
 @testable import PhotoX
 
 /// Verifies the production build is self-contained: ExifTool is bundled inside

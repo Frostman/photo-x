@@ -1,4 +1,5 @@
 import XCTest
+import IndexingCore
 @testable import PhotoX
 
 /// Realistic end-to-end coverage for the per-destination copy loop.

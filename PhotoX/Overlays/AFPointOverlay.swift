@@ -1,4 +1,5 @@
 import AppKit
+import IndexingCore
 import SwiftUI
 
 /// Draws AF / focus regions over the canvas, transformed by the same viewport

@@ -1,4 +1,5 @@
 import Foundation
+import IndexingCore
 
 /// What we want a sidecar write to converge to. Sparse on purpose: each field
 /// is `T??` where `.none` means "leave this tag alone", `.some(nil)` means

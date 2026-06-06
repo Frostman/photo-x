@@ -1,4 +1,5 @@
 import XCTest
+import IndexingCore
 import CryptoKit
 @testable import PhotoX
 

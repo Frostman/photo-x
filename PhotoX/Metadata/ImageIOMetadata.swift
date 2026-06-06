@@ -1,6 +1,7 @@
 import CoreGraphics
 import Foundation
 import ImageIO
+import IndexingCore
 
 enum ImageIOMetadata {
     static func read(from url: URL) -> ExifSummary {

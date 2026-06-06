@@ -1,4 +1,5 @@
 import AppKit
+import IndexingCore
 import Foundation
 
 /// Single load chokepoint for opening a shoot in a window.

@@ -1,4 +1,5 @@
 import CoreGraphics
+import IndexingCore
 import Foundation
 import ImageIO
 

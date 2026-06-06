@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import IndexingCore
 import ServiceManagement
 import UserNotifications
 import os
@@ -880,6 +881,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
         // when the app is in the foreground and route clicks back into
         // the export sheet.
         UNUserNotificationCenter.current().delegate = self
+
+        // Route IndexingCore's CoreLog shim into os.log via the
+        // shared Log.app logger. Without this, anything CoreLog
+        // emits (e.g. XMP write failures from the shared types)
+        // would go to stderr — invisible in production .app
+        // launches. Done first so any subsequent startup work
+        // that touches IndexingCore types logs through Log.app
+        // immediately.
+        CoreLog.notice = { msg in Log.app.notice("\(msg, privacy: .public)") }
+        CoreLog.error  = { msg in Log.app.error ("\(msg, privacy: .public)") }
 
         // Sync the indexer cache policy from saved settings BEFORE
         // any shoot opens. The Settings UI's `.onChange` handlers

@@ -1,4 +1,5 @@
 import Foundation
+import IndexingCore
 
 /// All XMP sidecar writes flow through this actor. Three responsibilities:
 ///

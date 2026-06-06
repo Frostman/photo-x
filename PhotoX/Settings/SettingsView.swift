@@ -1,4 +1,5 @@
 import AppKit
+import IndexingCore
 import ServiceManagement
 import SwiftUI
 import UserNotifications

@@ -1,4 +1,5 @@
 import XCTest
+import IndexingCore
 @testable import PhotoX
 
 /// Round-trip + invariant coverage for the XMP sidecar writer/reader pair.

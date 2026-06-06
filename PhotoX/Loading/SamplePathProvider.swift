@@ -1,4 +1,5 @@
 import Foundation
+import IndexingCore
 
 enum SamplePathProvider {
     /// The user's configured default folder, or nil if not set / not present.

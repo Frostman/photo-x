@@ -1,4 +1,5 @@
 import Foundation
+import IndexingCore
 import Observation
 
 /// The in-flight engine that does the actual file copies for the Export

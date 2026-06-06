@@ -1,4 +1,5 @@
 import XCTest
+import IndexingCore
 @testable import PhotoX
 
 /// Pure coverage for the BatchQueue actor's ordering, prioritisation and

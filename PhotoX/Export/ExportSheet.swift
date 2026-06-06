@@ -1,4 +1,5 @@
 import SwiftUI
+import IndexingCore
 import AppKit
 
 /// Inline pane that configures and triggers exports. Rendered as the

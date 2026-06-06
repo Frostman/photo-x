@@ -26,6 +26,13 @@ packages:
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
     from: "2.6.0"
+  # Local SwiftPM package — shared with `photox` CLI in CLI/.
+  # Hosts every type the indexer pipeline needs (HEIF/JPEG embedded
+  # thumb extraction, TIFF EXIF parser, exiftool batch runner,
+  # sidecar plist schema, etc.) so the macOS app and the Linux
+  # binary agree on the on-disk format byte-for-byte.
+  PhotoXCLI:
+    path: CLI
 
 targets:
   PhotoX:
@@ -74,6 +81,8 @@ targets:
         buildPhase: resources
     dependencies:
       - package: Sparkle
+      - package: PhotoXCLI
+        product: IndexingCore
       # Embed the background card-watcher helper inside the
       # parent app bundle at
       #   PhotoX.app/Contents/Library/LoginItems/PhotoXCardWatcher.app

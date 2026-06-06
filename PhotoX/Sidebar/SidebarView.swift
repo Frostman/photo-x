@@ -1,4 +1,5 @@
 import SwiftUI
+import IndexingCore
 
 struct SidebarView: View {
     @Bindable var state: ViewerState

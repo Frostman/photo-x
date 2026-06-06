@@ -1,4 +1,5 @@
 import XCTest
+import IndexingCore
 @testable import PhotoX
 
 /// Tests the JSON parsing surface of MetadataBatchLoader (the indexer's

@@ -1,4 +1,5 @@
 import SwiftUI
+import IndexingCore
 
 struct FilmstripView: View {
     @Bindable var state: ViewerState

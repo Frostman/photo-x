@@ -1,4 +1,5 @@
 import Foundation
+import IndexingCore
 
 /// Pure planning step shared by both copy modes. Given entries + the
 /// destination's filter/type/policy config, produces:

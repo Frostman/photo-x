@@ -1,4 +1,5 @@
 import XCTest
+import IndexingCore
 @testable import PhotoX
 
 /// Pure-logic coverage for ViewerState's filter and navigation helpers.

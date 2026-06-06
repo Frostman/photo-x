@@ -1,4 +1,5 @@
 import XCTest
+import IndexingCore
 @testable import PhotoX
 
 /// Coverage for the XMP write-reliability layer. Saving culling

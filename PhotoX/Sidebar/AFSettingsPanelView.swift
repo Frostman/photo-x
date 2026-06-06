@@ -1,4 +1,5 @@
 import SwiftUI
+import IndexingCore
 
 struct AFSettingsPanelView: View {
     let settings: AFSettings

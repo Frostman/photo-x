@@ -1,4 +1,5 @@
 import XCTest
+import IndexingCore
 @testable import PhotoX
 
 /// Coverage for `ViewerState.filmstripVisible(collapseActive:)` — the

@@ -1,4 +1,5 @@
 import AppKit
+import IndexingCore
 import CoreGraphics
 import XCTest
 @testable import PhotoX

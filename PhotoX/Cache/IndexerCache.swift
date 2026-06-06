@@ -1,16 +1,24 @@
 import CryptoKit
 import Foundation
+import IndexingCore
 
 /// On-disk cache for expensive indexer outputs, scoped per
 /// shoot. Keyed by `image path + size + mtime` so a re-open of
 /// the same shoot skips the indexer for files that haven't
 /// changed.
 ///
-/// Stored as one binary `.plist` per shoot at
-/// `~/Library/Caches/PhotoX/IndexerCache/<sha256(path)>.plist`.
-/// macOS handles purge under disk pressure; a user-configurable
-/// max-total-size triggers LRU eviction of whole-shoot files as
-/// a backstop.
+/// Two payloads coexist in memory:
+///  - `sidecarPayload`: optional, read-only, loaded from
+///    `<shoot>/.photox-index.plist` (produced by the `photox`
+///    CLI on the NAS). Authoritative for any stem it covers.
+///  - `localPayload`: read-write, persisted to
+///    `~/Library/Caches/PhotoX/IndexerCache/<sha256(path)>.plist`.
+///    Backstop for stems the sidecar doesn't cover (files added
+///    after the NAS run, or shoots opened without a sidecar).
+///
+/// `entry(for:fingerprint:)` checks sidecar first, then local;
+/// `updateEntry` writes to local only — the sidecar is owned by
+/// the producer and never rewritten by the macOS app.
 ///
 /// Histograms are NOT cached — they're computed lazily on
 /// sidebar view, so hit rate on a re-open is too low to justify
@@ -53,7 +61,15 @@ final class IndexerCache {
         policy.maxTotalBytes = Int64(gb) * 1024 * 1024 * 1024
     }
 
-    // MARK: - Payload types
+    // MARK: - Type aliases (backwards compat)
+
+    /// Per-photo entry shape — now lives in IndexingCore so the
+    /// macOS app and the `photox index` CLI agree on bytes.
+    typealias Entry = IndexEntry
+    /// Cache key — also in IndexingCore.
+    typealias Fingerprint = IndexFingerprint
+
+    // MARK: - Local payload (Library/Caches plist)
 
     /// Bump on any breaking schema change (field type changes,
     /// removed fields, etc.). Decoders see the bump and treat
@@ -74,51 +90,60 @@ final class IndexerCache {
     /// stray focus rectangle.
     nonisolated static let currentSchemaVersion = 3
 
-    struct Payload: Codable {
+    /// Library/Caches plist payload. Wraps the IndexingCore
+    /// IndexEntry schema with macOS-side metadata (schema
+    /// version + path-collision check).
+    struct LocalPayload: Codable {
         var version: Int
         var shootFolderPath: String
-        var entries: [String: Entry]
+        var entries: [String: IndexEntry]
 
-        static func empty(for url: URL) -> Payload {
-            Payload(version: currentSchemaVersion,
-                    shootFolderPath: url.standardizedFileURL.path,
-                    entries: [:])
+        static func empty(for url: URL) -> LocalPayload {
+            LocalPayload(version: currentSchemaVersion,
+                         shootFolderPath: url.standardizedFileURL.path,
+                         entries: [:])
         }
     }
 
-    struct Entry: Codable {
-        var fingerprint: Fingerprint
-        var exif: ExifSummary?
-        var afData: ExifToolRunner.AFData?
-        var sequenceNumber: Int?
-        var thumbnailJPEG: Data?
-        /// Orientation actually used to rotate the cached
-        /// `thumbnailJPEG` at decode time — NOT necessarily the
-        /// same as `exif?.orientation`. For HEIF the source is
-        /// the container's `irot` box (mapped to TIFF 1/3/6/8);
-        /// for JPEG it's IFD0's Orientation tag. Stored
-        /// separately because the HEIF `irot` and the
-        /// EXIF-item's TIFF Orientation can disagree (or the
-        /// TIFF can omit Orientation entirely), and the hit
-        /// path must rotate with the value the miss path used
-        /// or the cached thumb shows the wrong way up.
-        var thumbnailOrientation: Int?
+    // MARK: - Hit result
+
+    /// Where a cached entry came from. Surfaced to ViewerState so
+    /// the popover can split "This open: M sidecar · K cache · L
+    /// misses" instead of lumping everything as cache hits.
+    enum HitSource: Sendable, Hashable {
+        case sidecar
+        case localCache
     }
 
-    struct Fingerprint: Codable, Equatable {
-        var size: Int64
-        var mtimeNanos: Int64
+    struct CacheHit {
+        let entry: IndexEntry
+        let source: HitSource
+
+        // Forwarding accessors so callers can read `.exif`,
+        // `.afData`, etc. directly without unwrapping the
+        // backing IndexEntry. Matches the pre-refactor shape of
+        // the cache lookup (which returned `IndexEntry?` and
+        // callers accessed fields on it).
+        var fingerprint: IndexFingerprint  { entry.fingerprint }
+        var exif: ExifSummary?             { entry.exif }
+        var afData: ExifToolRunner.AFData? { entry.afData }
+        var sequenceNumber: Int?           { entry.sequenceNumber }
+        var thumbnailJPEG: Data?           { entry.thumbnailJPEG }
+        var thumbnailOrientation: Int?     { entry.thumbnailOrientation }
     }
 
     // MARK: - Per-shoot state
 
     let shootFolder: URL
-    private var payload: Payload
+    /// Loaded from `<shoot>/.photox-index.plist` on shoot open;
+    /// read-only thereafter. nil when no sidecar exists.
+    private(set) var sidecarPayload: ShootSidecarIndex?
+    private var localPayload: LocalPayload
     private var dirty = false
 
     init(shootFolder: URL) {
         self.shootFolder = shootFolder
-        self.payload = Self.loadFromDisk(at: shootFolder)
+        self.localPayload = Self.loadLocalFromDisk(at: shootFolder)
             ?? .empty(for: shootFolder)
     }
 
@@ -126,27 +151,65 @@ final class IndexerCache {
     /// one instance and replaces it on shoot switch.
     static let noShoot = IndexerCache(shootFolder: URL(fileURLWithPath: "/"))
 
+    // MARK: - Sidecar hydration
+
+    /// Hydrate the sidecar payload from
+    /// `<shootFolder>/.photox-index.plist`. Off-main because a
+    /// 10k-entry sidecar can be ~100 MB; reading it inline would
+    /// stall the open. Call once on shoot open BEFORE the
+    /// indexing pipelines start so per-entry lookups can hit it.
+    /// No-op when no sidecar file exists or it's version-mismatched.
+    func loadSidecar() async {
+        let folder = shootFolder
+        let loaded = await Task.detached(priority: .utility) {
+            SidecarReader.load(at: folder)
+        }.value
+        sidecarPayload = loaded
+    }
+
+    /// Number of entries the sidecar covers (0 when no sidecar).
+    /// Surfaced in the popover summary row.
+    var sidecarEntryCount: Int { sidecarPayload?.entries.count ?? 0 }
+    /// When the producer wrote the sidecar (nil when none).
+    var sidecarIndexedAt: Date? { sidecarPayload?.indexedAt }
+    /// Identity of the producer that wrote the sidecar (e.g.
+    /// `v0.1247.0-abc123def`). Shown on hover in the popover.
+    var sidecarIndexerVersion: String? { sidecarPayload?.indexerVersion }
+
     // MARK: - Lookups + updates (per-shoot)
 
-    /// Returns the cached entry for `stem` IF its stored
-    /// fingerprint matches the provided one. Returns nil on
-    /// miss or fingerprint divergence — caller's indexer should
-    /// then re-run for this entry.
+    /// Returns the cached entry for `stem` if a fingerprint match
+    /// hits the sidecar OR the local cache. Sidecar wins when both
+    /// have an entry — the producer is the source of truth. nil
+    /// signals a miss; caller's indexer re-runs for this entry.
     ///
     /// Callers pass the fingerprint they already stat'd for the
     /// file rather than us re-stat'ing here, so the same file
     /// isn't stat'd by both `entry(for:)` and the matching
     /// `updateEntry`.
-    func entry(for stem: String, fingerprint: Fingerprint) -> Entry? {
-        guard let cached = payload.entries[stem] else { return nil }
-        return cached.fingerprint == fingerprint ? cached : nil
+    func entry(for stem: String, fingerprint: Fingerprint) -> CacheHit? {
+        if let sp = sidecarPayload,
+           let cached = sp.entries[stem],
+           cached.fingerprint == fingerprint {
+            return CacheHit(entry: cached, source: .sidecar)
+        }
+        if let cached = localPayload.entries[stem],
+           cached.fingerprint == fingerprint {
+            return CacheHit(entry: cached, source: .localCache)
+        }
+        return nil
     }
 
-    /// Merge new indexer outputs into the in-memory cache. Only
+    /// Merge new indexer outputs into the LOCAL cache only. Only
     /// the fields the policy enables get stored — others stay
     /// nil. Caller passes only what they have; pre-existing
     /// fields on the entry (e.g. a basic-EXIF result from a
     /// previous batch) are preserved IF the fingerprint matches.
+    ///
+    /// No-op when the sidecar already covers this stem with a
+    /// matching fingerprint — avoids duplicating data into the
+    /// local plist (which would force a ~100 MB rewrite on every
+    /// shoot open of an already-sidecar-covered shoot).
     func updateEntry(
         stem: String,
         fingerprint: Fingerprint,
@@ -156,13 +219,18 @@ final class IndexerCache {
         thumbnailJPEG: Data? = nil,
         thumbnailOrientation: Int? = nil
     ) {
-        var entry = payload.entries[stem]
-            ?? Entry(fingerprint: fingerprint)
+        if let sp = sidecarPayload,
+           let cached = sp.entries[stem],
+           cached.fingerprint == fingerprint {
+            return
+        }
+        var entry = localPayload.entries[stem]
+            ?? IndexEntry(fingerprint: fingerprint)
         // If the file changed since the entry was first cached,
         // bump the fingerprint and start a fresh entry — the
         // stale fields would otherwise outlive the file.
         if entry.fingerprint != fingerprint {
-            entry = Entry(fingerprint: fingerprint)
+            entry = IndexEntry(fingerprint: fingerprint)
         }
         let p = Self.policy
         if let exif, p.cacheExifSummary           { entry.exif = exif }
@@ -174,17 +242,18 @@ final class IndexerCache {
         if let thumbnailOrientation, p.cacheThumbnail {
             entry.thumbnailOrientation = thumbnailOrientation
         }
-        payload.entries[stem] = entry
+        localPayload.entries[stem] = entry
         dirty = true
     }
 
-    /// Persist the in-memory payload to disk. No-op if nothing
-    /// has changed since the last flush. PropertyListEncoder
-    /// runs on a detached utility task so the main thread never
-    /// blocks on encoding a multi-MB blob.
+    /// Persist the LOCAL payload to disk. No-op if nothing has
+    /// changed since the last flush. The sidecar is never
+    /// written back — it's owned by the producer.
+    /// PropertyListEncoder runs on a detached utility task so the
+    /// main thread never blocks on encoding a multi-MB blob.
     func flush() async {
         guard dirty else { return }
-        let snapshot = payload
+        let snapshot = localPayload
         let url = Self.cacheURL(for: shootFolder)
         await Task.detached(priority: .utility) {
             do {
@@ -211,18 +280,18 @@ final class IndexerCache {
         Self.gcIfNeeded()
     }
 
-    /// Drop cached entries whose stem isn't in `liveStems`. Used
-    /// at indexing completion to garbage-collect rows for files
-    /// that have been removed from the shoot folder since the
-    /// last open. Without this, the per-entry cruft accumulates
-    /// forever (~10 KB / dead file).
+    /// Drop cached LOCAL entries whose stem isn't in `liveStems`.
+    /// Used at indexing completion to garbage-collect rows for
+    /// files that have been removed from the shoot folder since
+    /// the last open. Sidecar is not pruned — it's read-only and
+    /// the producer owns its lifecycle.
     ///
     /// Pass the FULL set of stems currently present in the shoot;
-    /// anything not in the set is removed.
+    /// anything not in the set is removed from the local cache.
     func pruneToStems(_ liveStems: Set<String>) {
-        let before = payload.entries.count
-        payload.entries = payload.entries.filter { liveStems.contains($0.key) }
-        if payload.entries.count != before {
+        let before = localPayload.entries.count
+        localPayload.entries = localPayload.entries.filter { liveStems.contains($0.key) }
+        if localPayload.entries.count != before {
             dirty = true
         }
     }
@@ -231,28 +300,34 @@ final class IndexerCache {
     /// `closeShoot`.
     func close() async {
         await flush()
-        payload = .empty(for: shootFolder)
+        localPayload = .empty(for: shootFolder)
+        sidecarPayload = nil
         dirty = false
     }
 
-    /// Drop every entry from the in-memory payload without
+    /// Drop every entry from the in-memory LOCAL payload without
     /// writing it back to disk. Used by `ViewerState.reIndex()`
-    /// so the upcoming pipelines see misses for every entry,
-    /// repopulate via real file reads / exiftool runs, mark
-    /// the cache dirty, and the post-indexing `flush()`
-    /// produces a freshly-built plist. Without this, reIndex
-    /// would re-run the pipelines against an unchanged
-    /// in-memory cache, every entry would be a hit, no
-    /// `updateEntry` calls would land, and `flush()` would be
+    /// so the upcoming pipelines see misses for every entry not
+    /// covered by the sidecar, repopulate via real file reads /
+    /// exiftool runs, mark the cache dirty, and the
+    /// post-indexing `flush()` produces a freshly-built plist.
+    /// Without this, reIndex would re-run the pipelines against
+    /// an unchanged in-memory cache, every entry would be a hit,
+    /// no `updateEntry` calls would land, and `flush()` would be
     /// a no-op — defeating the user's intent to rebuild.
+    ///
+    /// Does NOT clear the sidecar payload — re-index forces
+    /// recomputation only of fields the LOCAL cache holds.
+    /// To force re-read from disk for sidecar-covered files
+    /// too, the user should re-run `photox index` on the NAS.
     func clearInMemory() {
-        payload = .empty(for: shootFolder)
+        localPayload = .empty(for: shootFolder)
         dirty = false
     }
 
-    /// How many entries are currently in the cache (regardless
-    /// of validity). Used by the indexer popover.
-    var entryCount: Int { payload.entries.count }
+    /// How many entries are currently in the LOCAL cache
+    /// (regardless of validity). Used by the indexer popover.
+    var entryCount: Int { localPayload.entries.count }
 
     // MARK: - Disk path resolution
 
@@ -307,17 +382,17 @@ final class IndexerCache {
         return (attrs[.size] as? NSNumber)?.int64Value ?? 0
     }
 
-    // MARK: - Load (static)
+    // MARK: - Load local payload (static)
 
-    /// Read the cache file for `shootFolder` from disk and
+    /// Read the LOCAL cache file for `shootFolder` from disk and
     /// validate it. Returns nil on miss, decode error, version
     /// mismatch, or path mismatch (sanity check against SHA256
     /// collision). The caller treats nil as "start fresh".
-    static func loadFromDisk(at shootFolder: URL) -> Payload? {
+    static func loadLocalFromDisk(at shootFolder: URL) -> LocalPayload? {
         let url = cacheURL(for: shootFolder)
         guard let data = try? Data(contentsOf: url) else { return nil }
         let decoder = PropertyListDecoder()
-        guard let payload = try? decoder.decode(Payload.self, from: data) else {
+        guard let payload = try? decoder.decode(LocalPayload.self, from: data) else {
             // Corrupt file or schema drift — drop it so the
             // next flush writes a clean one.
             try? FileManager.default.removeItem(at: url)
@@ -399,15 +474,11 @@ final class IndexerCache {
     // MARK: - Fingerprint
 
     /// (size, mtimeNanos) of the file at `url`. Throws if the
-    /// file is missing. `nonisolated` so the indexing
-    /// pre-pass can stat() entries off the MainActor — body
-    /// only touches `FileManager` (thread-safe nonisolated
-    /// API).
+    /// file is missing. `nonisolated` so the indexing pre-pass
+    /// can stat() entries off the MainActor. Forwards to the
+    /// shared implementation in IndexingCore so the macOS app
+    /// and the CLI compute identical fingerprints.
     nonisolated static func fingerprint(of url: URL) throws -> Fingerprint {
-        let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
-        let size = (attrs[.size] as? NSNumber)?.int64Value ?? 0
-        let mtime = (attrs[.modificationDate] as? Date) ?? .distantPast
-        let mtimeNanos = Int64(mtime.timeIntervalSince1970 * 1_000_000_000)
-        return Fingerprint(size: size, mtimeNanos: mtimeNanos)
+        try IndexingCoordinator.fingerprint(of: url)
     }
 }

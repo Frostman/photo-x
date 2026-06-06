@@ -1,4 +1,5 @@
 import XCTest
+import IndexingCore
 import ImageIO
 @testable import PhotoX
 

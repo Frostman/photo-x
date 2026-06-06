@@ -1,4 +1,5 @@
 import Foundation
+import IndexingCore
 import Observation
 
 /// Per-folder pair counts shown on the starter screen.

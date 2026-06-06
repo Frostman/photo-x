@@ -1,4 +1,5 @@
 import AppKit
+import IndexingCore
 import Foundation
 
 /// Identifiers for SwiftUI `WindowGroup` instances. Used both by

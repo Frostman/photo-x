@@ -1,4 +1,5 @@
 import XCTest
+import IndexingCore
 import CoreGraphics
 @testable import PhotoX
 

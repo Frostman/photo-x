@@ -1,4 +1,5 @@
 import XCTest
+import IndexingCore
 @testable import PhotoX
 
 /// End-to-end parity check for the basic-EXIF + thumbs pipeline.
