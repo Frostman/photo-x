@@ -109,8 +109,29 @@ public enum MetadataBatchLoader {
     }
 
     private static func spawnExiftool(args: [String]) async -> Data {
-        await withCheckedContinuation { (cont: CheckedContinuation<Data, Never>) in
+        // Skip the spawn entirely when no tool is configured — saves
+        // a noisy "file doesn't exist" per batch when the operator
+        // already accepted no-AF-data at startup.
+        guard !ExifToolRunner.exifToolPath.isEmpty else { return Data() }
+        return await withCheckedContinuation { (cont: CheckedContinuation<Data, Never>) in
             DispatchQueue.global(qos: .userInitiated).async {
+                let path = ExifToolRunner.exifToolPath
+                #if os(Linux)
+                // Raw fork+execve bypasses swift-corelibs-foundation's
+                // pre-spawn `access()` check that returns EACCES on
+                // Nix-store binaries (NixOS). See PosixExec.swift.
+                do {
+                    let r = try PosixExec.run(executable: path, arguments: args)
+                    if r.exitCode != 0 {
+                        let stderr = String(data: r.stderr, encoding: .utf8) ?? ""
+                        CoreLog.error("exiftool exit \(r.exitCode): \(stderr.trimmingCharacters(in: .whitespacesAndNewlines))")
+                    }
+                    cont.resume(returning: r.stdout)
+                } catch {
+                    CoreLog.error("PosixExec: \(String(describing: error))")
+                    cont.resume(returning: Data())
+                }
+                #else
                 let process = ExifToolRunner.makeProcess(arguments: args)
                 let outPipe = Pipe()
                 process.standardOutput = outPipe
@@ -125,6 +146,7 @@ public enum MetadataBatchLoader {
                 let data = outPipe.fileHandleForReading.readDataToEndOfFile()
                 process.waitUntilExit()
                 cont.resume(returning: data)
+                #endif
             }
         }
     }

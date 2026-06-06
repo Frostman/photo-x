@@ -4,14 +4,14 @@ import CoreGraphics
 import Foundation
 
 public enum ExifToolRunner {
-    /// Path-or-name of the `exiftool` binary the indexer spawns.
-    /// Always invoked through `/usr/bin/env`, so this may be either:
-    ///   - a full path (macOS app: bundled binary inside `.app`)
-    ///   - a bare name like `exiftool` (CLI: env resolves via $PATH
-    ///     at spawn time, the only sane lookup on NixOS / minimal
-    ///     installs that don't ship `which`)
-    /// The CLI's `--exiftool` flag overrides this before any
-    /// indexing runs.
+    /// Full path to the `exiftool` binary the indexer spawns. Must
+    /// be an absolute path — the spawn does not consult $PATH (Swift
+    /// Process on Linux musl + NixOS exec can fail mysteriously on
+    /// `/usr/bin/env` even when it works from the shell; resolving
+    /// in Swift before spawning avoids that whole class of bug).
+    ///
+    /// Defaults to the bundled binary on macOS and the result of a
+    /// $PATH walk on Linux; the CLI's `--exiftool` flag overrides.
     public static var exifToolPath: String = computeDefaultExifToolPath()
 
     private static func computeDefaultExifToolPath() -> String {
@@ -32,21 +32,42 @@ public enum ExifToolRunner {
         return ""
         #endif
         #else
-        // Linux CLI: let env resolve via $PATH at spawn time.
-        // Works on NixOS / minimal installs that don't ship `which`.
-        return "exiftool"
+        // Linux: walk $PATH ourselves and store the first hit. No
+        // subprocess (avoids `which` / `env` dependencies — NixOS
+        // ships neither reliably for spawned Swift processes). The
+        // CLI overrides this with --exiftool if set.
+        return resolveOnPath("exiftool") ?? ""
         #endif
     }
 
-    /// Build a `Process` for invoking exiftool with `arguments`,
-    /// spawned through `/usr/bin/env` so $PATH resolution happens
-    /// at spawn time. Used by both `runJSON` here and the batch
-    /// loader; centralising this means there's one path-handling
-    /// rule in the codebase.
+    /// First $PATH directory that contains an executable `name`,
+    /// or nil. Pure Swift — uses FileManager only, no subprocess.
+    public static func resolveOnPath(_ name: String) -> String? {
+        let env = ProcessInfo.processInfo.environment
+        guard let pathVar = env["PATH"], !pathVar.isEmpty else { return nil }
+        for dir in pathVar.split(separator: ":", omittingEmptySubsequences: true) {
+            let candidate = URL(fileURLWithPath: String(dir))
+                .appendingPathComponent(name)
+            if FileManager.default.isExecutableFile(atPath: candidate.path) {
+                return candidate.path
+            }
+        }
+        return nil
+    }
+
+    /// Build a `Process` for invoking exiftool with `arguments`.
+    /// Spawns the absolute path directly — `exifToolPath` is
+    /// expected to already be resolved (see `resolveOnPath`).
+    ///
+    /// macOS only path. On Linux, `MetadataBatchLoader.spawnExiftool`
+    /// and the CLI's `probeExiftool` bypass Foundation Process and
+    /// call `PosixExec.run` instead, because swift-corelibs-foundation's
+    /// pre-spawn `access(path, X_OK)` check returns EACCES on
+    /// Nix-store binaries even when they're world-executable.
     public static func makeProcess(arguments: [String]) -> Process {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["--", exifToolPath] + arguments
+        process.executableURL = URL(fileURLWithPath: exifToolPath)
+        process.arguments = arguments
         return process
     }
 

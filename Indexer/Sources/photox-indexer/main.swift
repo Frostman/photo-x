@@ -75,31 +75,64 @@ func parseArgs() -> Args {
     )
 }
 
-// MARK: - exiftool resolution
+// MARK: - exiftool probe
 
-/// Probe whether exiftool is reachable from `ExifToolRunner.exifToolPath`
-/// by running `<env> -- <path-or-name> -ver`. Lets env do the $PATH
-/// lookup at spawn time on whatever host we're on — no Swift-side
-/// PATH walk, no dependency on `which` being installed (NixOS
-/// minimal installs ship without it).
-///
-/// Returns the version string on success, nil if the spawn or exit
-/// failed (binary missing, not on $PATH, etc.).
-func probeExiftool() -> String? {
+enum ProbeResult {
+    /// `exiftool -ver` succeeded and returned the version string.
+    case ok(String)
+    /// Probe failed but the path is still set so per-batch spawn
+    /// can try and report real errors. Useful diagnostic to surface
+    /// at startup without hiding the underlying error.
+    case spawnFailed(reason: String)
+    /// Tool path is empty — indexing skips exiftool batches.
+    case noTool
+}
+
+/// Run `<exifToolPath> -ver` and report what happened. Captures
+/// stderr so a launch failure prints something useful instead of
+/// the opaque NSCocoaErrorDomain blob Swift Process gives by
+/// default. On Linux this uses raw fork+execve via PosixExec to
+/// bypass swift-corelibs-foundation's broken access() check.
+func probeExiftool() -> ProbeResult {
+    if ExifToolRunner.exifToolPath.isEmpty { return .noTool }
+    let path = ExifToolRunner.exifToolPath
+    #if os(Linux)
+    do {
+        let r = try PosixExec.run(executable: path, arguments: ["-ver"])
+        if r.exitCode != 0 {
+            let stderr = String(data: r.stderr, encoding: .utf8) ?? ""
+            return .spawnFailed(reason: "exit \(r.exitCode): \(stderr.trimmingCharacters(in: .whitespacesAndNewlines))")
+        }
+        let v = String(data: r.stdout, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? "?"
+        return .ok(v)
+    } catch {
+        return .spawnFailed(reason: "PosixExec: \(error)")
+    }
+    #else
     let process = ExifToolRunner.makeProcess(arguments: ["-ver"])
-    let pipe = Pipe()
-    process.standardOutput = pipe
-    process.standardError = Pipe()
+    let outPipe = Pipe()
+    let errPipe = Pipe()
+    process.standardOutput = outPipe
+    process.standardError = errPipe
     do {
         try process.run()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else { return nil }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        return String(data: data, encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
     } catch {
-        return nil
+        return .spawnFailed(reason: "Process.run: \(error.localizedDescription)")
     }
+    process.waitUntilExit()
+    if process.terminationStatus != 0 {
+        let stderr = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(),
+                            encoding: .utf8) ?? ""
+        return .spawnFailed(
+            reason: "exit \(process.terminationStatus): \(stderr.trimmingCharacters(in: .whitespacesAndNewlines))"
+        )
+    }
+    let data = outPipe.fileHandleForReading.readDataToEndOfFile()
+    let v = String(data: data, encoding: .utf8)?
+        .trimmingCharacters(in: .whitespacesAndNewlines) ?? "?"
+    return .ok(v)
+    #endif
 }
 
 // MARK: - Indexer version (from env, fallback "dev")
@@ -160,28 +193,40 @@ struct Main {
     static func main() async {
         let args = parseArgs()
 
-        // Configure exiftool path. The actual lookup (when a bare
-        // name like `exiftool` is passed) happens at spawn time
-        // inside ExifToolRunner.makeProcess via /usr/bin/env, so all
-        // we do here is set the property and probe once at startup
-        // to give the user a clear go/no-go signal.
+        // Configure exiftool path. Explicit --exiftool wins; otherwise
+        // fall through to the IndexingCore default (bundled on macOS,
+        // $PATH walk on Linux). The walk happens in Swift so we don't
+        // depend on `which` / `/usr/bin/env` being executable from
+        // Swift Process (both fail in different ways on NixOS).
         if let explicit = args.exifToolPath {
             ExifToolRunner.exifToolPath = explicit
         }
-        // Default already set by IndexingCore: "exiftool" on Linux,
-        // bundled path on macOS.
-        if let version = probeExiftool() {
+        switch probeExiftool() {
+        case .ok(let v):
             FileHandle.standardError.write(Data(
-                "exiftool: \(ExifToolRunner.exifToolPath) (version \(version))\n".utf8))
-        } else {
-            let pathVar = ProcessInfo.processInfo.environment["PATH"] ?? "<unset>"
+                "exiftool: \(ExifToolRunner.exifToolPath) (version \(v))\n".utf8))
+        case .spawnFailed(let reason):
+            // KEY: leave exifToolPath set so the per-batch spawn
+            // surfaces the real error per batch. Some hosts (NixOS
+            // we saw) can't spawn the resolved binary from Swift's
+            // Process even when the shell can — the per-batch
+            // failure then becomes the source of truth and we stop
+            // hiding it behind a startup probe.
             FileHandle.standardError.write(Data("""
-                warning: '\(ExifToolRunner.exifToolPath)' not found via /usr/bin/env — AF data + sequence number will be skipped
-                  PATH: \(pathVar)
+                warning: exiftool probe failed (\(reason))
+                  resolved path: \(ExifToolRunner.exifToolPath)
+                  proceeding anyway — AF/seq batches will retry per-batch and may surface a clearer error
                   pass --exiftool /full/path/to/exiftool to override
 
                 """.utf8))
-            ExifToolRunner.exifToolPath = ""
+        case .noTool:
+            let pathVar = ProcessInfo.processInfo.environment["PATH"] ?? "<unset>"
+            FileHandle.standardError.write(Data("""
+                warning: no exiftool found — AF data + sequence number will be skipped
+                  PATH searched: \(pathVar)
+                  pass --exiftool /full/path/to/exiftool to override
+
+                """.utf8))
         }
 
         // Quick pre-scan so the progress printer knows the total.
